@@ -1,0 +1,174 @@
+# Flask ChatBot: Multi-Provider + Tools + RAG + Multimodal + Canvas
+
+> **AI-Assisted Development Notice:** This project was developed with AI assistance. All code, architecture decisions, and documentation have been written, reviewed, and validated by humans. Every line has passed human review before inclusion.
+
+A feature-rich, single-page Flask chat application designed for advanced LLM interactions. It supports multiple providers (DeepSeek, OpenRouter, MiniMax), complex multi-step tool usage, Local RAG, persistent memory, multimodal inputs (Vision/OCR), and an interactive Canvas/Workspace environment. 
+
+Unlike basic prompt/response wrappers, this app persists deep conversation states in SQLite, supports branch regeneration, streams reasoning/tool traces, and features a robust prompt-budgeting system.
+
+---
+
+## 🌟 Core Features
+
+*   **Models & Routing:** Native support for DeepSeek and MiniMax, plus full OpenRouter integration (with proxy rotation, provider scoping, and model capability detection).
+*   **Persistent Memory & RAG:** Conversation-scoped memory, persona-scoped memory, persistent scratchpads, and a local ChromaDB-backed RAG system for document and chat history retrieval.
+*   **Multimodal & Attachments:** Document extraction (PDF, DOCX, CSV, Code) and Image processing via local OCR (PaddleOCR), Vision LLMs, or direct multimodal injection.
+*   **Canvas & Workspace:** An interactive UI panel for the model to create, edit, search, and manage markdown or code documents. Includes project-mode for local file sandbox execution.
+*   **Advanced Chat Controls:** Slash commands (`/check`), message editing/branching, history pruning, automatic summarization, and entropy-aware context selection.
+*   **Observability:** Detailed usage panels, provider vs. local token estimates, caching diagnostics, and rotating agent trace logs.
+
+## 📸 Screenshots
+
+* [Tool execution](screenshots/Screenshot_2026-04-09_18-04-09.png)
+* [Long-term memory (RAG)](screenshots/Screenshot_2026-04-09_18-05-21.png)
+* [Canvas view](screenshots/Screenshot_2026-04-09_18-05-58.png)
+* [Settings page](screenshots/Screenshot_2026-04-09_18-07-19.png)
+
+---
+
+## 🚀 Installation
+
+### Quick Start
+```bash
+bash install.sh
+```
+*The interactive installer configures your environment, selects hardware profiles (CPU/CUDA), and downloads required models (like BGE-M3 for RAG).*
+
+### Manual Setup
+1. **Environment:**
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+2. **Dependencies:**
+   ```bash
+   pip install -r requirements.txt           # Core
+   pip install -r requirements-rag.txt       # Optional: RAG features
+   pip install -r requirements-ocr-paddle.txt # Optional: Local OCR
+   ```
+3. **Configuration:**
+   Copy `.env.example` to `.env` and add at least one API key:
+   ```env
+   DEEPSEEK_API_KEY=your-key
+   OPENROUTER_API_KEY=your-key
+   MINIMAX_API_KEY=your-key
+   ```
+4. **Run:**
+   ```bash
+   python core/app.py
+   # Access at http://127.0.0.1:5000
+   ```
+
+---
+
+## ⚙️ Configuration (Environment Variables)
+
+Most app settings can be dynamically changed via the `/settings` UI and are stored in SQLite. The following environment variables dictate core infrastructure:
+
+### Core & Security
+| Variable | Default | Description |
+| --- | --- | --- |
+| `FLASK_SECRET_KEY` | required | Secret key for Flask sessions. |
+| `LOGIN_PIN` | empty | Enables basic PIN-based authentication if set. |
+| `FORCE_HTTPS` | `false` | Redirects HTTP to HTTPS (requires reverse proxy). |
+| `AGENT_TRACE_LOG_ENABLED` | `true` | Enables JSON-lines trace logging. |
+
+### Storage Directories
+| Variable | Default | Description |
+| --- | --- | --- |
+| `IMAGE_STORAGE_DIR` | `./data/images` | Uploaded images. |
+| `DOCUMENT_STORAGE_DIR`| `./data/documents` | Uploaded documents. |
+| `PROJECT_WORKSPACE_ROOT`|`./data/workspaces`| Sandboxes for workspace tools. |
+| `CHROMA_DB_PATH` | `./chroma_db` | RAG vector database persistence. |
+
+### RAG & AI Features
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RAG_ENABLED` | `true` | Enables knowledge-base features. |
+| `RAG_EMBED_MODEL` | `BAAI/bge-m3` | Embedding model to use. |
+| `BGE_M3_DEVICE` | `auto` | Set to `cpu` or leave `auto` for CUDA. |
+| `OCR_ENABLED` | `true` | Enables local PaddleOCR processing. |
+| `YOUTUBE_TRANSCRIPTS_ENABLED` | `false` | Enables YouTube transcript extraction tool. |
+
+*(Note: Prompt budgets, fetch limits, and UI parameters are manageable directly in the App's UI Settings page).*
+
+---
+
+## 🛠️ Available Tools (Agent Capabilities)
+
+The LLM is equipped with a vast array of tools. Schemas are strictly validated before execution.
+
+**Memory & Personalization**
+*   `save_to_conversation_memory` / `delete_conversation_memory_entry`: Manage short-term chat facts.
+*   `save_to_persona_memory` / `delete_persona_memory_entry`: Manage cross-chat persona facts.
+*   `append_scratchpad` / `replace_scratchpad` / `read_scratchpad`: Manage long-term durable user facts.
+*   `ask_clarifying_question`: Halts execution to ask the user a structured question.
+*   `image_explain`: Queries follow-up details about uploaded images.
+
+**Knowledge Base & Search**
+*   `search_knowledge_base`: Semantic search over chats, docs, and tool results (RAG).
+*   `search_tool_memory`: Search successfully cached past web results.
+*   `search_web` / `search_news_ddgs` / `search_news_google`: Web discovery.
+*   `fetch_url` / `fetch_url_summarized`: Fetch, clean, and summarize web pages.
+*   `scroll_fetched_content` / `grep_fetched_content`: Deep-dive into long web pages.
+
+**Canvas & Document Editing**
+*   `create_canvas_document` / `delete_canvas_document` / `clear_canvas`: File management.
+*   `rewrite_canvas_document` / `batch_canvas_edits`: Edit file contents.
+*   `search_canvas_document` / `scroll_canvas_document` / `expand_canvas_document`: Read operations.
+*   `set_canvas_viewport`: Pin a line range to the context window.
+*   `validate_canvas_document` / `preview_canvas_changes`: Non-mutating checks.
+
+**Workspace (Local Sandbox)**
+*   `write_project_tree`, `create_directory`, `create_file`, `update_file`, `read_file`, `search_files`: Full filesystem operations isolated to the workspace root.
+
+---
+
+## 🔌 HTTP API Endpoints
+
+The backend provides a comprehensive REST API.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET/POST`| `/chat` | Main streamed chat endpoint (NDJSON format). |
+| `POST` | `/api/chat-runs/<id>/cancel` | Gracefully halt streaming generation. |
+| `GET` | `/api/conversations` | List all conversations. |
+| `GET` | `/api/conversations/<id>` | Load specific conversation history. |
+| `POST` | `/api/conversations/<id>/summarize` | Force history summarization. |
+| `POST` | `/api/messages/<id>/prune` | Prune specific messages from history. |
+| `GET` | `/api/conversations/<id>/export` | Export chat (MD, JSON, DOCX, PDF). |
+| `GET` | `/api/rag/search` | Search ChromaDB via REST. |
+| `POST` | `/api/rag/ingest` | Upload external documents to RAG. |
+| `GET` | `/api/activity` | Paginated audit logs of LLM invocations. |
+
+---
+
+## 🏗️ Architecture & Storage
+
+*   **Caching Strategy:** Context is structured to keep system prompts static at the top, volatile data (time, tool traces) at the bottom. This maximizes provider-side prompt caching (Anthropic, DeepSeek, Gemini).
+*   **Databases:** 
+    *   **SQLite** (`chatbot.db`): Stores conversations, messages, settings, user profiles, assets, and tool memory.
+    *   **ChromaDB**: Stores embeddings for RAG document retrieval.
+*   **Assets:** Images and parsed documents are stored safely in `./data/`.
+*   **Workspaces:** Project files managed by the LLM are stored in `./data/workspaces/`.
+
+---
+
+## 🛡️ Security & Operations
+
+*   **Production Deployment:** It is highly recommended to run behind a reverse proxy (Nginx/Caddy) with HTTPS. Set `FORCE_HTTPS=true` and `SESSION_COOKIE_SECURE=true`.
+*   **Rate Limiting:** Supports local memory limiting, or shared state via `SECURITY_RATE_LIMIT_REDIS_ENABLED`.
+*   **SSRF Protection:** Web fetching tools (`fetch_url`) block localhost and private IP addresses by default.
+*   **Sanitization:** Markdown and HTML outputs are sanitized before browser rendering.
+
+---
+
+## ❓ Troubleshooting
+
+*   **CUDA/GPU Errors:** If RAG or OCR crashes due to GPU issues, set `BGE_M3_DEVICE=cpu` and ensure `OCR_ENABLED=false` (or install the CPU version of PaddlePaddle).
+*   **Proxy Rotation Fails:** Ensure `proxies.txt` is formatted correctly (one per line, e.g., `http://ip:port`). Requires app restart.
+*   **Image Uploads Blocked:** Ensure `OCR_ENABLED=true` OR that you have selected a Vision-capable model in the Settings page.
+
+## License
+
+MIT
