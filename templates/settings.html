@@ -160,34 +160,22 @@
                 <div class="settings-page-section-card__header">
                   <div>
                     <span class="settings-section-kicker">Image analysis</span>
-                    <h3>Preferred processing method</h3>
+                    <h3>Image interpretation method</h3>
                   </div>
-                  <p>Choose whether uploaded images should be described by a helper model, sent directly to the active multimodal model, or reduced to local OCR text.</p>
+                  <p>Choose how uploaded images are processed: Multimodal sends the image directly to vision-capable models (like Gemini, GPT-4o). OCR extracts text only.</p>
                 </div>
                 <div class="settings-subsection-grid settings-subsection-grid--two">
                   <section class="settings-subsection">
                     <div class="settings-subsection__header">
-                      <span class="settings-subsection__eyebrow">Primary route</span>
+                      <span class="settings-subsection__eyebrow">Processing</span>
                       <h4 class="settings-subsection__title">How images are interpreted</h4>
                     </div>
                     <label class="settings-label" for="image-processing-method-select">Image processing method</label>
                     <select id="image-processing-method-select">
-                      <option value="auto">Auto</option>
-                      <option value="llm_helper">Helper LLM description</option>
-                      <option value="llm_direct">Direct multimodal model input</option>
-                      <option value="local_ocr">Local OCR only</option>
+                      <option value="multimodal">Multimodal (vision-capable models)</option>
+                      <option value="local_ocr">Local OCR (text extraction only)</option>
                     </select>
-                    <p class="settings-copy">Auto prefers helper descriptions first, then direct multimodal input when available, and finally falls back to OCR. OCR stays strict.</p>
-                  </section>
-
-                  <section class="settings-subsection" id="image-helper-model-section">
-                    <div class="settings-subsection__header">
-                      <span class="settings-subsection__eyebrow">Fallback helper</span>
-                      <h4 class="settings-subsection__title">Dedicated image model</h4>
-                    </div>
-                    <label class="settings-label" for="image-helper-model-select">Helper image model</label>
-                    <select id="image-helper-model-select"></select>
-                    <p class="settings-copy">Used only for Helper LLM description mode and stored image follow-up questions. Leave empty to fall back to the default chat model when it supports images.</p>
+                    <p class="settings-copy">Multimodal sends images directly to models that support vision (Gemini, GPT-4o, etc.). OCR extracts text only.</p>
                   </section>
                 </div>
               </div>
@@ -227,7 +215,6 @@
                   <div class="settings-subsection__header">
                     <span class="settings-subsection__eyebrow">Identity</span>
                     <h4 class="settings-subsection__title">Persona name</h4>
-                    <p class="settings-subsection__copy">Use a short label that will still make sense later in conversation-level selectors.</p>
                   </div>
                   <label class="settings-label" for="persona-name-input">Persona name</label>
                   <input id="persona-name-input" class="settings-text" type="text" placeholder="Example: Pragmatic Engineer" />
@@ -235,72 +222,24 @@
 
                 <section class="settings-subsection">
                   <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Behavior rules</span>
+                    <span class="settings-subsection__eyebrow">Behavior</span>
                     <h4 class="settings-subsection__title">General instructions</h4>
-                    <p class="settings-subsection__copy">Persistent response rules, formatting preferences, and strict behavior constraints for this persona.</p>
                   </div>
-                  <div class="settings-inline-actions">
-                    <select id="general-instructions-template-select" class="settings-select" aria-label="General instructions templates">
-                      <option value="">Choose a template</option>
-                    </select>
-                    <button class="btn-ghost" id="general-instructions-template-apply-btn" type="button">Apply template</button>
-                  </div>
-                  <textarea id="general-instructions-input" rows="6" placeholder="Example: Keep answers concise, state assumptions clearly, and use bullets only when they improve scanning."></textarea>
+                  <label class="settings-label" for="persona-name-input">Instructions</label>
+                  <textarea id="general-instructions-input" rows="5" placeholder="Example: Keep answers concise, state assumptions clearly, and use bullets only when they improve scanning."></textarea>
                 </section>
 
                 <section class="settings-subsection settings-subsection--full">
                   <div class="settings-subsection__header">
                     <span class="settings-subsection__eyebrow">Voice</span>
                     <h4 class="settings-subsection__title">AI personality</h4>
-                    <p class="settings-subsection__copy">Tone, attitude, and presentation style for this persona without weakening factual accuracy or instruction-following.</p>
                   </div>
-                  <div class="settings-inline-actions">
-                    <select id="ai-personality-template-select" class="settings-select" aria-label="AI personality templates">
-                      <option value="">Choose a template</option>
-                    </select>
-                    <button class="btn-ghost" id="ai-personality-template-apply-btn" type="button">Apply template</button>
-                  </div>
-                  <textarea id="ai-personality-input" rows="5" placeholder="Example: Sound like a pragmatic senior engineer: calm, direct, rigorous, and low-fluff."></textarea>
+                  <textarea id="ai-personality-input" rows="4" placeholder="Example: Sound like a pragmatic senior engineer: calm, direct, rigorous, and low-fluff."></textarea>
                 </section>
 
                 <section class="settings-subsection settings-subsection--full">
                   <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Shared memory</span>
-                    <h4 class="settings-subsection__title">Persona memory</h4>
-                    <p class="settings-subsection__copy">Short key-value memory shared across all conversations using this persona. Stored entries are not auto-pruned.</p>
-                  </div>
-                  <p id="persona-memory-note" class="settings-callout" data-tone="info">Use this for stable persona-scoped facts. Keep current-chat-only details in conversation memory instead.</p>
-                  <div id="persona-memory-list" class="model-management-list model-management-list--spaced"></div>
-                  <div class="settings-subsection-grid settings-subsection-grid--two">
-                    <section class="settings-subsection settings-subsection--compact">
-                      <div class="settings-subsection__header">
-                        <span class="settings-subsection__eyebrow">Key</span>
-                        <h4 class="settings-subsection__title">Memory label</h4>
-                      </div>
-                      <label class="settings-label" for="persona-memory-key-input">Memory key</label>
-                      <input id="persona-memory-key-input" class="settings-text" type="text" placeholder="Example: Preferred repo style" />
-                    </section>
-
-                    <section class="settings-subsection">
-                      <div class="settings-subsection__header">
-                        <span class="settings-subsection__eyebrow">Value</span>
-                        <h4 class="settings-subsection__title">Compact shared fact</h4>
-                      </div>
-                      <label class="settings-label" for="persona-memory-value-input">Memory value</label>
-                      <textarea id="persona-memory-value-input" rows="3" placeholder="One compact factual line shared across this persona's future conversations."></textarea>
-                    </section>
-                  </div>
-                  <div class="settings-inline-actions">
-                    <button class="btn-primary" id="persona-memory-save-btn" type="button">Save memory</button>
-                    <button class="btn-ghost" id="persona-memory-cancel-btn" type="button" hidden>Cancel edit</button>
-                    <button class="btn-ghost btn-ghost--danger" id="persona-memory-delete-btn" type="button" hidden>Delete memory</button>
-                    <span id="persona-memory-status" class="settings-status" data-tone="muted">Save the persona first to manage shared memory.</span>
-                  </div>
-                </section>
-
-                <section class="settings-subsection settings-subsection--full">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Editor actions</span>
+                    <span class="settings-subsection__eyebrow">Actions</span>
                     <h4 class="settings-subsection__title">Save or remove persona</h4>
                   </div>
                   <div class="settings-inline-actions">
@@ -1321,29 +1260,6 @@
               {% endfor %}
             </div>
           </div>
-
-          <div class="settings-page-section-card">
-            <div class="settings-page-section-card__header">
-              <div>
-                <span class="settings-section-kicker">Proxy routing</span>
-                <h3>Proxy scope</h3>
-              </div>
-              <p>Choose which operations may read and use proxies from proxies.txt. Unchecked operations always connect directly, and OpenRouter traffic usually stays direct unless your network requires a proxy.</p>
-            </div>
-            <div class="settings-toggle-panel">
-              <div class="tool-toggles tool-toggles--page">
-                {% for option in proxy_operation_options %}
-                <label class="tool-toggle">
-                  <input type="checkbox" name="proxy-enabled-operation" value="{{ option.name }}" />
-                  <span>
-                    <strong>{{ option.label }}</strong><br />
-                    <small>{{ option.description }}</small>
-                  </span>
-                </label>
-                {% endfor %}
-              </div>
-            </div>
-          </div>
         </section>
 
         <section class="settings-tab-panel" data-settings-panel="knowledge" aria-labelledby="knowledge-tab">
@@ -1634,6 +1550,15 @@
   <script src="/static/settings/scratchpad.js?v={{ settings_js_version }}"></script>
   <script src="/static/settings/custom-models.js?v={{ settings_js_version }}"></script>
   <script src="/static/settings/knowledge-base.js?v={{ settings_js_version }}"></script>
-  <script src="/static/settings.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/core.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/models.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/rag.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/canvas.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/fetch.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/context.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/tools.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/tabs.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/init.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/index.js?v={{ settings_js_version }}"></script>
 </body>
 </html>

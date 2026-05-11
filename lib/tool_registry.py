@@ -360,148 +360,6 @@ TOOL_SPECS = [
         },
     },
     {
-        "name": "list_context_summary",
-        "description": (
-            "List all context nodes (tool outputs) with their token usage to understand current memory state. "
-            "Use this to see which tool results are consuming tokens and their status (active/archived)."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "filter_status": {
-                    "type": "string",
-                    "enum": ["active", "archived", "all"],
-                    "description": "Filter by node status: 'active' (default), 'archived', or 'all'.",
-                },
-                "filter_tool": {
-                    "type": "string",
-                    "description": "Filter by tool name (e.g. 'search_web', 'fetch_url').",
-                },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 100,
-                    "description": "Maximum number of nodes to return (1-100, default 100).",
-                },
-                "sort_by": {
-                    "type": "string",
-                    "enum": ["token_count", "created_at"],
-                    "description": "Sort order: 'token_count' (default, highest first) or 'created_at' (newest first).",
-                },
-            },
-        },
-        "prompt": {
-            "purpose": "Lists all context nodes with token usage to understand current memory state.",
-            "inputs": {
-                "filter_status": "Filter by status: 'active', 'archived', or 'all' (default: 'active')",
-                "filter_tool": "Optional tool name to filter by",
-                "limit": "Maximum nodes to return (default: 100)",
-                "sort_by": "Sort by 'token_count' (default) or 'created_at'",
-            },
-            "guidance": "Use this to see which tool results are consuming tokens. Active nodes count toward token budget.",
-        },
-    },
-    {
-        "name": "purge_context_nodes",
-        "description": (
-            "Permanently remove context nodes (tombestone). Archived nodes are purged immediately, "
-            "active nodes are soft-deleted. Use this to free up token budget by removing irrelevant nodes."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "nodes": {
-                    "type": "array",
-                    "description": "List of nodes to purge.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "node_id": {
-                                "type": "string",
-                                "description": "The node_id to purge.",
-                            },
-                            "reason": {
-                                "type": "string",
-                                "description": "Reason for purging (shown in tombestone).",
-                            },
-                        },
-                        "required": ["node_id"],
-                    },
-                    "maxItems": 20,
-                },
-            },
-            "required": ["nodes"],
-        },
-        "prompt": {
-            "purpose": "Permanently remove context nodes to free token budget.",
-            "inputs": {
-                "nodes": "List of {node_id, reason} objects to purge (max 20 at a time)",
-            },
-            "guidance": "Use this when nodes are no longer needed and should be removed. Archived nodes are purged immediately. Active nodes are soft-deleted (tombestone retained).",
-        },
-    },
-    {
-        "name": "archive_context_nodes",
-        "description": (
-            "Archive context nodes to reduce active token usage while preserving content for potential retrieval. "
-            "Archived nodes are not counted in active token budget but content can still be retrieved if needed."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "node_ids": {
-                    "type": "array",
-                    "description": "List of node_ids to archive.",
-                    "items": {},
-                    "maxItems": 50,
-                },
-                "reason": {
-                    "type": "string",
-                    "description": "Reason for archiving (for future reference).",
-                },
-            },
-            "required": ["node_ids"],
-        },
-        "prompt": {
-            "purpose": "Archive nodes to reduce active token usage while preserving content.",
-            "inputs": {
-                "node_ids": "List of node_id strings to archive (max 50)",
-                "reason": "Why these nodes are being archived",
-            },
-            "guidance": "Use this when you want to keep node content for potential future retrieval but reduce active token usage. Archived nodes still count toward total storage but not active budget.",
-        },
-    },
-    {
-        "name": "get_context_node_detail",
-        "description": (
-            "Retrieve full content of one or more archived context nodes. "
-            "Use this to access content that was previously archived."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "node_id": {
-                    "type": "string",
-                    "description": "Single node_id to retrieve.",
-                },
-                "node_ids": {
-                    "type": "array",
-                    "description": "Multiple node_ids to retrieve (max 10).",
-                    "items": {},
-                    "maxItems": 10,
-                },
-            },
-        },
-        "prompt": {
-            "purpose": "Retrieve full content of archived context nodes.",
-            "inputs": {
-                "node_id": "Single node_id to retrieve (use this OR node_ids, not both)",
-                "node_ids": "Multiple node_ids to retrieve (max 10)",
-            },
-            "guidance": "Use this to access content from archived nodes when needed for current task.",
-        },
-    },
-    {
         "name": "ask_clarifying_question",
         "description": (
             "Ask the user one or more structured clarification questions and stop answering until they reply. "
@@ -552,33 +410,6 @@ TOOL_SPECS = [
                 "Use depends_on only for short follow-up branches that should stay hidden until a previous answer makes them relevant. "
                 'Each questions item must be an object with id, label, and input_type; example: {"id":"scope","label":"Which scope?","input_type":"text"}. '
                 "Use plain UI text only for intro, labels, placeholders, and options. Do not include Q:/A: prefixes, markdown bullets, XML/tag wrappers, code fences, or markers like <| and |>."
-            ),
-        },
-    },
-    {
-        "name": "set_conversation_title",
-        "description": (
-            "Set a concise conversation title for the current chat. "
-            "Use this on the first turn to replace the default title when the topic is clear."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "title": {
-                    "type": "string",
-                    "description": "Short topic title, typically 2-5 words.",
-                }
-            },
-            "required": ["title"],
-        },
-        "prompt": {
-            "purpose": "Sets the conversation title shown in chat history.",
-            "inputs": {
-                "title": "short conversation topic title",
-            },
-            "guidance": (
-                "Use this only when the conversation topic is clear. "
-                "Prefer 2-5 words, avoid generic labels, and match the user's language when clear."
             ),
         },
     },
@@ -1050,7 +881,7 @@ TOOL_SPECS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Literal text or regex pattern to search for."},
+                "query": {"type": "string", "description": "Query string to search for, interpreted according to match_type."},
                 "document_id": {
                     "type": "string",
                     "description": "Optional target canvas document id. Defaults to the active document when all_documents is false.",
@@ -1063,7 +894,11 @@ TOOL_SPECS = [
                     "type": "boolean",
                     "description": "Search across all open canvas documents instead of only the active or explicitly targeted one.",
                 },
-                "is_regex": {"type": "boolean", "description": "Treat query as a regex pattern instead of plain text."},
+                "match_type": {
+                    "type": "string",
+                    "enum": ["text", "regex", "glob", "find"],
+                    "description": "How to interpret the query: 'text' for literal substring, 'regex' for regex pattern, 'glob' for fnmatch-style wildcard, 'find' for line-start match.",
+                },
                 "case_sensitive": {"type": "boolean", "description": "Whether the search should be case-sensitive."},
                 "context_lines": {
                     "type": "integer",
@@ -1088,11 +923,11 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Finds where text or patterns appear inside canvas documents without loading more lines than necessary.",
             "inputs": {
-                "query": "literal text or regex pattern",
+                "query": "search query string",
                 "document_id": "optional target id",
                 "document_path": "optional target project-relative path",
                 "all_documents": "optional boolean to search all open canvas documents",
-                "is_regex": "optional boolean",
+                "match_type": "text, regex, glob, or find",
                 "case_sensitive": "optional boolean",
                 "max_results": "optional result limit",
             },
@@ -1100,40 +935,6 @@ TOOL_SPECS = [
                 "Use this first when the user asks you to find something inside a large canvas or when you do not yet know which lines matter. "
                 "After locating the right lines, use batch_read_canvas_documents with start_line and end_line for the smallest relevant window. "
                 "In project mode, prefer document_path over document_id when you know the file path."
-            ),
-        },
-    },
-    {
-        "name": "validate_canvas_document",
-        "description": (
-            "Validate one canvas document without modifying it. "
-            "Checks Python syntax, JSON validity, or Markdown structure depending on validator or file type."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {
-                    "type": "string",
-                    "description": "Optional target project-relative path. Prefer this in project mode.",
-                },
-                "validator": {
-                    "type": "string",
-                    "enum": ["python", "json", "markdown", "auto"],
-                    "description": "Validator to use. Defaults to auto based on document language or format.",
-                },
-            },
-        },
-        "prompt": {
-            "purpose": "Runs a non-mutating syntax or structure check on one canvas document.",
-            "inputs": {
-                "document_id": "optional target id",
-                "document_path": "optional target project-relative path",
-                "validator": "python, json, markdown, or auto",
-            },
-            "guidance": (
-                "Use this after editing code or config in the canvas when you want a fast correctness check before running anything. "
-                "Prefer validator='auto' unless you specifically need to override the inferred format."
             ),
         },
     },
@@ -1454,42 +1255,6 @@ TOOL_SPECS = [
         },
     },
     {
-        "name": "focus_canvas_page",
-        "description": "Pin one specific page from a page-marker-aware canvas document so it is automatically injected into later prompts.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {
-                    "type": "string",
-                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
-                },
-                "page_number": {"type": "integer", "minimum": 1, "description": "1-based page number to pin."},
-                "ttl_turns": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "description": "How many future turns to keep the page pinned. Use 0 to keep it pinned until explicitly cleared.",
-                },
-                "auto_unpin_on_edit": {
-                    "type": "boolean",
-                    "description": "When true, automatically clear the pinned page if an overlapping edit changes that region.",
-                },
-            },
-            "required": ["page_number"],
-        },
-        "prompt": {
-            "purpose": "Pins one full page from a multi-page canvas document for automatic reuse in subsequent prompts.",
-            "inputs": {
-                "document_id": "optional target id",
-                "document_path": "optional target project-relative path",
-                "page_number": "page to focus",
-                "ttl_turns": "number of future turns to keep it pinned",
-                "auto_unpin_on_edit": "whether overlapping edits clear it automatically",
-            },
-            "guidance": "Use this only when the canvas content exposes explicit page markers such as '## Page N'. Prefer it over set_canvas_viewport when the user refers to a specific page and those markers already exist in the text content.",
-        },
-    },
-    {
         "name": "clear_canvas_viewport",
         "description": "Clear one pinned canvas viewport or all pinned viewports.",
         "parameters": {
@@ -1510,13 +1275,24 @@ TOOL_SPECS = [
     },
     {
         "name": "delete_canvas_document",
-        "description": "Delete a canvas document, including obsolete or superseded ones. Defaults to the active document when document_id is omitted.",
+        "description": "Delete one or more canvas documents, including obsolete or superseded ones. Use the documents array for batch delete, or provide document_id/document_path for a single delete. Defaults to the active document when document_id is omitted.",
         "parameters": {
             "type": "object",
             "properties": {
+                "documents": {
+                    "type": "array",
+                    "description": "Array of documents to delete. Each entry should have document_id and/or document_path.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "document_id": {"type": "string", "description": "Canvas document id."},
+                            "document_path": {"type": "string", "description": "Project-relative path."},
+                        },
+                    },
+                },
                 "document_id": {
                     "type": "string",
-                    "description": "Optional target canvas document id. Defaults to the active document.",
+                    "description": "Optional target canvas document id. Defaults to the active document when documents is not provided.",
                 },
                 "document_path": {
                     "type": "string",
@@ -1525,19 +1301,9 @@ TOOL_SPECS = [
             },
         },
         "prompt": {
-            "purpose": "Deletes one canvas document from the current conversation.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path"},
-            "guidance": "Use this when a canvas document is obsolete, superseded, or a throwaway scratch draft, or when the user explicitly wants to remove a single canvas document. Deletion is irreversible for the current conversation state.",
-        },
-    },
-    {
-        "name": "clear_canvas",
-        "description": "Delete all canvas documents for the current conversation.",
-        "parameters": {"type": "object", "properties": {}},
-        "prompt": {
-            "purpose": "Clears all canvas documents from the current conversation.",
-            "inputs": {},
-            "guidance": "Use this when the whole canvas is obsolete, should be reset, or the user explicitly requests deleting all canvas documents. This is irreversible for the current conversation state, so do not use it as a shortcut for deleting a single file.",
+            "purpose": "Deletes one or more canvas documents from the current conversation.",
+            "inputs": {"documents": "optional array of {document_id, document_path}", "document_id": "optional target id", "document_path": "optional target project-relative path"},
+            "guidance": "Use documents array for batch delete when multiple documents need to be removed. Use single document_id/document_path for single document deletion. Deletion is irreversible for the current conversation state.",
         },
     },
     {
@@ -1591,6 +1357,18 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "ui_hidden": True,
         "prompt_visible": True,
         "state_domains": ("conversation",),
+    },
+    "list_context_summary": {
+        "ui_hidden": True,
+    },
+    "purge_context_nodes": {
+        "ui_hidden": True,
+    },
+    "archive_context_nodes": {
+        "ui_hidden": True,
+    },
+    "get_context_node_detail": {
+        "ui_hidden": True,
     },
     "image_explain": {
         "read_only": True,
@@ -1661,13 +1439,6 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "requires_canvas_document": True,
         "requires_text_addressable_canvas": True,
     },
-    "validate_canvas_document": {
-        "read_only": True,
-        "parallel_safe": True,
-        "state_domains": ("canvas",),
-        "requires_canvas_document": True,
-        "requires_text_addressable_canvas": True,
-    },
     "batch_canvas_edits": {
         "state_domains": ("canvas",),
         "requires_canvas_document": True,
@@ -1690,20 +1461,11 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "requires_canvas_document": True,
         "requires_text_addressable_canvas": True,
     },
-    "focus_canvas_page": {
-        "state_domains": ("canvas",),
-        "requires_canvas_document": True,
-        "requires_text_addressable_canvas": True,
-    },
     "clear_canvas_viewport": {
         "state_domains": ("canvas",),
         "requires_canvas_document": True,
     },
     "delete_canvas_document": {
-        "state_domains": ("canvas",),
-        "requires_canvas_document": True,
-    },
-    "clear_canvas": {
         "state_domains": ("canvas",),
         "requires_canvas_document": True,
     },

@@ -814,7 +814,7 @@ def build_user_message_for_model(
         vision_summary = str(attachment.get("vision_summary") or "").strip()
         assistant_guidance = str(attachment.get("assistant_guidance") or "").strip()
         key_points = attachment.get("key_points") if isinstance(attachment.get("key_points"), list) else []
-        if analysis_method == "llm_direct":
+        if analysis_method == "multimodal":
             direct_label = image_name or (f"image_id={image_id}" if image_id else "uploaded image")
             direct_notice = (
                 f"Uploaded image for direct multimodal analysis: {direct_label}. The original image is attached below."
@@ -924,7 +924,7 @@ def _build_direct_image_api_blocks(metadata: dict | None) -> list[dict]:
     for attachment in attachments:
         if attachment.get("kind") != "image":
             continue
-        if str(attachment.get("analysis_method") or "").strip().lower() != "llm_direct":
+        if str(attachment.get("analysis_method") or "").strip().lower() != "multimodal":
             continue
         image_id = str(attachment.get("image_id") or "").strip()
         asset, image_bytes = read_image_asset_bytes(image_id)
@@ -2047,7 +2047,6 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- Verify affected region with a read-only tool after mutating.",
         "- update_canvas_metadata handles title, role, dependency, or symbol changes (not content). Set ignored=true to hide a document.",
         "- Do not use line-based tools on an ignored document until re-enabled with ignored=false.",
-        "- For multi-page documents, use focus_canvas_page for page-specific tasks.",
         "- When targeting, prefer document_path over document_id when shown in the prompt.",
         "- All code must be inside the `lines` array as properly escaped JSON strings.",
         "- Use batch_canvas_edits with a single replace operation when most of the document should change.",
@@ -2153,14 +2152,6 @@ def _build_canvas_runtime_context_sections(
     if canvas_payload["mode"] == "project":
         active_lines.append(
             "- In project mode, prefer the explicit document_path shown in the prompt for targeting, even when you do not know the document_id yet."
-        )
-    if (
-        not active_document_ignored
-        and int(active_document.get("page_count") or 0) > 1
-        and get_canvas_document_capabilities(active_document)["line_addressable"]
-    ):
-        active_lines.append(
-            "- Multi-page guidance: if the task refers to a specific PDF-style page, call focus_canvas_page only when the document already exposes explicit '## Page N' markers in its text content."
         )
     if canvas_payload["visible_lines"] and not active_document_ignored:
         active_lines.append("```text\n" + "\n".join(canvas_payload["visible_lines"]) + "\n```")

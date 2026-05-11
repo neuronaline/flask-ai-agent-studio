@@ -74,13 +74,11 @@ CANVAS_MUTATING_TOOL_NAMES: frozenset[str] = frozenset({
     "transform_canvas_lines",
     "update_canvas_metadata",
     "set_canvas_viewport",
-    "focus_canvas_page",
     "clear_canvas_viewport",
     "replace_canvas_lines",
     "insert_canvas_lines",
     "delete_canvas_lines",
     "delete_canvas_document",
-    "clear_canvas",
 })
 
 # Subset of CANVAS_MUTATING_TOOL_NAMES that modify document *content* (not just
@@ -96,7 +94,6 @@ CANVAS_CONTENT_MUTATING_TOOL_NAMES: frozenset[str] = frozenset({
     "insert_canvas_lines",
     "delete_canvas_lines",
     "delete_canvas_document",
-    "clear_canvas",
 })
 
 
@@ -443,7 +440,7 @@ def _raise_canvas_document_capability_error(document: dict, action: str, capabil
     raise ValueError(
         f"{action} is not available for the visual canvas document '{title}'. "
         "This document is image-backed and does not provide text-addressable lines. "
-        "Use focus_canvas_page for page navigation, or switch to a text-extracted document for line-based tools."
+        "Switch to a text-extracted document for line-based tools."
     )
 
 
@@ -2458,54 +2455,6 @@ def set_canvas_viewport(
     }
 
 
-def focus_canvas_page(
-    runtime_state: dict,
-    *,
-    page_number: int,
-    ttl_turns: int = 3,
-    auto_unpin_on_edit: bool = True,
-    document_id: str | None = None,
-    document_path: str | None = None,
-) -> dict:
-    if int(page_number or 0) < 1:
-        raise ValueError("focus_canvas_page requires page_number >= 1.")
-
-    _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
-    page_sections = _extract_canvas_page_sections(document.get("content") or "")
-    if not page_sections:
-        raise ValueError(
-            "This canvas document does not expose explicit '## Page N' markers yet. focus_canvas_page only works when page markers already exist in the text content."
-        )
-
-    page_range = _get_canvas_page_range(document.get("content") or "", int(page_number))
-    if not page_range:
-        available_pages = ", ".join(str(section.get("page_number")) for section in page_sections[:12])
-        raise ValueError(f"Canvas page {page_number} was not found. Available pages: {available_pages}")
-
-    viewport_result = set_canvas_viewport(
-        runtime_state,
-        start_line=page_range[0],
-        end_line=page_range[1],
-        ttl_turns=ttl_turns,
-        auto_unpin_on_edit=auto_unpin_on_edit,
-        document_id=document.get("id"),
-        document_path=document.get("path"),
-        page_number=int(page_number),
-    )
-    pinned = viewport_result.get("pinned") if isinstance(viewport_result.get("pinned"), dict) else {}
-    return {
-        "status": "ok",
-        "action": "page_focused",
-        "document_id": document.get("id"),
-        "document_path": document.get("path"),
-        "title": document.get("title"),
-        "page_number": int(page_number),
-        "page_count": len(page_sections),
-        "start_line": page_range[0],
-        "end_line": page_range[1],
-        "pinned": pinned,
-    }
-
 
 def clear_canvas_viewport(
     runtime_state: dict, *, document_path: str | None = None, document_id: str | None = None
@@ -2692,7 +2641,7 @@ def search_canvas_document(
     document_id: str | None = None,
     document_path: str | None = None,
     all_documents: bool = False,
-    is_regex: bool = False,
+    match_type: str = "text",
     case_sensitive: bool = False,
     context_lines: int = 0,
     offset: int = 0,
@@ -2711,13 +2660,24 @@ def search_canvas_document(
     normalized_context_lines = max(0, min(10, int(context_lines or 0)))
     flags = 0 if case_sensitive else re.IGNORECASE
     pattern = None
-    if is_regex:
+    is_regex = match_type == "regex"
+    
+    if match_type == "regex":
         try:
             pattern = re.compile(raw_query, flags)
         except re.error as exc:
             raise ValueError(f"Invalid regex pattern: {exc}") from exc
-    else:
-        raw_query = raw_query if case_sensitive else raw_query.casefold()
+    elif match_type == "glob":
+        try:
+            import fnmatch
+            pattern = lambda line: fnmatch.fnmatch(line, raw_query) if not case_sensitive else fnmatch.fnmatch(line.lower(), raw_query.lower())
+        except Exception as exc:
+            raise ValueError(f"Invalid glob pattern: {exc}") from exc
+    elif match_type == "find":
+        try:
+            pattern = lambda line: line.startswith(raw_query) if case_sensitive else line.lower().startswith(raw_query.lower())
+        except Exception as exc:
+            raise ValueError(f"Invalid find pattern: {exc}") from exc
 
     target_documents = documents
     if not all_documents:
@@ -2739,7 +2699,16 @@ def search_canvas_document(
         document_lines = list_canvas_lines(document.get("content") or "")
         for index, line in enumerate(document_lines, start=1):
             haystack = line if case_sensitive else line.casefold()
-            found = bool(pattern.search(line)) if pattern is not None else raw_query in haystack
+            if match_type == "text":
+                found = raw_query in haystack
+            elif match_type == "regex":
+                found = bool(pattern.search(line))
+            elif match_type == "glob":
+                found = pattern(line)
+            elif match_type == "find":
+                found = pattern(line)
+            else:
+                found = raw_query in haystack
             if not found:
                 continue
             total_match_count += 1
@@ -2775,7 +2744,7 @@ def search_canvas_document(
         "status": "ok",
         "action": "searched",
         "query": query,
-        "is_regex": is_regex,
+        "match_type": match_type,
         "case_sensitive": case_sensitive,
         "all_documents": all_documents,
         "context_lines": normalized_context_lines,
@@ -2963,124 +2932,64 @@ def _validate_canvas_markdown_content(content: str) -> list[dict]:
     return issues
 
 
-def validate_canvas_document(
-    runtime_state: dict,
-    *,
-    document_id: str | None = None,
-    document_path: str | None = None,
-    validator: str | None = None,
-) -> dict:
-    _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
-    if document.get("ignored") is True:
-        return {
-            "status": "ok",
-            "action": "validated",
-            "document_id": document.get("id"),
-            "document_path": document.get("path"),
-            "title": document.get("title"),
-            "validator_used": "none",
-            "is_valid": False,
-            "issue_count": 1,
-            "issues": [
-                _build_canvas_validation_issue(
-                    "info",
-                    "Validation is not available for ignored canvas documents until they are re-enabled with update_canvas_metadata and ignored=false.",
-                )
-            ],
-        }
-    if not get_canvas_document_capabilities(document)["line_addressable"]:
-        return {
-            "status": "ok",
-            "action": "validated",
-            "document_id": document.get("id"),
-            "document_path": document.get("path"),
-            "title": document.get("title"),
-            "validator_used": "none",
-            "is_valid": False,
-            "issue_count": 1,
-            "issues": [
-                _build_canvas_validation_issue(
-                    "info",
-                    "Validation is not available for visual canvas documents because they are image-backed previews rather than editable text files.",
-                )
-            ],
-        }
-    resolved_validator = _detect_canvas_validator(document, validator)
-    content = str(document.get("content") or "")
-
-    if resolved_validator == "python":
-        issues = _validate_canvas_python_content(content)
-    elif resolved_validator == "json":
-        issues = _validate_canvas_json_content(content)
-    elif resolved_validator == "markdown":
-        issues = _validate_canvas_markdown_content(content)
-    else:
-        issues = [
-            _build_canvas_validation_issue(
-                "info",
-                "No validator is available for this canvas document format.",
-            )
-        ]
-
-    error_count = sum(1 for issue in issues if issue.get("severity") == "error")
-    return {
-        "status": "ok",
-        "action": "validated",
-        "document_id": document.get("id"),
-        "document_path": document.get("path"),
-        "title": document.get("title"),
-        "validator_used": resolved_validator,
-        "is_valid": error_count == 0,
-        "issue_count": len(issues),
-        "issues": issues,
-    }
-
-
 def delete_canvas_document(
     runtime_state: dict,
     document_id: str | None = None,
     document_path: str | None = None,
+    documents: list[dict] | None = None,
 ) -> dict:
-    index, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
-    documents = runtime_state.get("documents") if isinstance(runtime_state, dict) else None
-    if not isinstance(documents, list):
+    canvas_docs = runtime_state.get("documents") if isinstance(runtime_state, dict) else None
+    if not isinstance(canvas_docs, list):
         raise ValueError("No canvas document is available yet.")
 
-    previous_active_document_id = get_canvas_runtime_active_document_id(runtime_state)
-    removed = documents.pop(index)
-    clear_canvas_viewport(
-        runtime_state, document_id=str(removed.get("id") or "") or None, document_path=removed.get("path")
-    )
-    if documents:
-        runtime_state["active_document_id"] = (
-            documents[-1]["id"]
-            if str(removed.get("id") or "") == str(previous_active_document_id or "")
-            else previous_active_document_id
-        )
-    else:
+    if documents and len(documents) > 0:
+        deleted_ids = []
+        deleted_titles = []
+        for doc_spec in documents:
+            doc_id = doc_spec.get("document_id") if isinstance(doc_spec, dict) else None
+            doc_path = doc_spec.get("document_path") if isinstance(doc_spec, dict) else None
+            try:
+                idx, doc = _find_canvas_document(runtime_state, document_id=doc_id, document_path=doc_path)
+                removed = canvas_docs.pop(idx)
+                deleted_ids.append(removed.get("id"))
+                deleted_titles.append(removed.get("title"))
+                clear_canvas_viewport(
+                    runtime_state, document_id=str(removed.get("id") or "") or None, document_path=removed.get("path")
+                )
+            except ValueError:
+                pass
         runtime_state["active_document_id"] = None
-    _refresh_canvas_runtime_state(runtime_state)
-    return {
-        "status": "ok",
-        "action": "deleted",
-        "deleted_id": removed.get("id"),
-        "deleted_title": removed.get("title"),
-        "remaining_count": len(documents),
-    }
-
-
-def clear_canvas(runtime_state: dict) -> dict:
-    documents = get_canvas_runtime_documents(runtime_state)
-    cleared_count = len(documents)
-    runtime_state["documents"] = []
-    runtime_state["active_document_id"] = None
-    runtime_state["viewports"] = {}
-    runtime_state["mode"] = CANVAS_MODE_DOCUMENT
-    return {
-        "status": "ok",
-        "action": "cleared",
-        "cleared_count": cleared_count,
-    }
+        _refresh_canvas_runtime_state(runtime_state)
+        return {
+            "status": "ok",
+            "action": "deleted",
+            "deleted_ids": deleted_ids,
+            "deleted_titles": deleted_titles,
+            "remaining_count": len(canvas_docs),
+        }
+    else:
+        index, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+        previous_active_document_id = get_canvas_runtime_active_document_id(runtime_state)
+        removed = canvas_docs.pop(index)
+        clear_canvas_viewport(
+            runtime_state, document_id=str(removed.get("id") or "") or None, document_path=removed.get("path")
+        )
+        if canvas_docs:
+            runtime_state["active_document_id"] = (
+                canvas_docs[-1]["id"]
+                if str(removed.get("id") or "") == str(previous_active_document_id or "")
+                else previous_active_document_id
+            )
+        else:
+            runtime_state["active_document_id"] = None
+        _refresh_canvas_runtime_state(runtime_state)
+        return {
+            "status": "ok",
+            "action": "deleted",
+            "deleted_id": removed.get("id"),
+            "deleted_title": removed.get("title"),
+            "remaining_count": len(canvas_docs),
+        }
 
 
 def build_canvas_document_result_snapshot(document: dict | None) -> dict | None:

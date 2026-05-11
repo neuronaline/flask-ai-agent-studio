@@ -36,8 +36,8 @@ OPENROUTER_MODEL_VARIANT_SEPARATOR = "@@"
 OPENROUTER_MODEL_VARIANT_PART_SEPARATOR = ";"
 OPENROUTER_MODEL_VARIANT_KEY_VALUE_SEPARATOR = "="
 DEFAULT_CHAT_MODEL = "deepseek-v4-flash"
-DEFAULT_IMAGE_PROCESSING_METHOD = "auto"
-IMAGE_PROCESSING_METHODS = {"auto", "llm_helper", "llm_direct", "local_ocr"}
+DEFAULT_IMAGE_PROCESSING_METHOD = "multimodal"
+IMAGE_PROCESSING_METHODS = {"multimodal", "local_ocr"}
 MODEL_OPERATION_KEYS = (
     "summarize",
     "fetch_summarize",
@@ -1756,9 +1756,10 @@ def get_operation_model_candidates(
 
 def normalize_image_processing_method(value: Any) -> str:
     method = str(value or DEFAULT_IMAGE_PROCESSING_METHOD).strip().lower()
-    if method == "llm":
-        return "llm_helper"
-    if method in {"local_vl", "local_both"}:
+    # Backwards compatibility for old method names
+    if method in {"auto", "llm", "llm_helper", "llm_direct"}:
+        return "multimodal"
+    if method in {"local_vl", "local_both", "local_ocr"}:
         return "local_ocr"
     if method in IMAGE_PROCESSING_METHODS:
         return method

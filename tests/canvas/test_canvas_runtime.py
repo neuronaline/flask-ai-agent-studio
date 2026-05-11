@@ -5,13 +5,11 @@ import pytest
 from services.canvas_service import (
     batch_read_canvas_documents,
     create_canvas_runtime_state,
-    focus_canvas_page,
     get_canvas_viewport_payloads,
     normalize_canvas_document,
     scroll_canvas_document,
     search_canvas_document,
     set_canvas_viewport,
-    validate_canvas_document,
 )
 from core.db import (
     get_app_settings,
@@ -453,83 +451,6 @@ class TestCanvasRuntime:
 
         with pytest.raises(ValueError, match="text-addressable lines"):
             set_canvas_viewport(runtime_state, document_path="docs/scan.pdf", start_line=1, end_line=2)
-
-    def test_validate_canvas_document_detects_python_and_markdown_issues(self):
-        runtime_state = create_canvas_runtime_state(
-            [
-                {
-                    "id": "doc-1",
-                    "title": "broken.py",
-                    "path": "broken.py",
-                    "format": "code",
-                    "language": "python",
-                    "content": "def broken(:\n    pass\n",
-                },
-                {
-                    "id": "doc-2",
-                    "title": "README.md",
-                    "path": "README.md",
-                    "format": "markdown",
-                    "content": "# Title\n### Skipped\n```python\nprint('x')\n",
-                },
-            ],
-            active_document_id="doc-1",
-        )
-
-        python_result = validate_canvas_document(runtime_state, document_path="broken.py")
-        markdown_result = validate_canvas_document(runtime_state, document_path="README.md")
-
-        assert not python_result["is_valid"]
-        assert python_result["validator_used"] == "python"
-        assert python_result["issues"][0]["severity"] == "error"
-        assert markdown_result["validator_used"] == "markdown"
-        assert any(issue["message"] == "Unclosed fenced code block." for issue in markdown_result["issues"])
-
-    def test_validate_canvas_document_marks_visual_canvas_documents_invalid_for_text_validation(self):
-        runtime_state = create_canvas_runtime_state(
-            [
-                {
-                    "id": "doc-visual",
-                    "title": "scan.pdf",
-                    "path": "docs/scan.pdf",
-                    "format": "markdown",
-                    "content": "# scan.pdf",
-                    "content_mode": "visual",
-                    "canvas_mode": "preview_only",
-                    "page_count": 2,
-                }
-            ]
-        )
-
-        result = validate_canvas_document(runtime_state, document_path="docs/scan.pdf")
-
-        assert not result["is_valid"]
-        assert result["validator_used"] == "none"
-        assert "image-backed previews" in result["issues"][0]["message"]
-
-    def test_focus_canvas_page_pins_detected_page_range(self):
-        runtime_state = create_canvas_runtime_state(
-            [
-                {
-                    "id": "doc-1",
-                    "title": "report.pdf",
-                    "path": "docs/report.pdf",
-                    "format": "markdown",
-                    "content": "## Page 1\n\nAlpha\n\n---\n\n## Page 2\n\nBeta",
-                }
-            ]
-        )
-
-        result = focus_canvas_page(runtime_state, document_path="docs/report.pdf", page_number=2, ttl_turns=2)
-        payloads = get_canvas_viewport_payloads(runtime_state)
-
-        assert result["action"] == "page_focused"
-        assert result["page_number"] == 2
-        assert result["start_line"] == 7
-        assert result["end_line"] == 9
-        assert payloads[0]["page_number"] == 2
-        assert payloads[0]["start_line"] == 7
-        assert payloads[0]["end_line"] == 9
 
     def test_runtime_system_message_mentions_canvas_scroll_for_truncated_excerpt(self):
         content = "\n".join(f"line {index}" for index in range(1, 51))

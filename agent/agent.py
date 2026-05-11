@@ -35,13 +35,11 @@ from services.canvas_service import (
     CANVAS_MUTATING_TOOL_NAMES,
     clear_canvas_viewport,
     clear_overlapping_canvas_viewports,
-    clear_canvas,
     compute_canvas_content_hash,
     create_canvas_document,
     create_canvas_runtime_state,
     delete_canvas_document,
     find_canvas_document,
-    focus_canvas_page,
     get_canvas_runtime_active_document_id,
     get_canvas_runtime_documents,
     get_canvas_runtime_snapshot,
@@ -53,7 +51,6 @@ from services.canvas_service import (
     scale_canvas_char_limit,
     transform_canvas_lines,
     update_canvas_metadata,
-    validate_canvas_document,
 )
 from core.config import (
     AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS,
@@ -3986,173 +3983,6 @@ def _run_delete_persona_memory_entry(tool_args: dict, runtime_state: dict):
     }, (f"Persona memory deleted: {entry_id}" if deleted else f"Persona memory not found: {entry_id}")
 
 
-def _run_list_context_summary(tool_args: dict, runtime_state: dict):
-    """List context nodes with token usage stats."""
-    from context_node_service import get_context_node_service
-
-    filter_status = str(tool_args.get("filter_status") or "active").strip()
-    if filter_status not in ("active", "archived", "all"):
-        filter_status = "active"
-
-    filter_tool = str(tool_args.get("filter_tool") or "").strip() or None
-    limit = max(1, min(100, int(tool_args.get("limit") or 100)))
-    sort_by = str(tool_args.get("sort_by") or "token_count").strip()
-    if sort_by not in ("token_count", "created_at"):
-        sort_by = "token_count"
-
-    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
-    conversation_id = int(agent_context.get("conversation_id") or 0) or None
-
-    if not conversation_id:
-        return {"status": "error", "error": "conversation_id not found."}, "list_context_summary: no conversation_id"
-
-    service = get_context_node_service()
-    stats = service.get_stats(conversation_id)
-    nodes = service.list_nodes(
-        conversation_id=conversation_id,
-        status=None if filter_status == "all" else filter_status,
-        tool_name=filter_tool,
-        limit=limit,
-        sort_by=sort_by,
-    )
-
-    return {
-        "status": "ok",
-        "stats": stats.to_dict(),
-        "nodes": [
-            {
-                "node_id": n.get("node_id"),
-                "tool_name": n.get("tool_name"),
-                "args_preview": n.get("args_preview"),
-                "result_preview": n.get("result_preview"),
-                "token_count": n.get("token_count"),
-                "status": n.get("status"),
-                "created_at": n.get("created_at"),
-            }
-            for n in nodes
-        ],
-        "count": len(nodes),
-    }, f"Listed {len(nodes)} context nodes (status={filter_status})"
-
-
-def _run_purge_context_nodes(tool_args: dict, runtime_state: dict):
-    """Purge (soft-delete) context nodes."""
-    from context_node_service import get_context_node_service
-
-    nodes = tool_args.get("nodes", [])
-    if not nodes:
-        return {"status": "error", "error": "nodes is required."}, "purge_context_nodes: missing nodes"
-
-    if not isinstance(nodes, list):
-        return {"status": "error", "error": "nodes must be an array."}, "purge_context_nodes: invalid nodes type"
-
-    if len(nodes) > 20:
-        return {"status": "error", "error": "Maximum 20 nodes can be purged at once."}, "purge_context_nodes: too many nodes"
-
-    node_ids = []
-    for n in nodes:
-        if isinstance(n, dict) and n.get("node_id"):
-            node_ids.append(str(n["node_id"]))
-        elif isinstance(n, str):
-            node_ids.append(n)
-
-    if not node_ids:
-        return {"status": "error", "error": "node_ids are required."}, "purge_context_nodes: missing node_ids"
-
-    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
-    conversation_id = int(agent_context.get("conversation_id") or 0) or None
-
-    if not conversation_id:
-        return {"status": "error", "error": "conversation_id not found."}, "purge_context_nodes: no conversation_id"
-
-    service = get_context_node_service()
-    result = service.purge_nodes(node_ids, reason="user_requested")
-
-    stats = service.get_stats(conversation_id)
-
-    return {
-        "status": "ok",
-        "purged": result.get("purged", 0),
-        "details": result,
-        "stats": stats.to_dict(),
-    }, f"Purged {result.get('purged', 0)} context nodes"
-
-
-def _run_archive_context_nodes(tool_args: dict, runtime_state: dict):
-    """Archive context nodes to reduce active token usage."""
-    from context_node_service import get_context_node_service
-
-    node_ids = tool_args.get("node_ids", [])
-    if not node_ids:
-        return {"status": "error", "error": "node_ids is required."}, "archive_context_nodes: missing node_ids"
-
-    if not isinstance(node_ids, list):
-        return {"status": "error", "error": "node_ids must be an array."}, "archive_context_nodes: invalid node_ids type"
-
-    if len(node_ids) > 50:
-        return {"status": "error", "error": "Maximum 50 nodes can be archived at once."}, "archive_context_nodes: too many nodes"
-
-    reason = str(tool_args.get("reason") or "user_requested").strip()
-
-    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
-    conversation_id = int(agent_context.get("conversation_id") or 0) or None
-
-    if not conversation_id:
-        return {"status": "error", "error": "conversation_id not found."}, "archive_context_nodes: no conversation_id"
-
-    service = get_context_node_service()
-    archived_count = service.archive_nodes(node_ids, reason)
-
-    stats = service.get_stats(conversation_id)
-
-    return {
-        "status": "ok",
-        "archived": archived_count,
-        "stats": stats.to_dict(),
-    }, f"Archived {archived_count} context nodes"
-
-
-def _run_get_context_node_detail(tool_args: dict, runtime_state: dict):
-    """Retrieve full content of archived context nodes."""
-    from context_node_service import get_context_node_service
-
-    node_id = str(tool_args.get("node_id") or "").strip()
-    node_ids = tool_args.get("node_ids", [])
-
-    if not node_id and not node_ids:
-        return {"status": "error", "error": "node_id or node_ids is required."}, "get_context_node_detail: missing node_id(s)"
-
-    if node_ids and not isinstance(node_ids, list):
-        return {"status": "error", "error": "node_ids must be an array."}, "get_context_node_detail: invalid node_ids type"
-
-    if node_ids and len(node_ids) > 10:
-        return {"status": "error", "error": "Maximum 10 node_ids allowed."}, "get_context_node_detail: too many node_ids"
-
-    lookup_ids = [node_id] if node_id else node_ids[:10]
-
-    service = get_context_node_service()
-
-    results = []
-    for nid in lookup_ids:
-        node = service.get_node(nid)
-        if node:
-            results.append({
-                "node_id": node.get("node_id"),
-                "tool_name": node.get("tool_name"),
-                "args_preview": node.get("args_preview"),
-                "full_content": node.get("full_content"),
-                "token_count": node.get("token_count"),
-                "status": node.get("status"),
-                "created_at": node.get("created_at"),
-            })
-
-    return {
-        "status": "ok",
-        "nodes": results,
-        "count": len(results),
-    }, f"Retrieved {len(results)} context node(s)"
-
-
 def _run_ask_clarifying_question(tool_args: dict, runtime_state: dict):
     del runtime_state
     payload = _normalize_clarification_payload(tool_args)
@@ -4450,7 +4280,7 @@ def _run_search_canvas_document(tool_args: dict, runtime_state: dict):
         document_id=tool_args.get("document_id"),
         document_path=tool_args.get("document_path"),
         all_documents=tool_args.get("all_documents") is True,
-        is_regex=tool_args.get("is_regex") is True,
+        match_type=tool_args.get("match_type") or "text",
         case_sensitive=tool_args.get("case_sensitive") is True,
         context_lines=tool_args.get("context_lines") or 0,
         offset=tool_args.get("offset") or 0,
@@ -4465,20 +4295,6 @@ def _run_search_canvas_document(tool_args: dict, runtime_state: dict):
         result,
         f"{result.get('returned_count', len(result.get('matches') or []))} canvas matches found in {scope_label}",
     )
-
-
-def _run_validate_canvas_document(tool_args: dict, runtime_state: dict):
-    canvas_state = _get_canvas_runtime_state(runtime_state)
-    result = validate_canvas_document(
-        canvas_state,
-        document_id=tool_args.get("document_id"),
-        document_path=tool_args.get("document_path"),
-        validator=tool_args.get("validator"),
-    )
-    issue_count = int(result.get("issue_count") or 0)
-    if result.get("is_valid"):
-        return result, f"Canvas validation passed for {result.get('title') or 'Canvas'}"
-    return result, f"Canvas validation found {issue_count} issue(s) in {result.get('title') or 'Canvas'}"
 
 
 def _run_batch_canvas_edits(tool_args: dict, runtime_state: dict):
@@ -4626,21 +4442,6 @@ def _run_set_canvas_viewport(tool_args: dict, runtime_state: dict):
     return result, f"Canvas viewport pinned for {target_label}"
 
 
-def _run_focus_canvas_page(tool_args: dict, runtime_state: dict):
-    canvas_state = _get_canvas_runtime_state(runtime_state)
-    auto_unpin_on_edit = True if "auto_unpin_on_edit" not in tool_args else tool_args.get("auto_unpin_on_edit") is True
-    result = focus_canvas_page(
-        canvas_state,
-        page_number=int(tool_args.get("page_number") or 0),
-        ttl_turns=int(tool_args.get("ttl_turns") or 0) if tool_args.get("ttl_turns") not in (None, "") else 3,
-        auto_unpin_on_edit=auto_unpin_on_edit,
-        document_id=tool_args.get("document_id"),
-        document_path=tool_args.get("document_path"),
-    )
-    target_label = str(result.get("document_path") or result.get("document_id") or "Canvas").strip()
-    return result, f"Canvas focused on page {result.get('page_number')} for {target_label}"
-
-
 def _run_clear_canvas_viewport(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
     result = clear_canvas_viewport(
@@ -4657,16 +4458,13 @@ def _run_delete_canvas_document(tool_args: dict, runtime_state: dict):
         canvas_state,
         document_id=tool_args.get("document_id"),
         document_path=tool_args.get("document_path"),
+        documents=tool_args.get("documents"),
     )
+    if result.get("deleted_ids"):
+        deleted_count = len(result.get("deleted_ids") or [])
+        return result, f"Canvas deleted {deleted_count} document(s)"
     deleted_title = str(result.get("deleted_title") or "Canvas")
     return result, f"Canvas deleted: {deleted_title}"
-
-
-def _run_clear_canvas(tool_args: dict, runtime_state: dict):
-    del tool_args
-    canvas_state = _get_canvas_runtime_state(runtime_state)
-    result = clear_canvas(canvas_state)
-    return result, f"Canvas cleared ({result.get('cleared_count', 0)} documents removed)"
 
 
 def _normalize_conversation_title_for_tool(raw_title: str) -> str:
@@ -4755,55 +4553,6 @@ def _generate_conversation_title_with_dedicated_model(conversation_id: int, fall
     return _normalize_conversation_title_for_tool(result.get("content") or "")
 
 
-def _run_set_conversation_title(tool_args: dict, runtime_state: dict):
-    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
-    conv_id = _coerce_int_range(agent_context.get("conversation_id"), 0, 0, 2_147_483_647)
-    if conv_id <= 0:
-        return {"status": "error", "error": "Missing conversation id."}, "Missing conversation id"
-
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT title, title_source, title_overridden FROM conversations WHERE id = ?",
-            (conv_id,),
-        ).fetchone()
-        if not row:
-            return {"status": "error", "error": "Conversation not found."}, "Conversation not found"
-
-        current_title = str(row["title"] or "").strip()
-        current_title_overridden = int(row["title_overridden"] or 0)
-        if current_title_overridden == 1:
-            return {
-                "status": "ok",
-                "updated": False,
-                "title": current_title,
-                "reason": "title_already_set",
-            }, f"Conversation title already set: {current_title}"
-
-    generated_title = _generate_conversation_title_with_dedicated_model(
-        conv_id,
-        fallback_model=str(agent_context.get("model") or "").strip(),
-    )
-    requested_title = _normalize_conversation_title_for_tool(tool_args.get("title", ""))
-    final_title = generated_title or requested_title
-    if not final_title:
-        return {"status": "error", "error": "Title could not be generated."}, "Title could not be generated"
-
-    with get_db() as conn:
-        conn.execute(
-            """
-            UPDATE conversations
-               SET title = ?,
-                   title_source = 'system',
-                   title_overridden = 0,
-                   updated_at = datetime('now')
-             WHERE id = ?
-            """,
-            (final_title, conv_id),
-        )
-
-    return {"status": "ok", "updated": True, "title": final_title}, f"Conversation title set: {final_title}"
-
-
 _TOOL_EXECUTORS = {
     "append_scratchpad": _run_append_scratchpad,
     "replace_scratchpad": _run_replace_scratchpad,
@@ -4812,12 +4561,7 @@ _TOOL_EXECUTORS = {
     "delete_conversation_memory_entry": _run_delete_conversation_memory_entry,
     "save_to_persona_memory": _run_save_to_persona_memory,
     "delete_persona_memory_entry": _run_delete_persona_memory_entry,
-    "list_context_summary": _run_list_context_summary,
-    "purge_context_nodes": _run_purge_context_nodes,
-    "archive_context_nodes": _run_archive_context_nodes,
-    "get_context_node_detail": _run_get_context_node_detail,
     "ask_clarifying_question": _run_ask_clarifying_question,
-    "set_conversation_title": _run_set_conversation_title,
     "image_explain": _run_image_explain,
     "transcribe_youtube_video": _run_transcribe_youtube_video,
     "search_knowledge_base": _run_search_knowledge_base,
@@ -4831,16 +4575,13 @@ _TOOL_EXECUTORS = {
     "grep_fetched_content": _run_grep_fetched_content,
     "batch_read_canvas_documents": _run_batch_read_canvas_documents,
     "search_canvas_document": _run_search_canvas_document,
-    "validate_canvas_document": _run_validate_canvas_document,
     "create_canvas_document": _run_create_canvas_document,
     "transform_canvas_lines": _run_transform_canvas_lines,
     "update_canvas_metadata": _run_update_canvas_metadata,
     "set_canvas_viewport": _run_set_canvas_viewport,
-    "focus_canvas_page": _run_focus_canvas_page,
     "clear_canvas_viewport": _run_clear_canvas_viewport,
     "batch_canvas_edits": _run_batch_canvas_edits,
     "delete_canvas_document": _run_delete_canvas_document,
-    "clear_canvas": _run_clear_canvas,
 }
 
 

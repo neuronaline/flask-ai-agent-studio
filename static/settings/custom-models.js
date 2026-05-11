@@ -22,7 +22,6 @@
   const uploadMetadataModelPreferenceEl = document.getElementById("upload-metadata-model-preference-select");
   const subAgentModelPreferenceEl = document.getElementById("sub-agent-model-preference-select");
   const chatSummaryModelEl = document.getElementById("chat-summary-model-select");
-  const imageHelperModelEl = document.getElementById("image-helper-model-select");
   const summaryModelFallbackListEl = document.getElementById("summary-model-fallback-list");
   const fetchSummarizeModelFallbackListEl = document.getElementById("fetch-summarize-model-fallback-list");
   const fixTextModelFallbackListEl = document.getElementById("fix-text-model-fallback-list");
@@ -666,28 +665,8 @@
     if (selectEl.value !== (selectedValue || "")) selectEl.value = "";
   }
 
-  function populateVisionModelSelect(selectEl, selectedValue, emptyLabel = "Use default chat model when needed") {
-    if (!selectEl) return;
-    const options = getDraftAvailableModels().filter((model) => Boolean(model?.supports_vision));
-    const fragment = document.createDocumentFragment();
-    const defaultOption = document.createElement("option");
-    defaultOption.value = "";
-    defaultOption.textContent = emptyLabel;
-    fragment.append(defaultOption);
-    options.forEach((model) => {
-      const option = document.createElement("option");
-      option.value = model.id;
-      option.textContent = `${model.name || model.id} (${getModelProviderLabel(model)})`;
-      fragment.append(option);
-    });
-    selectEl.replaceChildren(fragment);
-    selectEl.value = selectedValue || "";
-    if (selectEl.value !== (selectedValue || "")) selectEl.value = "";
-  }
-
   function renderOperationModelSelects(preferences = null) {
     const currentChatSummaryModel = chatSummaryModelEl ? String(chatSummaryModelEl.value || appSettings.chat_summary_model || "") : String(appSettings.chat_summary_model || "");
-    const currentImageHelperModel = imageHelperModelEl ? String(imageHelperModelEl.value || appSettings.image_helper_model || "") : String(appSettings.image_helper_model || "");
     const currentSelections = preferences && typeof preferences === "object" ? {
       summarize: String(preferences.summarize || ""),
       fetch_summarize: String(preferences.fetch_summarize || ""),
@@ -699,7 +678,6 @@
     populateOperationModelSelect(fixTextModelPreferenceEl, currentSelections.fix_text);
     populateOperationModelSelect(uploadMetadataModelPreferenceEl, currentSelections.upload_metadata);
     populateOperationModelSelect(chatSummaryModelEl, currentChatSummaryModel, "Use default chat model");
-    populateVisionModelSelect(imageHelperModelEl, currentImageHelperModel, "Use default chat model when needed");
   }
 
   function renderModelManagementPanels({ preferVisibleId = "", operationPreferences = null } = {}) {

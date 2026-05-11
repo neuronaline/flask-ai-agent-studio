@@ -4924,8 +4924,6 @@ def register_chat_routes(app) -> None:
             try:
                 if _conversation_uses_default_title(conv_id):
                     is_first_turn = True
-                    if "set_conversation_title" not in active_tool_names:
-                        active_tool_names.append("set_conversation_title")
             except Exception:
                 LOGGER.exception("Failed to evaluate first-turn title state for conversation_id=%s", conv_id)
         disabled_tool_names: list[str] = []
@@ -6379,12 +6377,7 @@ def register_chat_routes(app) -> None:
 
 def preload_dependencies(app) -> None:
     settings = get_app_settings()
-    if OCR_ENABLED and normalize_image_processing_method(settings.get("image_processing_method")) in {
-        "auto",
-        "llm_helper",
-        "llm_direct",
-        "local_ocr",
-    }:
+    if OCR_ENABLED and normalize_image_processing_method(settings.get("image_processing_method")) == "local_ocr":
         preload_ocr_engine(app)
     if RAG_ENABLED:
         preload_embedder()

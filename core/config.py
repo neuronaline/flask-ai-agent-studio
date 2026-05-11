@@ -301,7 +301,6 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "create_canvas_document",
     "batch_read_canvas_documents",
     "search_canvas_document",
-    "validate_canvas_document",
 ]
 
 PRIVATE_NETWORKS = [
@@ -492,13 +491,11 @@ DEFAULT_SETTINGS = {
         DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES, ensure_ascii=False
     ),
     "image_processing_method": DEFAULT_IMAGE_PROCESSING_METHOD,
-    "image_helper_model": "",
     "conversation_memory_enabled": "true" if CONVERSATION_MEMORY_ENABLED else "false",
     "ocr_enabled": "true" if OCR_ENABLED else "false",
     "rag_enabled": "true" if RAG_ENABLED else "false",
     "youtube_transcripts_enabled": "true" if YOUTUBE_TRANSCRIPTS_ENABLED else "false",
     "active_tools": json.dumps(DEFAULT_ACTIVE_TOOL_NAMES, ensure_ascii=False),
-    "proxy_enabled_operations": json.dumps(DEFAULT_PROXY_ENABLED_OPERATIONS, ensure_ascii=False),
     "rag_auto_inject": "true",
     "rag_sensitivity": RAG_DEFAULT_SENSITIVITY_PRESET,
     "rag_context_size": RAG_DEFAULT_CONTEXT_SIZE_PRESET,

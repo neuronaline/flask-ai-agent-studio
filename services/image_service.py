@@ -142,7 +142,7 @@ def _run_helper_llm_image_analysis(
     raw_output = extract_text_from_response_content(getattr(message, "content", "")).strip()
     parsed_output = extract_json_object(raw_output)
     normalized = normalize_image_analysis(parsed_output, fallback_text=raw_output)
-    normalized["analysis_method"] = "llm_helper"
+    normalized["analysis_method"] = "multimodal"
     return normalized
 
 
@@ -151,7 +151,7 @@ def _prepare_direct_multimodal_analysis(model_id: str, settings: dict | None = N
         raise RuntimeError("The selected chat model does not support direct image input.")
     return normalize_image_analysis(
         {
-            "analysis_method": "llm_direct",
+            "analysis_method": "multimodal",
             "assistant_guidance": "The original image will be attached directly to the active multimodal chat model.",
         }
     )
@@ -167,34 +167,18 @@ def _run_local_ocr_analysis(image_bytes: bytes, mime_type: str) -> dict:
 
 
 def _resolve_processing_plan(processing_method: str, model_id: str, settings: dict | None = None) -> list[str]:
-    helper_available = can_answer_image_questions(settings, fallback_model_id=model_id)
-    direct_available = bool(model_id and can_model_process_images(model_id, settings))
+    multimodal_available = bool(model_id and can_model_process_images(model_id, settings))
 
-    if processing_method == "llm_helper":
-        plan = []
-        if helper_available:
-            plan.append("llm_helper")
-        if direct_available:
-            plan.append("llm_direct")
-        return plan or ["local_ocr"]
-    if processing_method == "llm_direct":
-        plan = []
-        if direct_available:
-            plan.append("llm_direct")
-        if helper_available:
-            plan.append("llm_helper")
-        return plan or ["local_ocr"]
+    if processing_method == "multimodal":
+        if multimodal_available:
+            return ["multimodal"]
+        return ["local_ocr"]
     if processing_method == "local_ocr":
         return ["local_ocr"]
 
-    if helper_available:
-        plan = ["llm_helper"]
-        if direct_available:
-            plan.append("llm_direct")
-        plan.append("local_ocr")
-        return plan
-    if direct_available:
-        return ["llm_direct", "local_ocr"]
+    # Default fallback
+    if multimodal_available:
+        return ["multimodal"]
     return ["local_ocr"]
 
 
@@ -205,7 +189,7 @@ def analyze_uploaded_image(
     *,
     model_id: str = "",
     settings: dict | None = None,
-    processing_method: str = "auto",
+    processing_method: str = "multimodal",
     conversation_id: int | None = None,
     source_message_id: int | None = None,
 ) -> dict:
@@ -217,17 +201,7 @@ def analyze_uploaded_image(
 
     for step in _resolve_processing_plan(normalized_method, model_id, settings):
         try:
-            if step == "llm_helper":
-                return _run_helper_llm_image_analysis(
-                    image_bytes,
-                    mime_type,
-                    user_text=user_text,
-                    model_id=model_id,
-                    settings=settings,
-                    conversation_id=conversation_id,
-                    source_message_id=source_message_id,
-                )
-            if step == "llm_direct":
+            if step == "multimodal":
                 return _prepare_direct_multimodal_analysis(model_id, settings)
             if step == "local_ocr":
                 return normalize_image_analysis(_run_local_ocr_analysis(image_bytes, mime_type))

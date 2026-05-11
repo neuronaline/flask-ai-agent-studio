@@ -4811,7 +4811,6 @@ def _ensure_tool(name: str, names: list[str]) -> list[str]:
 
 _CANVAS_EDIT_TOOL_NAMES = {
     "delete_canvas_document",
-    "clear_canvas",
 }
 
 

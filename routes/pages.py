@@ -89,7 +89,6 @@ from core.db import (
     get_search_tool_query_limit,
     get_prompt_summary_max_tokens,
     get_prompt_tool_trace_max_tokens,
-    get_proxy_enabled_operations,
     get_reasoning_auto_collapse,
     get_rag_auto_inject_enabled,
     get_rag_auto_inject_source_types,
@@ -120,13 +119,13 @@ from core.db import (
     upsert_default_persona,
 )
 from lib.model_registry import (
+    IMAGE_PROCESSING_METHODS,
     MODEL_OPERATION_KEYS,
     canonicalize_model_id,
     get_all_models,
     get_chat_capable_models,
     get_custom_model_contract,
     get_default_chat_model_id,
-    get_image_helper_model_id,
     get_model_record,
     get_operation_model_fallback_preferences,
     get_operation_model_preferences,
@@ -138,15 +137,6 @@ from lib.model_registry import (
     normalize_operation_model_fallback_preferences,
     normalize_operation_model_preferences,
     normalize_visible_model_order,
-)
-from utils.proxy_settings import (
-    PROXY_OPERATION_FETCH_URL,
-    PROXY_OPERATION_KEYS,
-    PROXY_OPERATION_OPENROUTER,
-    PROXY_OPERATION_SEARCH_NEWS_DDGS,
-    PROXY_OPERATION_SEARCH_NEWS_GOOGLE,
-    PROXY_OPERATION_SEARCH_WEB,
-    normalize_proxy_enabled_operations,
 )
 from lib.tool_registry import TOOL_SPEC_BY_NAME, get_tool_runtime_metadata
 
@@ -191,11 +181,8 @@ TOOL_PERMISSION_LABELS = {
     "transform_canvas_lines": "Transform canvas lines",
     "update_canvas_metadata": "Update canvas metadata",
     "set_canvas_viewport": "Set canvas viewport",
-    "focus_canvas_page": "Focus Canvas Page",
     "clear_canvas_viewport": "Clear canvas viewport",
     "delete_canvas_document": "Delete canvas document",
-    "clear_canvas": "Clear canvas",
-    "validate_canvas_document": "Validate canvas document",
     "expand_truncated_tool_result": "Expand truncated tool result",
     "delete_tool_result": "Delete tool result",
 }
@@ -226,11 +213,8 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "transform_canvas_lines": "Apply a text transformation to a range of lines in a canvas document.",
     "update_canvas_metadata": "Update the title, language, or other metadata of a canvas document.",
     "set_canvas_viewport": "Pin a line range as the active viewport for a canvas document.",
-    "focus_canvas_page": "Pin a specific page from a page-aware canvas document so later prompts keep that page in view.",
     "clear_canvas_viewport": "Remove the pinned viewport so the full canvas is shown.",
     "delete_canvas_document": "Permanently remove a canvas document from the conversation.",
-    "clear_canvas": "Remove all canvas documents from the current conversation.",
-    "validate_canvas_document": "Run a syntax or structure check on a canvas document without editing it.",
     "expand_truncated_tool_result": "Retrieve the full uncropped content of a previously executed tool call that was truncated in the conversation history.",
     "delete_tool_result": "Delete a tool result from the current context and store a preview in tool memory for future reference.",
 }
@@ -284,34 +268,6 @@ TOOL_PERMISSION_SECTION_METADATA = {
     },
 }
 
-PROXY_OPERATION_OPTIONS = [
-    {
-        "name": PROXY_OPERATION_OPENROUTER,
-        "label": "OpenRouter model requests",
-        "description": "Apply proxies.txt to chat, title generation, sub-agent, and other OpenRouter-backed model calls.",
-    },
-    {
-        "name": PROXY_OPERATION_FETCH_URL,
-        "label": "URL fetch tool",
-        "description": "Use proxies.txt when fetch_url reads a page directly.",
-    },
-    {
-        "name": PROXY_OPERATION_SEARCH_WEB,
-        "label": "Web search",
-        "description": "Use proxies.txt for DDGS web search requests.",
-    },
-    {
-        "name": PROXY_OPERATION_SEARCH_NEWS_DDGS,
-        "label": "News search (DDGS)",
-        "description": "Use proxies.txt for DDGS news search requests.",
-    },
-    {
-        "name": PROXY_OPERATION_SEARCH_NEWS_GOOGLE,
-        "label": "News search (Google)",
-        "description": "Use proxies.txt for Google News RSS fetches.",
-    },
-]
-
 
 def _get_tool_permission_section_key(name: str) -> str:
     if name in {
@@ -346,11 +302,8 @@ def _get_tool_permission_section_key(name: str) -> str:
         "transform_canvas_lines",
         "update_canvas_metadata",
         "set_canvas_viewport",
-        "focus_canvas_page",
         "clear_canvas_viewport",
         "delete_canvas_document",
-        "clear_canvas",
-        "validate_canvas_document",
     }:
         return "canvas"
     return "canvas"
@@ -495,9 +448,7 @@ def _build_model_section(raw: dict) -> dict:
             get_operation_model_fallback_preferences(raw)
         ),
         "image_processing_method": normalize_image_processing_method(raw.get("image_processing_method")),
-        "image_helper_model": get_image_helper_model_id(raw),
         "active_tools": configured_active_tools,
-        "proxy_enabled_operations": get_proxy_enabled_operations(raw),
     }
 
 
@@ -675,7 +626,6 @@ def register_page_routes(app) -> None:
             "settings.html",
             settings=settings,
             tool_sections=build_tool_permission_sections(),
-            proxy_operation_options=PROXY_OPERATION_OPTIONS,
             auth_enabled=is_login_pin_enabled(),
             page_lang=_resolve_page_lang(),
             settings_js_version=_static_asset_version(app, "settings.js"),
@@ -802,9 +752,7 @@ def register_page_routes(app) -> None:
         operation_model_preferences_raw = data.get("operation_model_preferences")
         operation_model_fallback_preferences_raw = data.get("operation_model_fallback_preferences")
         image_processing_method_raw = data.get("image_processing_method")
-        image_helper_model_raw = data.get("image_helper_model")
         active_tools_raw = data.get("active_tools")
-        proxy_enabled_operations_raw = data.get("proxy_enabled_operations")
         rag_auto_inject = data.get("rag_auto_inject")
         rag_sensitivity = data.get("rag_sensitivity")
         rag_context_size = data.get("rag_context_size")
@@ -895,9 +843,7 @@ def register_page_routes(app) -> None:
             operation_model_preferences_raw,
             operation_model_fallback_preferences_raw,
             image_processing_method_raw,
-            image_helper_model_raw,
             active_tools_raw,
-            proxy_enabled_operations_raw,
             rag_auto_inject,
             rag_sensitivity,
             rag_context_size,
@@ -1194,39 +1140,16 @@ def register_page_routes(app) -> None:
 
         if image_processing_method_raw is not None:
             normalized_image_processing_method = normalize_image_processing_method(image_processing_method_raw)
-            if normalized_image_processing_method != str(image_processing_method_raw or "").strip().lower():
+            if normalized_image_processing_method not in IMAGE_PROCESSING_METHODS:
                 return jsonify(
-                    {"error": "image_processing_method must be one of auto, llm_helper, llm_direct, or local_ocr."}
+                    {"error": "image_processing_method must be one of multimodal or local_ocr."}
                 ), 400
             settings["image_processing_method"] = normalized_image_processing_method
-
-        if image_helper_model_raw is not None:
-            candidate = _resolve_model_reference_id(image_helper_model_raw, custom_model_reference_ids)
-            if candidate:
-                record = get_model_record(candidate, settings)
-                if record is None:
-                    return jsonify({"error": "image_helper_model must reference a known model."}), 400
-                if not record.get("supports_vision"):
-                    return jsonify({"error": "image_helper_model must support image input."}), 400
-            settings["image_helper_model"] = candidate
 
         if active_tools_raw is not None:
             if not isinstance(active_tools_raw, list):
                 return jsonify({"error": "Invalid active tools."}), 400
             settings["active_tools"] = json.dumps(normalize_active_tool_names(active_tools_raw), ensure_ascii=False)
-
-        if proxy_enabled_operations_raw is not None:
-            if not isinstance(proxy_enabled_operations_raw, list):
-                return jsonify({"error": "proxy_enabled_operations must be an array."}), 400
-
-            incoming_proxy_operations = [str(value or "").strip().lower() for value in proxy_enabled_operations_raw]
-            if any(operation not in PROXY_OPERATION_KEYS for operation in incoming_proxy_operations):
-                return jsonify({"error": "proxy_enabled_operations contains unsupported operations."}), 400
-
-            settings["proxy_enabled_operations"] = json.dumps(
-                normalize_proxy_enabled_operations(incoming_proxy_operations),
-                ensure_ascii=False,
-            )
 
         if openrouter_http_referer_raw is not None:
             if not isinstance(openrouter_http_referer_raw, str):

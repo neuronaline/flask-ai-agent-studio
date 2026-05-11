@@ -15,7 +15,6 @@ from services.canvas_service import (
     build_html_download,
     build_markdown_download,
     build_pdf_download,
-    clear_canvas,
     create_canvas_document,
     create_canvas_runtime_state,
     delete_canvas_document,
@@ -1013,7 +1012,13 @@ def register_conversation_routes(app) -> None:
 
         try:
             if clear_all:
-                result = clear_canvas(runtime_state)
+                documents = get_canvas_runtime_documents(runtime_state)
+                cleared_count = len(documents)
+                runtime_state["documents"] = []
+                runtime_state["active_document_id"] = None
+                runtime_state["viewports"] = {}
+                runtime_state["mode"] = "document"
+                result = {"status": "ok", "action": "cleared", "cleared_count": cleared_count}
             else:
                 result = delete_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
         except ValueError as exc:

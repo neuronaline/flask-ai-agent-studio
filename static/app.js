@@ -12002,15 +12002,13 @@ function clearAllAttachments() {
 }
 
 function describePreferredImageAnalysisMethod() {
-  switch (String(appSettings.image_processing_method || "auto").trim().toLowerCase()) {
-    case "llm_helper":
-      return "Helper LLM description preferred";
-    case "llm_direct":
-      return "Direct multimodal input preferred";
+  switch (String(appSettings.image_processing_method || "multimodal").trim().toLowerCase()) {
+    case "multimodal":
+      return "Multimodal (vision-capable models)";
     case "local_ocr":
-      return "Local OCR preferred";
+      return "Local OCR (text extraction only)";
     default:
-      return "Auto image analysis";
+      return "Multimodal";
   }
 }
 
@@ -12125,10 +12123,8 @@ function isGenericOcrVisionSummary(summary) {
 
 function formatImageAnalysisMethod(method) {
   switch (String(method || "").trim().toLowerCase()) {
-    case "llm_helper":
-      return "Helper description";
-    case "llm_direct":
-      return "Direct multimodal";
+    case "multimodal":
+      return "Multimodal";
     case "local_ocr":
       return "OCR";
     default:

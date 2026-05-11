@@ -275,7 +275,6 @@ class TestRuntimeSystemMessage:
                 "set_canvas_viewport",
                 "clear_canvas_viewport",
                 "delete_canvas_document",
-                "clear_canvas",
             ],
         )
 
@@ -295,12 +294,9 @@ class TestRuntimeSystemMessage:
 
     def test_canvas_cleanup_tool_guidance_mentions_obsolete_documents(self):
         delete_guidance = TOOL_SPEC_BY_NAME["delete_canvas_document"]["prompt"]["guidance"]
-        clear_guidance = TOOL_SPEC_BY_NAME["clear_canvas"]["prompt"]["guidance"]
 
         assert "obsolete" in delete_guidance
         assert "superseded" in delete_guidance
-        assert "obsolete" in clear_guidance
-        assert "reset" in clear_guidance
 
     def test_runtime_system_message_includes_active_canvas_document_context(self):
         message = build_runtime_system_message(
@@ -417,7 +413,6 @@ class TestRuntimeSystemMessage:
             "fetch_url_summarized",
             "scroll_fetched_content",
             "batch_read_canvas_documents",
-            "validate_canvas_document",
             "preview_canvas_changes",
         }
 
@@ -832,7 +827,6 @@ class TestRuntimeSystemMessage:
                 "rewrite_canvas_document",
                 "batch_canvas_edits",
                 "replace_canvas_lines",
-                "clear_canvas",
             ]
         )
 
