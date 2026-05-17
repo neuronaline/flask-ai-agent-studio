@@ -62,6 +62,8 @@
     "fetch_summary_max_chars",
   ];
 
+  const DEFAULT_SCRATCHPAD_SECTION_ORDER = ["lessons", "profile", "notes", "problems", "tasks", "preferences", "domain"];
+
   // ─── State ───────────────────────────────────────────────────────────────────
   let hasUnsavedChanges = false;
   let hasUnsavedSettingsChanges = false;
@@ -187,6 +189,7 @@
     GENERAL_INSTRUCTION_TEMPLATES,
     AI_PERSONALITY_TEMPLATES,
     RESTART_REQUIRED_SETTING_KEYS,
+    DEFAULT_SCRATCHPAD_SECTION_ORDER,
     // State
     get hasUnsavedChanges() { return hasUnsavedChanges; },
     get hasUnsavedSettingsChanges() { return hasUnsavedSettingsChanges; },

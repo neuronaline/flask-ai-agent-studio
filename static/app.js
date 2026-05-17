@@ -534,6 +534,21 @@ function applyConversationToolOverridesState(data) {
   currentConversationToolOverrides = Array.isArray(data?.conversation?.tool_overrides) ? data.conversation.tool_overrides : null;
 }
 
+function getConversationMemorySignature(entries = []) {
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry) => `${entry.id}:${entry.entry_type}:${entry.key}:${entry.value}`)
+    .join("\u0001");
+}
+
+function applyConversationMemoryState(data) {
+  conversationMemoryEntries = Array.isArray(data?.memory) ? data.memory : [];
+  lastConversationMemorySignature = getConversationMemorySignature(conversationMemoryEntries);
+}
+
+function applyConversationParameterOverridesState(data) {
+  currentConversationParameterOverrides = data?.conversation?.parameter_overrides || null;
+}
+
 const DEFAULT_CANVAS_CONFIRM_LABEL = "Open Canvas";
 const DEFAULT_CANVAS_CONFIRM_CANCEL_LABEL = "Later";
 let activeSidebarRename = null;
@@ -6201,100 +6216,15 @@ function setTextContentById(id, value) {
 
 function renderTokenStats() {
   const totalUser = tokenTurns.reduce((sum, turn) => sum + turn.prompt_tokens, 0);
-  const totalCacheHit = tokenTurns.reduce((sum, turn) => sum + toFiniteNumber(turn.prompt_cache_hit_tokens, 0), 0);
-  const totalCacheWrite = tokenTurns.reduce((sum, turn) => sum + toFiniteNumber(turn.prompt_cache_write_tokens, 0), 0);
   const totalAsst = tokenTurns.reduce((sum, turn) => sum + turn.completion_tokens, 0);
   const grandTotal = tokenTurns.reduce((sum, turn) => sum + turn.total_tokens, 0);
-  const turnsWithKnownCost = tokenTurns.filter((turn) => turn?.cost_available === true && Number.isFinite(turn.cost));
-  const sessionCostCurrencies = Array.from(
-    new Set(turnsWithKnownCost.map((turn) => String(turn.currency || "USD").trim().toUpperCase()).filter(Boolean)),
-  );
-  const sessionCost = turnsWithKnownCost.reduce((sum, turn) => sum + toFiniteNumber(turn.cost, 0), 0);
-  const sessionCostLabel = !turnsWithKnownCost.length
-    ? "—"
-    : sessionCostCurrencies.length !== 1
-      ? "Mixed currencies"
-      : tokenTurns.length !== turnsWithKnownCost.length
-        ? `${formatUsageCost(sessionCost, sessionCostCurrencies[0])} partial`
-        : formatUsageCost(sessionCost, sessionCostCurrencies[0]);
-  const lastTurn = tokenTurns.length ? tokenTurns[tokenTurns.length - 1] : null;
-  const sessionHasCacheMetrics = tokenTurns.some(hasCacheUsageMetrics);
-  const sessionHasEstimatedCacheMetrics = tokenTurns.some((turn) => turn?.cache_metrics_estimated === true);
-  const sessionHasPartialProviderUsage = tokenTurns.some(hasPartialProviderUsage);
-  const lastTurnHasCacheMetrics = hasCacheUsageMetrics(lastTurn);
-  const lastTurnHasPartialProviderUsage = hasPartialProviderUsage(lastTurn);
-  const lastModelProvider = lastTurn
-    ? [String(lastTurn.provider || "").trim(), String(lastTurn.model || "").trim()].filter(Boolean).join(" · ") || "—"
-    : "—";
 
-  const statsTextById = {
-    "stat-user": formatPartialSummaryValue(totalUser, sessionHasPartialProviderUsage),
-    "stat-cache-read": sessionHasCacheMetrics
-      ? formatPartialSummaryText(
-        formatCacheMetricValue(totalCacheHit, sessionHasEstimatedCacheMetrics),
-        sessionHasPartialProviderUsage,
-      )
-      : formatPartialSummaryText("—", sessionHasPartialProviderUsage),
-    "stat-cache-write": sessionHasCacheMetrics
-      ? formatPartialSummaryText(
-        formatCacheMetricValue(totalCacheWrite, sessionHasEstimatedCacheMetrics),
-        sessionHasPartialProviderUsage,
-      )
-      : formatPartialSummaryText("—", sessionHasPartialProviderUsage),
-    "stat-asst": formatPartialSummaryValue(totalAsst, sessionHasPartialProviderUsage),
-    "stat-total": formatPartialSummaryValue(grandTotal, sessionHasPartialProviderUsage),
-    "stat-cost": formatPartialSummaryText(sessionCostLabel, sessionHasPartialProviderUsage),
-    "stat-last-input": lastTurn
-      ? formatPartialSummaryValue(lastTurn.prompt_tokens, lastTurnHasPartialProviderUsage)
-      : "—",
-    "stat-last-cache-read": lastTurnHasCacheMetrics
-      ? formatPartialSummaryText(
-        formatCacheMetricValue(toFiniteNumber(lastTurn.prompt_cache_hit_tokens, 0), lastTurn?.cache_metrics_estimated === true),
-        lastTurnHasPartialProviderUsage,
-      )
-      : formatPartialSummaryText("—", lastTurnHasPartialProviderUsage),
-    "stat-last-cache-write": lastTurnHasCacheMetrics
-      ? formatPartialSummaryText(
-        formatCacheMetricValue(toFiniteNumber(lastTurn.prompt_cache_write_tokens, 0), lastTurn?.cache_metrics_estimated === true),
-        lastTurnHasPartialProviderUsage,
-      )
-      : formatPartialSummaryText("—", lastTurnHasPartialProviderUsage),
-    "stat-last-peak-input": lastTurn
-      ? fmt(lastTurn.max_input_tokens_per_call)
-      : "—",
-    "stat-last-call-count": lastTurn
-      ? fmt(lastTurn.model_call_count)
-      : "—",
-    "stat-last-prompt-cap": lastTurn && lastTurn.configured_prompt_max_input_tokens !== null
-      ? fmt(lastTurn.configured_prompt_max_input_tokens)
-      : "—",
-    "stat-last-output": lastTurn
-      ? formatPartialSummaryValue(lastTurn.completion_tokens, lastTurnHasPartialProviderUsage)
-      : "—",
-    "stat-last-total": lastTurn
-      ? formatPartialSummaryValue(lastTurn.total_tokens, lastTurnHasPartialProviderUsage)
-      : "—",
-    "stat-last-cost": lastTurn?.cost_available === true && Number.isFinite(lastTurn.cost)
-      ? formatPartialSummaryText(formatUsageCost(lastTurn.cost, lastTurn.currency || "USD"), lastTurnHasPartialProviderUsage)
-      : formatPartialSummaryText("—", lastTurnHasPartialProviderUsage),
-    "stat-last-model-provider": formatPartialSummaryText(lastModelProvider, lastTurnHasPartialProviderUsage),
-    "stat-breakdown-latest-total": lastTurn
-      ? formatPartialSummaryValue(lastTurn.estimated_input_tokens, lastTurnHasPartialProviderUsage)
-      : "—",
-  };
-
-  Object.entries(statsTextById).forEach(([id, text]) => {
-    setTextContentById(id, text);
-  });
+  setTextContentById("stat-user", fmt(totalUser));
+  setTextContentById("stat-asst", fmt(totalAsst));
+  setTextContentById("stat-total", fmt(grandTotal));
 
   if (tokensBadge) {
     tokensBadge.textContent = fmt(grandTotal);
-  }
-
-  if (document.getElementById("latest-breakdown-list")) {
-    renderBreakdownList("latest-breakdown-list", lastTurn ? lastTurn.input_breakdown : createEmptyBreakdown(), {
-      totalTokens: lastTurn ? lastTurn.prompt_tokens : 0,
-    });
   }
 
   const list = document.getElementById("turns-list");
@@ -6302,63 +6232,26 @@ function renderTokenStats() {
     return;
   }
   if (!tokenTurns.length) {
-    list.innerHTML = '<div class="breakdown-empty">No completed assistant turns yet.</div>';
+    list.innerHTML = '<div class="breakdown-empty">No turns yet.</div>';
     return;
   }
 
   list.innerHTML = tokenTurns
+    .slice(-5)
+    .reverse()
     .map(
       (turn, index) => {
-        const callCount = Math.max(turn.model_call_count || 0, Array.isArray(turn.model_calls) ? turn.model_calls.length : 0);
-        const turnHasPartialProviderUsage = hasPartialProviderUsage(turn);
-        const peakPromptStat = turn.max_input_tokens_per_call
-          ? `<span class="turn-stat">${fmt(turn.max_input_tokens_per_call)} peak call prompt</span>`
-          : "";
-        const cacheReadStat = hasCacheUsageMetrics(turn)
-          ? `<span class="turn-stat">${formatCacheMetricValue(toFiniteNumber(turn.prompt_cache_hit_tokens, 0), turn.cache_metrics_estimated === true)} ${turn.cache_metrics_estimated === true ? "estimated cache read" : "cache read"}</span>`
-          : "";
-        const cacheWriteStat = hasCacheUsageMetrics(turn)
-          ? `<span class="turn-stat">${formatCacheMetricValue(toFiniteNumber(turn.prompt_cache_write_tokens, 0), turn.cache_metrics_estimated === true)} ${turn.cache_metrics_estimated === true ? "estimated cache write" : "cache write"}</span>`
-          : "";
-        const costStat = turn.cost_available === true && Number.isFinite(turn.cost)
-          ? `<span class="turn-stat">${formatPartialSummaryText(formatUsageCost(turn.cost, turn.currency || "USD"), turnHasPartialProviderUsage)} cost</span>`
-          : "";
-        const partialProviderBadge = turnHasPartialProviderUsage
-          ? `<span class="turn-warning-badge">Partial provider usage</span>`
-          : "";
-        const promptStatLabel = turnHasPartialProviderUsage && turn.prompt_tokens <= 0
-          ? "Provider prompt unavailable"
-          : `${formatPartialSummaryValue(turn.prompt_tokens, turnHasPartialProviderUsage)} prompt (all calls)`;
-        const completionStatLabel = turnHasPartialProviderUsage && turn.completion_tokens <= 0
-          ? "Provider completion unavailable"
-          : `${formatPartialSummaryValue(turn.completion_tokens, turnHasPartialProviderUsage)} completion`;
-        const totalStatLabel = turnHasPartialProviderUsage && turn.total_tokens <= 0
-          ? "Provider total unavailable"
-          : `${formatPartialSummaryValue(turn.total_tokens, turnHasPartialProviderUsage)} total`;
         return (
-        `<div class="turn-item">` +
-          `<div class="turn-header">` +
-            `<span class="turn-label">Assistant turn ${index + 1}</span>` +
-            `<div class="turn-header-meta">` +
-              (callCount ? `<span class="turn-call-count">${fmt(callCount)} calls</span>` : "") +
-              partialProviderBadge +
-              renderUnknownWarningBadge(turn.input_breakdown, turn.prompt_tokens) +
-              (turn.provider ? `<span class="turn-provider">${escHtml(turn.provider)}</span>` : "") +
-              `<span class="turn-model">${escHtml(turn.model || "—")}</span>` +
+          `<div class="turn-item">` +
+            `<div class="turn-header">` +
+              `<span class="turn-label">Turn ${tokenTurns.length - index}</span>` +
             `</div>` +
-          `</div>` +
-          `<div class="turn-details">` +
-            `<span class="turn-stat"><span class="stats-dot dot-user"></span>${escHtml(promptStatLabel)}</span>` +
-            peakPromptStat +
-            cacheReadStat +
-            cacheWriteStat +
-            costStat +
-            `<span class="turn-stat"><span class="stats-dot dot-asst"></span>${escHtml(completionStatLabel)}</span>` +
-            `<span class="turn-stat">${escHtml(totalStatLabel)}</span>` +
-          `</div>` +
-          renderTurnBreakdownInline(turn.input_breakdown) +
-          renderModelCallDrawer(turn) +
-        `</div>`
+            `<div class="turn-details">` +
+              `<span class="turn-stat"><span class="stats-dot dot-user"></span>${fmt(turn.prompt_tokens)} in</span>` +
+              `<span class="turn-stat"><span class="stats-dot dot-asst"></span>${fmt(turn.completion_tokens)} out</span>` +
+              `<span class="turn-stat">${fmt(turn.total_tokens)} total</span>` +
+            `</div>` +
+          `</div>`
         );
       },
     )

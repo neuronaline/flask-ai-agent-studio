@@ -10,7 +10,7 @@
 
   // ─── Constants ───────────────────────────────────────────────────────────────
   const DEFAULT_SCRATCHPAD_SECTION_ID = "notes";
-  const DEFAULT_SCRATCHPAD_SECTION_ORDER = ["lessons", "profile", "notes", "problems", "tasks", "preferences", "domain"];
+  const DEFAULT_SCRATCHPAD_SECTION_ORDER = window.__settingsCore?.DEFAULT_SCRATCHPAD_SECTION_ORDER || ["lessons", "profile", "notes", "problems", "tasks", "preferences", "domain"];
   const DEFAULT_SCRATCHPAD_SECTION_META = {
     lessons: { title: "Lessons Learned", description: "Reliable takeaways, postmortems, and patterns that should change future decisions." },
     profile: { title: "User Profile & Mindset", description: "Durable clues about how the user thinks, decides, and frames problems." },
@@ -52,14 +52,14 @@
       ? appSettings.scratchpad_sections : {};
     return DEFAULT_SCRATCHPAD_SECTION_ORDER.map((sectionId) => {
       const fallback = DEFAULT_SCRATCHPAD_SECTION_META[sectionId] || { title: sectionId, description: "" };
-      const serverSection = serverSections[sectionId] && typeof serverSections[sectionId] === "object"
-        ? serverSections[sectionId] : {};
+      const rawSection = serverSections[sectionId];
+      const isObjectSection = rawSection && typeof rawSection === "object";
       return {
         id: sectionId,
-        title: String(serverSection.title || fallback.title || sectionId),
-        description: String(serverSection.description || fallback.description || ""),
-        content: String(serverSection.content || ""),
-        note_count: Number.isFinite(serverSection.note_count) ? serverSection.note_count : 0,
+        title: String(isObjectSection ? (rawSection.title || fallback.title || sectionId) : (fallback.title || sectionId)),
+        description: String(isObjectSection ? (rawSection.description || fallback.description || "") : (fallback.description || "")),
+        content: String(isObjectSection ? rawSection.content : (typeof rawSection === "string" ? rawSection : "")),
+        note_count: isObjectSection && Number.isFinite(rawSection.note_count) ? rawSection.note_count : 0,
       };
     });
   }

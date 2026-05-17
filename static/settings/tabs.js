@@ -6,15 +6,10 @@
   const tabButtons = Array.from(document.querySelectorAll("[data-settings-tab]"));
   const tabPanels = Array.from(document.querySelectorAll("[data-settings-panel]"));
 
-  const SETTINGS_TAB_ALIASES = window.__settingsCore?.SETTINGS_TAB_ALIASES || {
-    assistant: "general",
-    memory: "context",
-  };
-
   // ─── activateTab ─────────────────────────────────────────────────────────────
   function activateTab(tabId, updateHash = true) {
     const normalizedTabId = String(tabId || "general");
-    const nextId = SETTINGS_TAB_ALIASES[normalizedTabId] || normalizedTabId;
+    const nextId = (window.__settingsCore?.SETTINGS_TAB_ALIASES || {})[normalizedTabId] || normalizedTabId;
 
     tabButtons.forEach((button) => {
       const isActive = button.dataset.settingsTab === nextId;
@@ -40,7 +35,7 @@
     });
 
     const hash = String(window.location.hash || "").replace(/^#/, "");
-    const resolvedHash = SETTINGS_TAB_ALIASES[hash] || hash;
+    const resolvedHash = (window.__settingsCore?.SETTINGS_TAB_ALIASES || {})[hash] || hash;
     const initialTab = tabButtons.some((button) => button.dataset.settingsTab === resolvedHash) ? resolvedHash : "general";
     activateTab(initialTab, false);
   }

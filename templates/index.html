@@ -188,99 +188,25 @@
     <div class="stats-section-card">
     <div class="stats-row">
       <span class="stats-label">
-        <span class="stats-dot dot-user"></span>Input tokens (prompt)
+        <span class="stats-dot dot-user"></span>Input
       </span>
       <span class="stats-value" id="stat-user">0</span>
     </div>
     <div class="stats-row">
-      <span class="stats-label">Cache read tokens</span>
-      <span class="stats-value" id="stat-cache-read">—</span>
-    </div>
-    <div class="stats-row">
-      <span class="stats-label">Cache write tokens</span>
-      <span class="stats-value" id="stat-cache-write">—</span>
-    </div>
-    <div class="stats-row">
       <span class="stats-label">
-        <span class="stats-dot dot-asst"></span>Output tokens (completion)
+        <span class="stats-dot dot-asst"></span>Output
       </span>
       <span class="stats-value" id="stat-asst">0</span>
     </div>
     <div class="stats-row stats-row-total">
-      <span class="stats-label">Total tokens</span>
+      <span class="stats-label">Total</span>
       <span class="stats-value" id="stat-total">0</span>
     </div>
-    <div class="stats-row">
-      <span class="stats-label">Known session cost</span>
-      <span class="stats-value" id="stat-cost">—</span>
     </div>
-    </div>
-    <p class="stats-note">Session totals aggregate completed assistant turns in the current conversation.</p>
-  </div>
-
-  <div class="stats-section">
-    <div class="stats-section-title">Latest assistant turn</div>
-    <div class="stats-section-card">
-    <div class="stats-row">
-      <span class="stats-label">Billed prompt tokens (all model calls)</span>
-      <span class="stats-value" id="stat-last-input">—</span>
-    </div>
-    <div class="stats-row">
-      <span class="stats-label">Cache read tokens</span>
-      <span class="stats-value" id="stat-last-cache-read">—</span>
-    </div>
-    <div class="stats-row">
-      <span class="stats-label">Cache write tokens</span>
-      <span class="stats-value" id="stat-last-cache-write">—</span>
-    </div>
-    <div class="stats-row">
-      <span class="stats-label">Output tokens (completion, all calls)</span>
-      <span class="stats-value" id="stat-last-output">—</span>
-    </div>
-    <div class="stats-row stats-row-total">
-      <span class="stats-label">Total tokens (all calls)</span>
-      <span class="stats-value" id="stat-last-total">—</span>
-    </div>
-    <div class="stats-row">
-      <span class="stats-label">Known turn cost</span>
-      <span class="stats-value" id="stat-last-cost">—</span>
-    </div>
-    <div class="stats-row">
-      <span class="stats-label">Peak prompt in one model call</span>
-      <!-- Billed prompt in the single most expensive call; the total across all calls can exceed a model's single-call context window. -->
-      <span class="stats-value" id="stat-last-peak-input">—</span>
-    </div>
-    <div class="stats-row">
-      <span class="stats-label">Model calls</span>
-      <span class="stats-value" id="stat-last-call-count">—</span>
-    </div>
-    <div class="stats-row">
-      <span class="stats-label">Configured prompt cap</span>
-      <span class="stats-value" id="stat-last-prompt-cap">—</span>
-    </div>
-    <div class="stats-row">
-      <span class="stats-label">Model / provider</span>
-      <span class="stats-value" id="stat-last-model-provider">—</span>
-    </div>
-    </div>
-    <p class="stats-note">Includes every model call used to produce the latest assistant reply.</p>
-  </div>
-
-  <div class="stats-section">
-    <div class="stats-section-title">Latest input-source estimate</div>
-    <div class="stats-section-card">
-    <div class="stats-row">
-      <span class="stats-label">Aligned billed input total (all model calls)</span>
-      <span class="stats-value" id="stat-breakdown-latest-total">—</span>
-    </div>
-    <div id="latest-breakdown-list" class="breakdown-list"></div>
-    </div>
-    <p class="stats-note">Local source estimates align to provider totals only when provider usage is complete; partial runs fall back to the available local estimate.</p>
   </div>
 
   <div class="stats-section" id="turns-section">
-    <div class="stats-section-title">Completed assistant turns</div>
-    <p class="stats-note">Each row is one completed assistant reply with provider totals, provider-aligned source estimates, and a per-call drawer for the internal model calls that produced it.</p>
+    <div class="stats-section-title">Turns</div>
     <div id="turns-list" class="stats-turns-list"></div>
   </div>
 </div>

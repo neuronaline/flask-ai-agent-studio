@@ -179,7 +179,7 @@
     removeOperationFallbackRow,
     moveOperationFallbackRow,
     setOperationFallbackRowModel,
-    renderOperationFallbackList: () => { window.__customModelsModule?.renderOperationFallbackList?.(...arguments); renderSubAgentFallbackList(); },
+    renderOperationFallbackList: (operationKey) => { window.__customModelsModule?.renderOperationFallbackList?.(operationKey); renderSubAgentFallbackList(); },
     renderOperationFallbackLists,
     getOperationModelFallbackPreferencesDraft,
     renderModelManagementPanels,

@@ -97,7 +97,7 @@
   const featureFlags = window.__featureFlags || appSettings.features || {};
   const csrfToken = window.__csrfToken || "";
 
-  const DEFAULT_SCRATCHPAD_SECTION_ORDER = ["lessons", "profile", "notes", "problems", "tasks", "preferences", "domain"];
+  const DEFAULT_SCRATCHPAD_SECTION_ORDER = window.__settingsCore?.DEFAULT_SCRATCHPAD_SECTION_ORDER || ["lessons", "profile", "notes", "problems", "tasks", "preferences", "domain"];
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // Numeric readers (used by saveSettings) — delegate to core
@@ -247,8 +247,6 @@
       ragInjectOptionsEl.setAttribute("aria-disabled", !ragEnabled ? "true" : "false");
     }
     if (ragDisabledNoteEl) ragDisabledNoteEl.hidden = ragEnabled;
-    if (scratchpadAddBtn) scratchpadAddBtn.hidden = false;
-    if (scratchpadReadonlyNoteEl) scratchpadReadonlyNoteEl.hidden = false;
 
     if (!ragEnabled) {
       window.__knowledgeBaseModule?.setKbStatus?.("RAG disabled in .env", "warning");
@@ -536,7 +534,7 @@
       const personaSaved = await window.__personaModule?.saveActivePersona?.();
       if (!personaSaved) return;
     }
-    if (window.__settingsCore?.hasUnsavedSettingsChanges) {
+    if (window.__settingsCore?.hasUnsavedSettingsChanges === true) {
       await saveSettings();
     }
   }

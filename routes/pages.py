@@ -648,6 +648,7 @@ def register_page_routes(app) -> None:
 
         if general_instructions is None and user_preferences is not None:
             general_instructions = user_preferences
+            settings["user_preferences"] = user_preferences
 
         if general_instructions is not None and not isinstance(general_instructions, str):
             return jsonify({"error": "Invalid general instructions."}), 400
