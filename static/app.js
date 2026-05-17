@@ -125,10 +125,10 @@ const conversationExportMdBtn = document.getElementById("conversation-export-md-
 const conversationExportJsonBtn = document.getElementById("conversation-export-json-btn");
 const conversationExportDocxBtn = document.getElementById("conversation-export-docx-btn");
 const conversationExportPdfBtn = document.getElementById("conversation-export-pdf-btn");
-const historySelectionBar = document.getElementById("history-selection-bar");
-const historySelectionLabel = document.getElementById("history-selection-label");
-const historySelectionDetail = document.getElementById("history-selection-detail");
-const historySelectionClear = document.getElementById("history-selection-clear");
+const historySelectionBar = document.getElementById("chatState.history-selection-bar");
+const historySelectionLabel = document.getElementById("chatState.history-selection-label");
+const historySelectionDetail = document.getElementById("chatState.history-selection-detail");
+const historySelectionClear = document.getElementById("chatState.history-selection-clear");
 
 const SUMMARY_FOCUS_PRESETS = [
   {
@@ -199,8 +199,8 @@ const SUMMARY_MODE_LABELS = {
 };
 
 const SUMMARY_SOURCE_LABELS = {
-  conversation_history: "Conversation history",
-  summary_history: "Summary history",
+  conversation_history: "Conversation chatState.history",
+  summary_history: "Summary chatState.history",
 };
 
 if (summaryDetailSelect) {
@@ -272,16 +272,16 @@ function syncSummaryToggleButton() {
 }
 
 function clearSummaryProgressTimer() {
-  if (!summaryProgressTimer) {
+  if (!summaryState.summaryProgressTimer) {
     return;
   }
-  window.clearInterval(summaryProgressTimer);
-  summaryProgressTimer = 0;
+  window.clearInterval(summaryState.summaryProgressTimer);
+  summaryState.summaryProgressTimer = 0;
 }
 
 function setSummaryProgressState(value, label, { visible = true } = {}) {
   const normalizedValue = Math.max(0, Math.min(100, Number(value) || 0));
-  summaryProgressCurrentValue = normalizedValue;
+  summaryState.summaryProgressCurrentValue = normalizedValue;
   if (summaryProgress) {
     summaryProgress.hidden = !visible;
   }
@@ -310,12 +310,12 @@ function resetSummaryProgress({ hide = true } = {}) {
 function startSummaryProgress(label = "Selecting messages…") {
   clearSummaryProgressTimer();
   setSummaryProgressState(8, label, { visible: true });
-  summaryProgressTimer = window.setInterval(() => {
-    const nextValue = summaryProgressCurrentValue < 42
-      ? summaryProgressCurrentValue + 7
-      : summaryProgressCurrentValue < 72
-        ? summaryProgressCurrentValue + 4
-        : summaryProgressCurrentValue + 2;
+  summaryState.summaryProgressTimer = window.setInterval(() => {
+    const nextValue = summaryState.summaryProgressCurrentValue < 42
+      ? summaryState.summaryProgressCurrentValue + 7
+      : summaryState.summaryProgressCurrentValue < 72
+        ? summaryState.summaryProgressCurrentValue + 4
+        : summaryState.summaryProgressCurrentValue + 2;
     const clampedValue = Math.min(nextValue, 86);
     const nextLabel = clampedValue < 28
       ? "Selecting messages…"
@@ -333,7 +333,7 @@ function finishSummaryProgress(label = "Summary completed.") {
   clearSummaryProgressTimer();
   setSummaryProgressState(100, label, { visible: true });
   window.setTimeout(() => {
-    if (!isSummaryOperationInFlight) {
+    if (!summaryState.isSummaryOperationInFlight) {
       resetSummaryProgress({ hide: true });
     }
   }, 900);
@@ -341,23 +341,23 @@ function finishSummaryProgress(label = "Summary completed.") {
 
 function failSummaryProgress(label = "Summary failed.") {
   clearSummaryProgressTimer();
-  const fallbackValue = summaryProgressCurrentValue > 0 ? summaryProgressCurrentValue : 18;
+  const fallbackValue = summaryState.summaryProgressCurrentValue > 0 ? summaryProgressCurrentValue : 18;
   setSummaryProgressState(fallbackValue, label, { visible: true });
 }
 
 function setSummaryBusyState(isBusy) {
-  isSummaryOperationInFlight = Boolean(isBusy);
+  summaryState.isSummaryOperationInFlight = Boolean(isBusy);
   if (summarySubmitBtn) {
-    summarySubmitBtn.disabled = isSummaryOperationInFlight;
+    summarySubmitBtn.disabled = summaryState.isSummaryOperationInFlight;
   }
   if (summaryFocusInput) {
-    summaryFocusInput.disabled = isSummaryOperationInFlight;
+    summaryFocusInput.disabled = summaryState.isSummaryOperationInFlight;
   }
   if (summaryDetailSelect) {
-    summaryDetailSelect.disabled = isSummaryOperationInFlight;
+    summaryDetailSelect.disabled = summaryState.isSummaryOperationInFlight;
   }
   summaryDetailOptionGrid?.querySelectorAll("[data-summary-detail-value]").forEach((button) => {
-    button.disabled = isSummaryOperationInFlight;
+    button.disabled = summaryState.isSummaryOperationInFlight;
   });
 }
 
@@ -370,7 +370,7 @@ function buildSummaryRequestBody() {
 }
 
 function resetSummaryPreview() {
-  summaryPreviewConversationId = null;
+  summaryState.summaryPreviewConversationId = null;
 }
 
 async function refreshSummarySettingsFromServer() {
@@ -528,6 +528,7 @@ const attachmentState = {
   selectedYouTubeUrl: "",
   pendingDocumentCanvasOpen: null,
   nextAttachmentFileKeyId: 1,
+  attachmentFileKeyByObject: new Map(),
 };
 
 const messageEditState = {
@@ -545,58 +546,7 @@ const lastTriggerState = {
   lastSummaryTriggerEl: null,
 };
 
-// Backward-compatibility references (deprecated - use chatState.*, canvasState.*, etc.)
 // These will be removed in a future update after all references are migrated
-let isStreaming = false;
-let isFixing = false;
-let activeAbortController = null;
-let activeChatRunId = null;
-let activeUserCancelRequested = false;
-let activeChatCancellationFallbackTimer = null;
-let activeAssistantStreamingBubble = null;
-let activeAssistantStreamingHasVisibleAnswer = false;
-let history = [];
-let currentConvId = null;
-let currentConvTitle = "New Chat";
-let currentConversationPersonaId = null;
-let currentConversationPersonaName = "";
-let currentConversationTitleSource = "system";
-let currentConversationTitleOverridden = false;
-let conversationMemoryEntries = [];
-let conversationMemoryEnabled = false;
-let currentConversationToolOverrides = null;
-let currentConversationParameterOverrides = null;
-let activeCanvasDocumentId = null;
-let streamingCanvasDocuments = [];
-let isCanvasEditing = false;
-let editingCanvasDocumentId = null;
-let canvasPageByDocumentId = new Map();
-let pendingCanvasPageSyncFrame = 0;
-let canvasHasUnreadUpdates = false;
-let lastCanvasTriggerEl = null;
-let lastCanvasConfirmTriggerEl = null;
-let pendingCanvasMutation = "";
-let isSummaryOperationInFlight = false;
-let summaryProgressTimer = 0;
-let summaryProgressCurrentValue = 0;
-let summaryPreviewConversationId = null;
-let latestSummaryStatus = null;
-let messageSelectionMode = null;
-let selectedSummaryMessageIds = new Set();
-let conversationRefreshGeneration = 0;
-let pendingConversationRefreshTimers = new Set();
-let lastConversationSignature = "";
-let lastConversationMemorySignature = "";
-let userScrolledUp = false;
-let pendingCanvasConfirmAction = null;
-let slashCommandMenuOpen = false;
-let slashCommandMenuQuery = "";
-let slashCommandSuggestions = [];
-let slashCommandSelectedIndex = 0;
-let selectedImageFiles = [];
-let selectedDocumentFiles = [];
-let selectedYouTubeUrl = "";
-let pendingDocumentCanvasOpen = null;
 let nextAttachmentFileKeyId = 1;
 let editingMessageId = null;
 let inlineEditingMessageId = null;
@@ -629,7 +579,7 @@ const CANVAS_MUTATION_LABELS = Object.freeze({
 });
 
 function applyConversationToolOverridesState(data) {
-  currentConversationToolOverrides = Array.isArray(data?.conversation?.tool_overrides) ? data.conversation.tool_overrides : null;
+  chatState.currentConversationToolOverrides = Array.isArray(data?.conversation?.tool_overrides) ? data.conversation.tool_overrides : null;
 }
 
 function getConversationMemorySignature(entries = []) {
@@ -639,12 +589,12 @@ function getConversationMemorySignature(entries = []) {
 }
 
 function applyConversationMemoryState(data) {
-  conversationMemoryEntries = Array.isArray(data?.memory) ? data.memory : [];
-  lastConversationMemorySignature = getConversationMemorySignature(conversationMemoryEntries);
+  chatState.conversationMemoryEntries = Array.isArray(data?.memory) ? data.memory : [];
+  uiState.lastConversationMemorySignature = getConversationMemorySignature(chatState.conversationMemoryEntries);
 }
 
 function applyConversationParameterOverridesState(data) {
-  currentConversationParameterOverrides = data?.conversation?.parameter_overrides || null;
+  chatState.currentConversationParameterOverrides = data?.conversation?.parameter_overrides || null;
 }
 
 const DEFAULT_CANVAS_CONFIRM_LABEL = "Open Canvas";
@@ -656,11 +606,8 @@ let lastCanvasTreeTypeAheadAt = 0;
 let nextToastId = 1;
 let activeToastTimers = new Map();
 let chatDragDepth = 0;
-let isCanvasMobileTreeOpen = false;
-let isCanvasFullscreen = false;
-let canvasZoomLevelIndex = 0;
 const featureFlags = window.__featureFlags || appSettings.features || {};
-conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
+chatState.conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
 if (youtubeUrlBtn && !Boolean(featureFlags.youtube_transcripts_enabled)) {
   youtubeUrlBtn.hidden = true;
 }
@@ -769,7 +716,7 @@ function setDocumentSubmissionMode(file, mode) {
 
 function syncSelectedDocumentSubmissionModes() {
   const nextModes = new Map();
-  selectedDocumentFiles.forEach((file) => {
+  attachmentState.selectedDocumentFiles.forEach((file) => {
     const fileKey = getAttachmentFileKey(file);
     if (!fileKey) {
       return;
@@ -792,7 +739,7 @@ function getAttachmentFileKey(file) {
     return "";
   }
 
-  const existingKey = attachmentFileKeyByObject.get(file);
+  const existingKey = attachmentState.attachmentFileKeyByObject.get(file);
   if (existingKey) {
     return existingKey;
   }
@@ -806,7 +753,7 @@ function getAttachmentFileKey(file) {
     file?.lastModified || 0,
   ].join("::");
   nextAttachmentFileKeyId += 1;
-  attachmentFileKeyByObject.set(file, nextKey);
+  attachmentState.attachmentFileKeyByObject.set(file, nextKey);
   return nextKey;
 }
 
@@ -1312,21 +1259,21 @@ function buildComposerSlashCommandEditableText(content, metadata) {
 }
 
 function getActiveSlashCommandSuggestion() {
-  if (!slashCommandSuggestions.length) {
+  if (!uiState.slashCommandSuggestions.length) {
     return null;
   }
-  return slashCommandSuggestions[Math.max(0, Math.min(slashCommandSelectedIndex, slashCommandSuggestions.length - 1))] || null;
+  return uiState.slashCommandSuggestions[Math.max(0, Math.min(uiState.slashCommandSelectedIndex, uiState.slashCommandSuggestions.length - 1))] || null;
 }
 
 function isSlashCommandMenuOpen() {
-  return Boolean(slashCommandMenuOpen && slashCommandMenuEl && slashCommandMenuEl.hidden === false);
+  return Boolean(uiState.slashCommandMenuOpen && slashCommandMenuEl && slashCommandMenuEl.hidden === false);
 }
 
 function closeSlashCommandMenu() {
-  slashCommandMenuOpen = false;
-  slashCommandMenuQuery = "";
-  slashCommandSuggestions = [];
-  slashCommandSelectedIndex = 0;
+  uiState.slashCommandMenuOpen = false;
+  uiState.slashCommandMenuQuery = "";
+  uiState.slashCommandSuggestions = [];
+  uiState.slashCommandSelectedIndex = 0;
   if (!slashCommandMenuEl) {
     return;
   }
@@ -1353,11 +1300,11 @@ function applySlashCommandSuggestion(command) {
 }
 
 function moveSlashCommandSelection(direction) {
-  if (!slashCommandSuggestions.length) {
+  if (!uiState.slashCommandSuggestions.length) {
     return;
   }
   const normalizedDirection = direction < 0 ? -1 : 1;
-  slashCommandSelectedIndex = (slashCommandSelectedIndex + normalizedDirection + slashCommandSuggestions.length) % slashCommandSuggestions.length;
+  uiState.slashCommandSelectedIndex = (uiState.slashCommandSelectedIndex + normalizedDirection + uiState.slashCommandSuggestions.length) % uiState.slashCommandSuggestions.length;
   renderSlashCommandMenu();
 }
 
@@ -1365,7 +1312,7 @@ function renderSlashCommandMenu() {
   if (!slashCommandMenuEl) {
     return;
   }
-  if (!slashCommandMenuOpen) {
+  if (!uiState.slashCommandMenuOpen) {
     closeSlashCommandMenu();
     return;
   }
@@ -1382,8 +1329,8 @@ function renderSlashCommandMenu() {
 
   const subtitle = document.createElement("div");
   subtitle.className = "slash-command-menu__subtitle";
-  subtitle.textContent = slashCommandMenuQuery
-    ? `Showing matches for /${slashCommandMenuQuery}`
+  subtitle.textContent = uiState.slashCommandMenuQuery
+    ? `Showing matches for /${uiState.slashCommandMenuQuery}`
     : "Choose a command to insert into the composer.";
 
   header.append(title, subtitle);
@@ -1393,15 +1340,15 @@ function renderSlashCommandMenu() {
   list.className = "slash-command-menu__list";
   list.setAttribute("role", "listbox");
 
-  if (slashCommandSuggestions.length) {
-    slashCommandSuggestions.forEach((command, index) => {
+  if (uiState.slashCommandSuggestions.length) {
+    uiState.slashCommandSuggestions.forEach((command, index) => {
       const button = document.createElement("button");
       button.type = "button";
       button.id = `slash-command-option-${command.name}`;
       button.className = "slash-command-menu__item";
       button.setAttribute("role", "option");
 
-      const isActive = index === slashCommandSelectedIndex;
+      const isActive = index === uiState.slashCommandSelectedIndex;
       if (isActive) {
         button.classList.add("is-active");
       }
@@ -1409,8 +1356,8 @@ function renderSlashCommandMenu() {
       button.addEventListener("mousedown", (event) => event.preventDefault());
       button.addEventListener("click", () => applySlashCommandSuggestion(command));
       button.addEventListener("mouseenter", () => {
-        if (slashCommandSelectedIndex !== index) {
-          slashCommandSelectedIndex = index;
+        if (uiState.slashCommandSelectedIndex !== index) {
+          uiState.slashCommandSelectedIndex = index;
           renderSlashCommandMenu();
         }
       });
@@ -1451,8 +1398,8 @@ function renderSlashCommandMenu() {
   } else {
     const emptyState = document.createElement("div");
     emptyState.className = "slash-command-menu__empty";
-    emptyState.textContent = slashCommandMenuQuery
-      ? `No commands match /${slashCommandMenuQuery}.`
+    emptyState.textContent = uiState.slashCommandMenuQuery
+      ? `No commands match /${uiState.slashCommandMenuQuery}.`
       : "No slash commands are registered.";
     list.appendChild(emptyState);
   }
@@ -1461,7 +1408,7 @@ function renderSlashCommandMenu() {
 
   const footer = document.createElement("div");
   footer.className = "slash-command-menu__footer";
-  footer.textContent = slashCommandSuggestions.length
+  footer.textContent = uiState.slashCommandSuggestions.length
     ? "↑ ↓ to navigate • Enter or Tab to insert • Esc to close"
     : "Keep typing to filter registered commands.";
   fragment.appendChild(footer);
@@ -1481,7 +1428,7 @@ function renderSlashCommandMenu() {
 }
 
 function syncSlashCommandMenuWithInput({ preserveSelection = true } = {}) {
-  if (!slashCommandMenuEl || !inputEl || isStreaming || isFixing) {
+  if (!slashCommandMenuEl || !inputEl || chatState.isStreaming || chatState.isFixing) {
     closeSlashCommandMenu();
     return;
   }
@@ -1493,15 +1440,15 @@ function syncSlashCommandMenuWithInput({ preserveSelection = true } = {}) {
   }
 
   const previousSelectedName = preserveSelection ? getActiveSlashCommandSuggestion()?.name : "";
-  slashCommandMenuOpen = true;
-  slashCommandMenuQuery = menuState.query;
-  slashCommandSuggestions = menuState.matches.slice(0, SLASH_COMMAND_MENU_MAX_VISIBLE_ITEMS);
+  uiState.slashCommandMenuOpen = true;
+  uiState.slashCommandMenuQuery = menuState.query;
+  uiState.slashCommandSuggestions = menuState.matches.slice(0, SLASH_COMMAND_MENU_MAX_VISIBLE_ITEMS);
 
   if (previousSelectedName) {
-    const nextIndex = slashCommandSuggestions.findIndex((command) => command.name === previousSelectedName);
-    slashCommandSelectedIndex = nextIndex >= 0 ? nextIndex : 0;
+    const nextIndex = uiState.slashCommandSuggestions.findIndex((command) => command.name === previousSelectedName);
+    uiState.slashCommandSelectedIndex = nextIndex >= 0 ? nextIndex : 0;
   } else {
-    slashCommandSelectedIndex = 0;
+    uiState.slashCommandSelectedIndex = 0;
   }
 
   renderSlashCommandMenu();
@@ -1647,7 +1594,7 @@ function getCanvasCurrentPage(document) {
   if (!isCanvasPageAwareDocument(document)) {
     return 0;
   }
-  return clampCanvasPageNumber(document, canvasPageByDocumentId.get(document.id) || 1);
+  return clampCanvasPageNumber(document, canvasState.canvasPageByDocumentId.get(document.id) || 1);
 }
 
 function setCanvasCurrentPage(document, pageNumber) {
@@ -1655,7 +1602,7 @@ function setCanvasCurrentPage(document, pageNumber) {
     return 0;
   }
   const nextPage = clampCanvasPageNumber(document, pageNumber);
-  canvasPageByDocumentId.set(document.id, nextPage);
+  canvasState.canvasPageByDocumentId.set(document.id, nextPage);
   return nextPage;
 }
 
@@ -1732,11 +1679,11 @@ function syncCanvasCurrentPageFromScroll(document) {
 }
 
 function scheduleCanvasPageSync(document) {
-  if (!isCanvasPageAwareDocument(document) || pendingCanvasPageSyncFrame) {
+  if (!isCanvasPageAwareDocument(document) || canvasState.pendingCanvasPageSyncFrame) {
     return;
   }
-  pendingCanvasPageSyncFrame = globalThis.requestAnimationFrame(() => {
-    pendingCanvasPageSyncFrame = 0;
+  canvasState.pendingCanvasPageSyncFrame = globalThis.requestAnimationFrame(() => {
+    canvasState.pendingCanvasPageSyncFrame = 0;
     syncCanvasCurrentPageFromScroll(document);
   });
 }
@@ -1813,7 +1760,7 @@ function getCanvasMode(documents) {
   return Array.isArray(documents) && documents.some((document) => document.path || document.role) ? "project" : "document";
 }
 
-function getCanvasPreferredActiveDocumentId(entries = history) {
+function getCanvasPreferredActiveDocumentId(entries = chatState.history) {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const metadata = entries[index]?.metadata;
     const candidate = typeof metadata?.active_document_id === "string"
@@ -1904,13 +1851,13 @@ function getCanvasPathFilterValue() {
 }
 
 function resetCanvasWorkspaceState() {
-  isCanvasEditing = false;
-  editingCanvasDocumentId = null;
-  if (pendingCanvasPageSyncFrame) {
-    globalThis.cancelAnimationFrame(pendingCanvasPageSyncFrame);
-    pendingCanvasPageSyncFrame = 0;
+  canvasState.isCanvasEditing = false;
+  canvasState.editingCanvasDocumentId = null;
+  if (canvasState.pendingCanvasPageSyncFrame) {
+    globalThis.cancelAnimationFrame(canvasState.pendingCanvasPageSyncFrame);
+    canvasState.pendingCanvasPageSyncFrame = 0;
   }
-  canvasPageByDocumentId = new Map();
+  canvasState.canvasPageByDocumentId = new Map();
   resetStreamingCanvasPreview();
   lastCanvasStructureSignature = "";
   collapsedCanvasFolders = new Set();
@@ -2102,7 +2049,7 @@ function syncCanvasTreeTabStops(preferredItem = null) {
     return null;
   }
 
-  const preferredActiveId = String(activeCanvasDocumentId || getCanvasPreferredActiveDocumentId() || "").trim();
+  const preferredActiveId = String(canvasState.activeCanvasDocumentId || getCanvasPreferredActiveDocumentId() || "").trim();
   const nextItem = preferredItem instanceof HTMLElement
     ? preferredItem
     : items.find((item) => item.dataset.canvasDocumentId === preferredActiveId)
@@ -2298,7 +2245,7 @@ function renderCanvasTreeFile(document, depth, activeDocument) {
   button.type = "button";
   button.className = `canvas-tree-file${isActive ? " active" : ""}`;
   button.style.setProperty("--canvas-tree-depth", String(depth));
-  button.disabled = isCanvasEditing && !isActive;
+  button.disabled = canvasState.isCanvasEditing && !isActive;
   button.dataset.canvasTreeItem = "true";
   button.dataset.canvasDocumentId = document.id;
   button.dataset.treeLabel = getCanvasFileName(document).toLowerCase();
@@ -2309,7 +2256,7 @@ function renderCanvasTreeFile(document, depth, activeDocument) {
   button.innerHTML = `<span class="canvas-tree-file__name">${escHtml(getCanvasFileName(document))}</span>${roleBadge}${pathLabel}`;
   button.title = getCanvasDocumentLabel(document);
   button.addEventListener("click", () => {
-    activeCanvasDocumentId = document.id;
+    canvasState.activeCanvasDocumentId = document.id;
     if (isMobileViewport()) {
       setCanvasMobileTreeOpen(false);
     }
@@ -2341,7 +2288,7 @@ function renderCanvasTree(documents, activeDocument) {
   }
 
   if (!isMobileViewport()) {
-    isCanvasMobileTreeOpen = false;
+    uiState.isCanvasMobileTreeOpen = false;
     canvasPanel?.classList.remove("canvas-panel--tree-open");
   }
   syncCanvasTreeToggleButton();
@@ -2933,9 +2880,9 @@ function setCanvasEditing(enabled) {
     closeCanvasOverflowMenu();
     setCanvasMobileTreeOpen(false);
   }
-  isCanvasEditing = Boolean(enabled && activeDocument);
-  editingCanvasDocumentId = isCanvasEditing ? activeDocument.id : null;
-  if (isCanvasEditing && canvasEditorEl) {
+  canvasState.isCanvasEditing = Boolean(enabled && activeDocument);
+  canvasState.editingCanvasDocumentId = canvasState.isCanvasEditing ? activeDocument.id : null;
+  if (canvasState.isCanvasEditing && canvasEditorEl) {
     canvasEditorEl.value = activeDocument.content || "";
   }
   renderCanvasPanel();
@@ -2945,12 +2892,12 @@ function cancelCanvasEditing({ statusMessage = "", tone = "muted" } = {}) {
   if (guardCanvasMutation("leave edit mode")) {
     return;
   }
-  if (!isCanvasEditing && !editingCanvasDocumentId) {
+  if (!canvasState.isCanvasEditing && !canvasState.editingCanvasDocumentId) {
     return;
   }
   clearCanvasEditingPreviewRender();
-  isCanvasEditing = false;
-  editingCanvasDocumentId = null;
+  canvasState.isCanvasEditing = false;
+  canvasState.editingCanvasDocumentId = null;
   renderCanvasPanel();
   if (statusMessage) {
     setCanvasStatus(statusMessage, tone);
@@ -3046,26 +2993,26 @@ function showPendingCanvasUploadPreview(fileName) {
   preview.line_count = preview.content.split("\n").length;
   preview.page_count = 0;
   preview.isStreamingPreview = true;
-  streamingCanvasPreviews.set(PENDING_CANVAS_UPLOAD_PREVIEW_KEY, preview);
-  activeCanvasDocumentId = preview.id;
-  isCanvasEditing = false;
-  editingCanvasDocumentId = null;
+  canvasState.streamingPreviews.set(PENDING_CANVAS_UPLOAD_PREVIEW_KEY, preview);
+  canvasState.activeCanvasDocumentId = preview.id;
+  canvasState.isCanvasEditing = false;
+  canvasState.editingCanvasDocumentId = null;
   renderCanvasPanel();
 }
 
 function clearPendingCanvasUploadPreview() {
-  if (!streamingCanvasPreviews.has(PENDING_CANVAS_UPLOAD_PREVIEW_KEY)) {
+  if (!canvasState.streamingPreviews.has(PENDING_CANVAS_UPLOAD_PREVIEW_KEY)) {
     return;
   }
-  streamingCanvasPreviews.delete(PENDING_CANVAS_UPLOAD_PREVIEW_KEY);
+  canvasState.streamingPreviews.delete(PENDING_CANVAS_UPLOAD_PREVIEW_KEY);
 }
 
 function scheduleCanvasAutoRefreshAfterUpload(delay = 350) {
-  if (!currentConvId) {
+  if (!chatState.currentConvId) {
     return;
   }
   window.setTimeout(() => {
-    if (!currentConvId || isStreaming || isFixing) {
+    if (!chatState.currentConvId || chatState.isStreaming || chatState.isFixing) {
       return;
     }
     void refreshConversationFromServer();
@@ -3097,7 +3044,7 @@ function getCanvasTitleFromPathOrLabel(value) {
 }
 
 async function createCanvasDocumentFromData({ title, content, format, language = null, path = null, statusMessage = "Creating canvas file..." }) {
-  if (!currentConvId) {
+  if (!chatState.currentConvId) {
     setCanvasStatus("Conversation is not available yet.", "warning");
     return;
   }
@@ -3108,7 +3055,7 @@ async function createCanvasDocumentFromData({ title, content, format, language =
   cancelPendingConversationRefreshes();
 
   return withCanvasMutation("create", async () => {
-    const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
+    const response = await fetch(`/api/conversations/${chatState.currentConvId}/canvas`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -3169,7 +3116,7 @@ async function createCanvasDocumentFromFile(file) {
   const nextPath = normalizeCanvasPathCandidate(file?.webkitRelativePath || file?.name || "") || null;
   const nextTitle = getCanvasTitleFromPathOrLabel(nextPath || file?.name || "Uploaded file");
 
-  if (!currentConvId) {
+  if (!chatState.currentConvId) {
     setCanvasStatus("Conversation is not available yet.", "warning");
     return;
   }
@@ -3188,7 +3135,7 @@ async function createCanvasDocumentFromFile(file) {
       formData.append("path", nextPath);
     }
 
-    const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
+    const response = await fetch(`/api/conversations/${chatState.currentConvId}/canvas`, {
       method: "POST",
       body: formData,
     });
@@ -3219,7 +3166,7 @@ async function createCanvasDocumentFromFile(file) {
 }
 
 async function importGithubRepositoryToCanvas() {
-  if (!currentConvId) {
+  if (!chatState.currentConvId) {
     setCanvasStatus("Conversation is not available yet.", "warning");
     return;
   }
@@ -3236,7 +3183,7 @@ async function importGithubRepositoryToCanvas() {
   cancelPendingConversationRefreshes();
 
   return withCanvasMutation("import-github", async () => {
-    const response = await fetch(`/api/conversations/${currentConvId}/canvas/import-github`, {
+    const response = await fetch(`/api/conversations/${chatState.currentConvId}/canvas/import-github`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -3322,9 +3269,9 @@ function getCanvasDocuments(metadata) {
     .filter((document) => document.id);
 }
 
-function getCanvasDocumentCollection(entries = history) {
-  if (streamingCanvasDocuments.length) {
-    return streamingCanvasDocuments;
+function getCanvasDocumentCollection(entries = chatState.history) {
+  if (canvasState.streamingCanvasDocuments.length) {
+    return canvasState.streamingCanvasDocuments;
   }
 
   for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -3343,7 +3290,7 @@ function getCanvasDocumentCollection(entries = history) {
 }
 
 function resetStreamingCanvasPreview() {
-  streamingCanvasPreviews.clear();
+  canvasState.streamingPreviews.clear();
   clearCanvasRenderJob("preview");
 }
 
@@ -3409,7 +3356,7 @@ function flushStreamingCanvasPreviewDelta(previewDocument) {
 
 function flushStreamingCanvasPreviewDeltas() {
   let changed = false;
-  streamingCanvasPreviews.forEach((previewDocument) => {
+  canvasState.streamingPreviews.forEach((previewDocument) => {
     if (flushStreamingCanvasPreviewDelta(previewDocument)) {
       changed = true;
     }
@@ -3421,8 +3368,8 @@ function buildStreamingCanvasPreviewDocument(toolName, previewKey = "", snapshot
   const normalizedToolName = String(toolName || "").trim();
   const normalizedPreviewKey = String(previewKey || "").trim() || "canvas-call-0";
   const snapshotData = snapshot && typeof snapshot === "object" ? snapshot : {};
-  const allDocuments = getCanvasDocumentCollection(history);
-  const activeDocument = getActiveCanvasDocument(history);
+  const allDocuments = getCanvasDocumentCollection(chatState.history);
+  const activeDocument = getActiveCanvasDocument(chatState.history);
 
   // For edit operations, prefer the document explicitly identified in the
   // snapshot over the generic active doc.
@@ -3515,9 +3462,9 @@ function ensureStreamingCanvasPreview(toolName, previewKey = "", snapshot = {}) 
   if (!normalizedToolName) {
     return null;
   }
-  const existing = streamingCanvasPreviews.get(normalizedPreviewKey);
+  const existing = canvasState.streamingPreviews.get(normalizedPreviewKey);
 
-  // buildStreamingCanvasPreviewDocument does a full conversation-history scan to
+  // buildStreamingCanvasPreviewDocument does a full conversation-chatState.history scan to
   // locate the target canvas document. Calling it on every content-delta event is
   // the primary cause of main-thread blocking during canvas streaming, because a
   // fast model can emit hundreds of deltas per second. Skip the expensive rebuild
@@ -3535,7 +3482,7 @@ function ensureStreamingCanvasPreview(toolName, previewKey = "", snapshot = {}) 
     if (shouldRebuild) {
       preview = rebuiltPreview;
       if (preview) {
-        streamingCanvasPreviews.set(normalizedPreviewKey, preview);
+        canvasState.streamingPreviews.set(normalizedPreviewKey, preview);
       }
     }
   }
@@ -3548,19 +3495,19 @@ function ensureStreamingCanvasPreview(toolName, previewKey = "", snapshot = {}) 
   // Only switch the active view to the streaming preview when a new streaming
   // operation starts. If the user has manually selected a different document
   // during an ongoing stream, do not force the view back to the preview.
-  if (isNewPreview || activeCanvasDocumentId === preview.id) {
-    activeCanvasDocumentId = preview.id;
+  if (isNewPreview || canvasState.activeCanvasDocumentId === preview.id) {
+    canvasState.activeCanvasDocumentId = preview.id;
   }
   return preview;
 }
 
-function getCanvasRenderableDocuments(entries = history) {
+function getCanvasRenderableDocuments(entries = chatState.history) {
   const documents = getCanvasDocumentCollection(entries);
-  if (!streamingCanvasPreviews.size) {
+  if (!canvasState.streamingPreviews.size) {
     return documents;
   }
   let result = [...documents];
-  for (const preview of streamingCanvasPreviews.values()) {
+  for (const preview of canvasState.streamingPreviews.values()) {
     if (!preview?.id) {
       continue;
     }
@@ -3589,7 +3536,7 @@ function buildCanvasStructureSignature(documents, visibleDocuments = documents) 
     String(canvasSearchInput?.value || "").trim(),
     String(canvasRoleFilter?.value || "").trim(),
     getCanvasPathFilterValue(),
-    isCanvasEditing ? "editing" : "view",
+    canvasState.isCanvasEditing ? "editing" : "view",
   ].join("\u241f");
   return [documentSignature, visibleSignature, filterSignature].join("\u241d");
 }
@@ -3597,7 +3544,7 @@ function buildCanvasStructureSignature(documents, visibleDocuments = documents) 
 function buildCanvasRenderState(documents = getCanvasRenderableDocuments()) {
   const visibleDocuments = getCanvasVisibleDocuments(documents);
   const preferredActiveId = [
-    String(activeCanvasDocumentId || "").trim(),
+    String(canvasState.activeCanvasDocumentId || "").trim(),
     String(getCanvasPreferredActiveDocumentId() || "").trim(),
   ].find(Boolean) || "";
   const activeDocument = visibleDocuments.length
@@ -3629,7 +3576,7 @@ function shouldDeferCanvasRenderForStreaming() {
   // visually up to date. We still throttle preview paints separately, so this
   // only disables the hard defer that can otherwise starve the Canvas preview
   // while answer frames keep arriving back-to-back.
-  return Boolean(isStreaming && activeAnswerRenderPending && !isCanvasOpen());
+  return Boolean(chatState.isStreaming && activeAnswerRenderPending && !isCanvasOpen());
 }
 
 function scheduleDeferredCanvasRenderFlush(delay = CANVAS_STREAMING_RENDER_DEFER_INTERVAL_MS) {
@@ -3653,7 +3600,7 @@ function flushDeferredCanvasRenderWork() {
   if (canvasState.deferredPanelRender) {
     canvasState.resetDeferred();
     renderCanvasPanel();
-    if (streamingCanvasPreviews.size) {
+    if (canvasState.streamingPreviews.size) {
       scheduleCanvasPreviewRender({ allowWhileAnswerPending: true });
     }
     return;
@@ -3666,7 +3613,7 @@ function flushDeferredCanvasRenderWork() {
 }
 
 function requestCanvasPanelRender({ deferForStreaming = false } = {}) {
-  const shouldDelayPanelRender = deferForStreaming && isStreaming && (activeAnswerRenderPending || activeAssistantStreamingHasVisibleAnswer);
+  const shouldDelayPanelRender = deferForStreaming && chatState.isStreaming && (activeAnswerRenderPending || chatState.activeAssistantStreamingHasVisibleAnswer);
   if (shouldDelayPanelRender) {
     canvasState.deferredPanelRender = true;
     scheduleDeferredCanvasRenderFlush();
@@ -3686,7 +3633,7 @@ function scheduleCanvasPreviewRender(options = {}) {
     return;
   }
 
-  if (isStreaming && activeAssistantStreamingHasVisibleAnswer && canvasState.lastPreviewRenderAt > 0) {
+  if (chatState.isStreaming && chatState.activeAssistantStreamingHasVisibleAnswer && canvasState.lastPreviewRenderAt > 0) {
     const elapsedMs = Date.now() - canvasState.lastPreviewRenderAt;
     if (elapsedMs < CANVAS_STREAMING_PREVIEW_THROTTLE_MS) {
       canvasState.deferredPreviewRender = true;
@@ -3705,13 +3652,13 @@ function scheduleCanvasPreviewRender(options = {}) {
   });
 }
 
-function getActiveCanvasDocument(entries = history) {
+function getActiveCanvasDocument(entries = chatState.history) {
   const documents = getCanvasDocumentCollection(entries);
   if (!documents.length) {
     return null;
   }
 
-  const preferredId = String(activeCanvasDocumentId || getCanvasPreferredActiveDocumentId(entries) || "").trim();
+  const preferredId = String(canvasState.activeCanvasDocumentId || getCanvasPreferredActiveDocumentId(entries) || "").trim();
   if (preferredId) {
     const matched = documents.find((document) => document.id === preferredId);
     if (matched) {
@@ -3749,7 +3696,7 @@ function updateCanvasSearchFeedback(renderState, matchCount = 0) {
     searchTerm,
   } = renderState;
 
-  if (!documents.length || isCanvasEditing || isStreamingPreviewActive) {
+  if (!documents.length || canvasState.isCanvasEditing || isStreamingPreviewActive) {
     setCanvasSearchStatus("");
     return;
   }
@@ -3834,11 +3781,11 @@ function getCanvasFormatControlValue() {
 }
 
 function isCanvasMutationPending() {
-  return Boolean(pendingCanvasMutation);
+  return Boolean(canvasState.pendingCanvasMutation);
 }
 
 function getCanvasPendingMutationLabel() {
-  return CANVAS_MUTATION_LABELS[pendingCanvasMutation] || "canvas update";
+  return CANVAS_MUTATION_LABELS[canvasState.pendingCanvasMutation] || "canvas update";
 }
 
 function guardCanvasMutation(actionLabel = "continue") {
@@ -3853,10 +3800,10 @@ function guardCanvasMutation(actionLabel = "continue") {
 
 function setCanvasMutationState(nextMutation = "", { rerender = true } = {}) {
   const normalizedMutation = String(nextMutation || "").trim();
-  if (pendingCanvasMutation === normalizedMutation) {
+  if (canvasState.pendingCanvasMutation === normalizedMutation) {
     return;
   }
-  pendingCanvasMutation = normalizedMutation;
+  canvasState.pendingCanvasMutation = normalizedMutation;
   if (canvasPanel) {
     canvasPanel.setAttribute("aria-busy", normalizedMutation ? "true" : "false");
     if (normalizedMutation) {
@@ -3895,7 +3842,7 @@ function setCanvasButtonState(button, { disabled, hidden } = {}) {
  * @param {Array} options.buttonsToDisable - İşlem sırasında devre dışı bırakılacak butonlar
  * @param {Function} options.onSuccess - Ek başarı işlemleri (payload, state güncellemelerinden sonra)
  * @param {Function} options.onError - Ek hata işlemleri (hata yakalandıktan sonra)
- * @param {boolean} options.skipHistoryUpdate - history'yi payload.messages'tan güncellemeyi atla
+ * @param {boolean} options.skipHistoryUpdate - chatState.history'yi payload.messages'tan güncellemeyi atla
  * @param {boolean} options.skipCanvasUpdate - renderCanvasPanel çağrısını atla
  * @param {Object} options.stateOverrides - Başarı durumunda uygulanacak state override'ları (örn. { isCanvasEditing: false })
  */
@@ -3925,7 +3872,7 @@ async function withCanvasMutation(mutationType, operation, options = {}) {
     setCanvasMutationState("", { rerender: false });
 
     if (!skipHistoryUpdate && Array.isArray(payload?.messages)) {
-      history = payload.messages.map(normalizeHistoryEntry);
+      chatState.history = payload.messages.map(normalizeHistoryEntry);
     }
 
     // Canvas state güncellemeleri (operasyonlarda ortak)
@@ -3942,10 +3889,10 @@ async function withCanvasMutation(mutationType, operation, options = {}) {
     for (const [key, value] of Object.entries(stateOverrides)) {
       computedState[key] = typeof value === "function" ? value(payload) : value;
     }
-    streamingCanvasDocuments = computedState.streamingCanvasDocuments;
-    activeCanvasDocumentId = computedState.activeCanvasDocumentId;
-    isCanvasEditing = computedState.isCanvasEditing;
-    editingCanvasDocumentId = computedState.editingCanvasDocumentId;
+    canvasState.streamingCanvasDocuments = computedState.streamingCanvasDocuments;
+    canvasState.activeCanvasDocumentId = computedState.activeCanvasDocumentId;
+    canvasState.isCanvasEditing = computedState.isCanvasEditing;
+    canvasState.editingCanvasDocumentId = computedState.editingCanvasDocumentId;
 
     renderConversationHistory();
     if (!skipCanvasUpdate) {
@@ -4086,8 +4033,8 @@ function syncCanvasActionButtons({
 
 function resetCanvasContentDisplay({ clearEditorValue = true, clearTabs = true } = {}) {
   clearCanvasEditingPreviewRender();
-  isCanvasEditing = false;
-  editingCanvasDocumentId = null;
+  canvasState.isCanvasEditing = false;
+  canvasState.editingCanvasDocumentId = null;
   canvasWorkspaceMain?.classList.remove("canvas-workspace-main--editing");
 
   if (canvasEditorEl) {
@@ -4195,7 +4142,7 @@ function clearCanvasEditingPreviewRender() {
 }
 
 function getCanvasEditingPreviewDocument(activeDocument = getActiveCanvasDocument()) {
-  if (!activeDocument || !isCanvasEditing || !canvasEditorEl) {
+  if (!activeDocument || !canvasState.isCanvasEditing || !canvasEditorEl) {
     return activeDocument;
   }
 
@@ -4208,12 +4155,12 @@ function getCanvasEditingPreviewDocument(activeDocument = getActiveCanvasDocumen
 }
 
 function scheduleCanvasEditingPreviewRender() {
-  if (!isCanvasEditing) {
+  if (!canvasState.isCanvasEditing) {
     return;
   }
 
   scheduleCanvasRenderJob("editing-preview", () => {
-    if (!isCanvasEditing) {
+    if (!canvasState.isCanvasEditing) {
       return;
     }
     const renderState = buildCanvasRenderState();
@@ -4228,30 +4175,30 @@ function scheduleCanvasEditingPreviewRender() {
 function setPendingDocumentCanvasOpen(files) {
   const documentItems = getDocumentCanvasPromptItems(files);
   if (!documentItems.length) {
-    pendingDocumentCanvasOpen = null;
+    attachmentState.pendingDocumentCanvasOpen = null;
     return;
   }
 
-  pendingDocumentCanvasOpen = {
+  attachmentState.pendingDocumentCanvasOpen = {
     fileCount: documentItems.length,
     fileName: String(documentItems[0]?.name || "Document").trim() || "Document",
   };
 }
 
 async function toggleCanvasAlwaysExpanded(activeDocument) {
-  if (!currentConvId || !activeDocument) return;
+  if (!chatState.currentConvId || !activeDocument) return;
   const current = Boolean(activeDocument.always_expanded);
   const next = !current;
   try {
-    const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
+    const response = await fetch(`/api/conversations/${chatState.currentConvId}/canvas`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ document_id: activeDocument.id, always_expanded: next }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Update failed.");
-    history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
-    activeCanvasDocumentId = String(payload.active_document_id || activeDocument.id || "").trim() || activeCanvasDocumentId;
+    chatState.history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : chatState.history;
+    canvasState.activeCanvasDocumentId = String(payload.active_document_id || activeDocument.id || "").trim() || canvasState.activeCanvasDocumentId;
     renderConversationHistory({ preserveScroll: true });
     renderCanvasPanel();
     setCanvasStatus(next ? "Always expanded enabled — AI will receive the full document." : "Always expanded disabled.", "success");
@@ -4360,12 +4307,12 @@ function renderCanvasDocumentTabs(visibleDocuments, allDocuments) {
   visibleDocuments.forEach((entry) => {
     const button = globalThis.document.createElement("button");
     button.type = "button";
-    button.className = `canvas-document-tab${entry.id === activeCanvasDocumentId ? " active" : ""}`;
+    button.className = `canvas-document-tab${entry.id === canvasState.activeCanvasDocumentId ? " active" : ""}`;
     button.textContent = getCanvasFileName(entry);
     button.title = `${getCanvasDocumentLabel(entry)} · ${entry.line_count} lines`;
-    button.disabled = isCanvasEditing && entry.id !== activeCanvasDocumentId;
+    button.disabled = canvasState.isCanvasEditing && entry.id !== canvasState.activeCanvasDocumentId;
     button.addEventListener("click", () => {
-      activeCanvasDocumentId = entry.id;
+      canvasState.activeCanvasDocumentId = entry.id;
       renderCanvasPanel();
     });
     canvasDocumentTabsEl.appendChild(button);
@@ -4383,8 +4330,8 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   } = renderState;
 
   const displayDocument = getCanvasEditingPreviewDocument(activeDocument);
-  activeCanvasDocumentId = activeDocument.id;
-  canvasWorkspaceMain?.classList.toggle("canvas-workspace-main--editing", Boolean(isCanvasEditing));
+  canvasState.activeCanvasDocumentId = activeDocument.id;
+  canvasWorkspaceMain?.classList.toggle("canvas-workspace-main--editing", Boolean(canvasState.isCanvasEditing));
   const modeLabel = getCanvasMode(documents) === "project" ? "Project mode" : "Document mode";
   const detailLabel = displayDocument.path || displayDocument.title;
   const pageLabel = Number(displayDocument.page_count) > 1 ? ` · ${displayDocument.page_count} pages` : "";
@@ -4401,7 +4348,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
         : "Live Canvas preview. The preview updates as the assistant streams content and is replaced by the committed document when the tool finishes.",
       "muted"
     );
-  } else if (isCanvasEditing) {
+  } else if (canvasState.isCanvasEditing) {
     setCanvasHint("Edit mode. Make changes and save to commit.", "muted");
   } else if (Number.isFinite(displayDocument.line_count) && displayDocument.line_count > promptLineLimit) {
     setCanvasHint(
@@ -4413,16 +4360,16 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   }
   canvasEmptyState.hidden = true;
   syncCanvasFormControls({
-    formatDisabled: !isCanvasEditing || isStreamingPreviewActive,
+    formatDisabled: !canvasState.isCanvasEditing || isStreamingPreviewActive,
     formatValue: displayDocument.format || "markdown",
-    searchDisabled: isCanvasEditing || isStreamingPreviewActive,
-    roleDisabled: isCanvasEditing || isStreamingPreviewActive,
-    pathDisabled: isCanvasEditing || isStreamingPreviewActive,
+    searchDisabled: canvasState.isCanvasEditing || isStreamingPreviewActive,
+    roleDisabled: canvasState.isCanvasEditing || isStreamingPreviewActive,
+    pathDisabled: canvasState.isCanvasEditing || isStreamingPreviewActive,
   });
 
-  if (isCanvasEditing && canvasEditorEl) {
-    if (editingCanvasDocumentId !== activeDocument.id) {
-      editingCanvasDocumentId = activeDocument.id;
+  if (canvasState.isCanvasEditing && canvasEditorEl) {
+    if (canvasState.editingCanvasDocumentId !== activeDocument.id) {
+      canvasState.editingCanvasDocumentId = activeDocument.id;
       canvasEditorEl.value = activeDocument.content || "";
     }
     canvasEditorEl.classList.add("canvas-editor--editing");
@@ -4452,13 +4399,13 @@ function updateCanvasActiveDocumentDisplay(renderState) {
     }
   }
 
-  const matchCount = !isCanvasEditing && !isStreamingPreviewActive ? applyCanvasSearchHighlight(searchTerm) : 0;
+  const matchCount = !canvasState.isCanvasEditing && !isStreamingPreviewActive ? applyCanvasSearchHighlight(searchTerm) : 0;
   updateCanvasSearchFeedback(renderState, matchCount);
-  const copySourceText = isCanvasEditing && canvasEditorEl ? canvasEditorEl.value : displayDocument.content;
+  const copySourceText = canvasState.isCanvasEditing && canvasEditorEl ? canvasEditorEl.value : displayDocument.content;
   syncCanvasActionButtons({
     hasDocuments: documents.length > 0,
     hasActiveDocument: Boolean(activeDocument),
-    isEditing: isCanvasEditing,
+    isEditing: canvasState.isCanvasEditing,
     isStreamingPreviewActive,
     isPanelOpen: isCanvasPanelOpen,
     canEditDocument: isCanvasDocumentEditable(displayDocument),
@@ -4484,7 +4431,7 @@ function renderCanvasPreviewFrame() {
 
   flushStreamingCanvasPreviewDeltas();
   const renderState = buildCanvasRenderState();
-  if (!renderState.documents.length || !renderState.activeDocument || isCanvasEditing || !renderState.isStreamingPreviewActive) {
+  if (!renderState.documents.length || !renderState.activeDocument || canvasState.isCanvasEditing || !renderState.isStreamingPreviewActive) {
     renderCanvasPanel();
     return;
   }
@@ -4513,8 +4460,8 @@ function renderCanvasPreviewFrame() {
 }
 
 function consumePendingDocumentCanvasOpen() {
-  const pendingRequest = pendingDocumentCanvasOpen;
-  pendingDocumentCanvasOpen = null;
+  const pendingRequest = attachmentState.pendingDocumentCanvasOpen;
+  attachmentState.pendingDocumentCanvasOpen = null;
   return pendingRequest;
 }
 
@@ -4527,8 +4474,8 @@ function closeCanvasConfirmModal(action = "cancel", executeHandler = true) {
     return;
   }
 
-  const pendingAction = pendingCanvasConfirmAction;
-  pendingCanvasConfirmAction = null;
+  const pendingAction = uiState.pendingCanvasConfirmAction;
+  uiState.pendingCanvasConfirmAction = null;
   canvasConfirmModal.classList.remove("open");
   canvasConfirmOverlay?.classList.remove("open");
   canvasConfirmModal.setAttribute("aria-hidden", "true");
@@ -4539,8 +4486,8 @@ function closeCanvasConfirmModal(action = "cancel", executeHandler = true) {
     canvasConfirmLaterBtn.textContent = DEFAULT_CANVAS_CONFIRM_CANCEL_LABEL;
   }
 
-  if (lastCanvasConfirmTriggerEl && typeof lastCanvasConfirmTriggerEl.focus === "function") {
-    lastCanvasConfirmTriggerEl.focus();
+  if (canvasState.lastCanvasConfirmTriggerEl && typeof canvasState.lastCanvasConfirmTriggerEl.focus === "function") {
+    canvasState.lastCanvasConfirmTriggerEl.focus();
   }
 
   if (!executeHandler || !pendingAction) {
@@ -4573,8 +4520,8 @@ function openCanvasConfirmModal(options = {}) {
   closeMobileTools();
   closeExportPanel();
   closeStats();
-  lastCanvasConfirmTriggerEl = document.activeElement instanceof HTMLElement ? document.activeElement : attachBtn;
-  pendingCanvasConfirmAction = {
+  canvasState.lastCanvasConfirmTriggerEl = document.activeElement instanceof HTMLElement ? document.activeElement : attachBtn;
+  uiState.pendingCanvasConfirmAction = {
     onConfirm: typeof options.onConfirm === "function" ? options.onConfirm : null,
     onCancel: typeof options.onCancel === "function" ? options.onCancel : null,
     onDismiss: typeof options.onDismiss === "function"
@@ -4694,9 +4641,9 @@ function promptDocumentCanvasAction(files) {
 }
 
 function setCanvasAttention(enabled) {
-  canvasHasUnreadUpdates = Boolean(enabled);
+  canvasState.canvasHasUnreadUpdates = Boolean(enabled);
   if (canvasBtnIndicator) {
-    canvasBtnIndicator.hidden = !canvasHasUnreadUpdates;
+    canvasBtnIndicator.hidden = !canvasState.canvasHasUnreadUpdates;
   }
 }
 
@@ -4712,8 +4659,8 @@ function updateExportPanel() {
   if (!exportSubtitle) {
     return;
   }
-  exportSubtitle.textContent = currentConvId
-    ? `Current conversation: ${getCurrentConversationDisplayTitle() || `Chat #${currentConvId}`}`
+  exportSubtitle.textContent = chatState.currentConvId
+    ? `Current conversation: ${getCurrentConversationDisplayTitle() || `Chat #${chatState.currentConvId}`}`
     : "Open or create a conversation before exporting.";
 }
 
@@ -4738,16 +4685,16 @@ function syncCanvasTreeToggleButton() {
   }
   const isAvailable = canToggleCanvasTreeOnMobile();
   if (!isAvailable) {
-    isCanvasMobileTreeOpen = false;
+    uiState.isCanvasMobileTreeOpen = false;
     canvasPanel?.classList.remove("canvas-panel--tree-open");
   }
   canvasTreeToggleBtn.hidden = !isAvailable;
-  canvasTreeToggleBtn.setAttribute("aria-expanded", isAvailable && isCanvasMobileTreeOpen ? "true" : "false");
-  canvasTreeToggleBtn.textContent = isAvailable && isCanvasMobileTreeOpen ? "Hide files" : "Files";
+  canvasTreeToggleBtn.setAttribute("aria-expanded", isAvailable && uiState.isCanvasMobileTreeOpen ? "true" : "false");
+  canvasTreeToggleBtn.textContent = isAvailable && uiState.isCanvasMobileTreeOpen ? "Hide files" : "Files";
 }
 
 function getCanvasZoomLevel() {
-  const boundedIndex = Math.max(0, Math.min(CANVAS_ZOOM_LEVELS.length - 1, canvasZoomLevelIndex));
+  const boundedIndex = Math.max(0, Math.min(CANVAS_ZOOM_LEVELS.length - 1, uiState.canvasZoomLevelIndex));
   return CANVAS_ZOOM_LEVELS[boundedIndex] || 1;
 }
 
@@ -4756,7 +4703,7 @@ function applyCanvasViewportPreferences() {
     return;
   }
   canvasPanel.style.setProperty("--canvas-doc-zoom", String(getCanvasZoomLevel()));
-  canvasPanel.classList.toggle("canvas-panel--fullscreen", Boolean(isCanvasFullscreen));
+  canvasPanel.classList.toggle("canvas-panel--fullscreen", Boolean(uiState.isCanvasFullscreen));
 }
 
 function syncCanvasViewportControls() {
@@ -4778,45 +4725,45 @@ function syncCanvasViewportControls() {
   });
 
   if (canvasZoomOutBtn) {
-    canvasZoomOutBtn.disabled = !showViewportControls || canvasZoomLevelIndex <= 0;
+    canvasZoomOutBtn.disabled = !showViewportControls || uiState.canvasZoomLevelIndex <= 0;
     canvasZoomOutBtn.title = `Zoom out (${zoomPercent}%)`;
   }
   if (canvasZoomInBtn) {
-    canvasZoomInBtn.disabled = !showViewportControls || canvasZoomLevelIndex >= CANVAS_ZOOM_LEVELS.length - 1;
+    canvasZoomInBtn.disabled = !showViewportControls || uiState.canvasZoomLevelIndex >= CANVAS_ZOOM_LEVELS.length - 1;
     canvasZoomInBtn.title = `Zoom in (${zoomPercent}%)`;
   }
   if (canvasFullscreenToggleBtn) {
-    canvasFullscreenToggleBtn.setAttribute("aria-pressed", isCanvasFullscreen ? "true" : "false");
-    canvasFullscreenToggleBtn.setAttribute("data-icon", isCanvasFullscreen ? "⤡" : "⤢");
-    canvasFullscreenToggleBtn.textContent = isCanvasFullscreen ? "Exit full screen" : "Full screen";
-    canvasFullscreenToggleBtn.title = isCanvasFullscreen ? "Exit full screen" : "Full screen";
+    canvasFullscreenToggleBtn.setAttribute("aria-pressed", uiState.isCanvasFullscreen ? "true" : "false");
+    canvasFullscreenToggleBtn.setAttribute("data-icon", uiState.isCanvasFullscreen ? "⤡" : "⤢");
+    canvasFullscreenToggleBtn.textContent = uiState.isCanvasFullscreen ? "Exit full screen" : "Full screen";
+    canvasFullscreenToggleBtn.title = uiState.isCanvasFullscreen ? "Exit full screen" : "Full screen";
   }
 }
 
 function setCanvasZoomLevelIndex(nextIndex) {
   const boundedIndex = Math.max(0, Math.min(CANVAS_ZOOM_LEVELS.length - 1, Number(nextIndex) || 0));
-  if (boundedIndex === canvasZoomLevelIndex) {
+  if (boundedIndex === uiState.canvasZoomLevelIndex) {
     syncCanvasViewportControls();
     return;
   }
-  canvasZoomLevelIndex = boundedIndex;
+  uiState.canvasZoomLevelIndex = boundedIndex;
   syncCanvasViewportControls();
 }
 
 function toggleCanvasFullscreen(force = null) {
-  const nextValue = force === null ? !isCanvasFullscreen : Boolean(force);
-  if (nextValue === isCanvasFullscreen) {
+  const nextValue = force === null ? !uiState.isCanvasFullscreen : Boolean(force);
+  if (nextValue === uiState.isCanvasFullscreen) {
     syncCanvasViewportControls();
     return;
   }
-  isCanvasFullscreen = nextValue;
+  uiState.isCanvasFullscreen = nextValue;
   syncCanvasViewportControls();
   requestCanvasPanelRender({ deferForStreaming: false });
 }
 
 function setCanvasMobileTreeOpen(isOpen) {
   const shouldOpen = Boolean(canToggleCanvasTreeOnMobile() && isOpen);
-  isCanvasMobileTreeOpen = shouldOpen;
+  uiState.isCanvasMobileTreeOpen = shouldOpen;
   canvasPanel?.classList.toggle("canvas-panel--tree-open", shouldOpen);
   syncCanvasTreeToggleButton();
 }
@@ -4958,7 +4905,7 @@ function openCanvas(triggerEl = null, options = {}) {
   canvasOverlay?.classList.add("open");
   canvasPanel?.setAttribute("aria-hidden", "false");
   syncCanvasToggleButton();
-  lastCanvasTriggerEl = triggerEl instanceof HTMLElement
+  canvasState.lastCanvasTriggerEl = triggerEl instanceof HTMLElement
     ? triggerEl
     : (document.activeElement instanceof HTMLElement ? document.activeElement : mobileToolsBtn);
   setCanvasAttention(false);
@@ -4974,13 +4921,13 @@ function openCanvas(triggerEl = null, options = {}) {
 
 function closeCanvas() {
   clearCanvasEditingPreviewRender();
-  isCanvasEditing = false;
-  editingCanvasDocumentId = null;
+  canvasState.isCanvasEditing = false;
+  canvasState.editingCanvasDocumentId = null;
   canvasWorkspaceMain?.classList.remove("canvas-workspace-main--editing");
   canvasEditorEl?.classList.remove("canvas-editor--editing");
   canvasDocumentEl?.classList.remove("canvas-document--editing-preview");
   setCanvasMobileTreeOpen(false);
-  isCanvasFullscreen = false;
+  uiState.isCanvasFullscreen = false;
   canvasPanel?.classList.remove("open");
   canvasOverlay?.classList.remove("open");
   canvasPanel?.setAttribute("aria-hidden", "true");
@@ -4990,8 +4937,8 @@ function closeCanvas() {
   if (canvasCopyBtn) {
     canvasCopyBtn.hidden = true;
   }
-  if (lastCanvasTriggerEl && typeof lastCanvasTriggerEl.focus === "function") {
-    lastCanvasTriggerEl.focus();
+  if (canvasState.lastCanvasTriggerEl && typeof canvasState.lastCanvasTriggerEl.focus === "function") {
+    canvasState.lastCanvasTriggerEl.focus();
   }
 }
 
@@ -5098,7 +5045,7 @@ function toggleCanvasOverflowMenu(options = {}) {
     closeCanvasOverflowMenu();
     return;
   }
-  if (isCanvasMobileTreeOpen) {
+  if (uiState.isCanvasMobileTreeOpen) {
     setCanvasMobileTreeOpen(false);
   }
   openCanvasOverflowMenu(options);
@@ -5148,21 +5095,21 @@ function sortHistoryMessagesByPosition(entries = []) {
   });
 }
 
-function getSelectionSetForMode(mode = messageSelectionMode) {
+function getSelectionSetForMode(mode = uiState.messageSelectionMode) {
   if (mode === "summary") {
-    return selectedSummaryMessageIds;
+    return uiState.selectedSummaryMessageIds;
   }
   return null;
 }
 
-function getSelectableMessagesForMode(mode, entries = history) {
+function getSelectableMessagesForMode(mode, entries = chatState.history) {
   if (mode === "summary") {
     return getSummaryEligibleMessages(entries);
   }
   return [];
 }
 
-function getSelectableMessageIdSet(mode, entries = history) {
+function getSelectableMessageIdSet(mode, entries = chatState.history) {
   return new Set(
     getSelectableMessagesForMode(mode, entries)
       .map((message) => Number(message?.id || 0))
@@ -5179,11 +5126,11 @@ function replaceSelectionSet(mode, messageIds) {
   );
 
   if (mode === "summary") {
-    selectedSummaryMessageIds = nextSet;
+    uiState.selectedSummaryMessageIds = nextSet;
   }
 }
 
-function isMessageSelectableForMode(message, mode = messageSelectionMode) {
+function isMessageSelectableForMode(message, mode = uiState.messageSelectionMode) {
   const messageId = Number(message?.id || 0);
   if (!Number.isInteger(messageId) || messageId <= 0) {
     return false;
@@ -5191,7 +5138,7 @@ function isMessageSelectableForMode(message, mode = messageSelectionMode) {
   return getSelectableMessageIdSet(mode).has(messageId);
 }
 
-function isMessageSelectedForMode(messageId, mode = messageSelectionMode) {
+function isMessageSelectedForMode(messageId, mode = uiState.messageSelectionMode) {
   const normalizedMessageId = Number(messageId);
   if (!Number.isInteger(normalizedMessageId) || normalizedMessageId <= 0) {
     return false;
@@ -5200,12 +5147,12 @@ function isMessageSelectedForMode(messageId, mode = messageSelectionMode) {
 }
 
 function syncChatSelectionClasses() {
-  const hasSelectionMode = Boolean(messageSelectionMode);
+  const hasSelectionMode = Boolean(uiState.messageSelectionMode);
   chatAreaEl?.classList.toggle("chat-area--selection-mode", hasSelectionMode);
   messagesEl?.classList.toggle("messages--selection-mode", hasSelectionMode);
   if (chatAreaEl) {
     if (hasSelectionMode) {
-      chatAreaEl.dataset.selectionMode = messageSelectionMode;
+      chatAreaEl.dataset.selectionMode = uiState.messageSelectionMode;
     } else {
       delete chatAreaEl.dataset.selectionMode;
     }
@@ -5218,12 +5165,12 @@ function renderHistorySelectionBar() {
     return;
   }
 
-  if (!messageSelectionMode || !currentConvId) {
+  if (!uiState.messageSelectionMode || !chatState.currentConvId) {
     historySelectionBar.hidden = true;
     return;
   }
 
-  const selectedCount = getSelectedMessageIds(messageSelectionMode).length;
+  const selectedCount = getSelectedMessageIds(uiState.messageSelectionMode).length;
   const modeLabel = "Summary selection";
   historySelectionLabel.textContent = selectedCount ? `${modeLabel} · ${fmt(selectedCount)}` : modeLabel;
   historySelectionDetail.textContent = selectedCount
@@ -5238,17 +5185,17 @@ function renderHistorySelectionBar() {
 
 function syncMessageSelectionMode({ render = false } = {}) {
   const nextMode = isSummaryPanelOpen() ? "summary" : null;
-  const changed = nextMode !== messageSelectionMode;
-  messageSelectionMode = nextMode;
+  const changed = nextMode !== uiState.messageSelectionMode;
+  uiState.messageSelectionMode = nextMode;
   renderHistorySelectionBar();
   if (render && changed) {
     renderConversationHistory({ preserveScroll: true });
   }
 }
 
-function clearMessageSelection(mode = messageSelectionMode, { render = true } = {}) {
+function clearMessageSelection(mode = uiState.messageSelectionMode, { render = true } = {}) {
   if (!mode) {
-    selectedSummaryMessageIds = new Set();
+    uiState.selectedSummaryMessageIds = new Set();
   } else {
     replaceSelectionSet(mode, []);
   }
@@ -5258,7 +5205,7 @@ function clearMessageSelection(mode = messageSelectionMode, { render = true } = 
   }
 }
 
-function toggleHistoryMessageSelection(messageId, mode = messageSelectionMode) {
+function toggleHistoryMessageSelection(messageId, mode = uiState.messageSelectionMode) {
   const normalizedMessageId = Number(messageId);
   if (!Number.isInteger(normalizedMessageId) || normalizedMessageId <= 0 || !mode) {
     return;
@@ -5278,7 +5225,7 @@ function toggleHistoryMessageSelection(messageId, mode = messageSelectionMode) {
   renderConversationHistory({ preserveScroll: true });
 }
 
-function getSelectedMessageIds(mode = messageSelectionMode) {
+function getSelectedMessageIds(mode = uiState.messageSelectionMode) {
   const selectedIds = Array.from(getSelectionSetForMode(mode) || []);
   return selectedIds
     .filter((messageId) => Number.isInteger(Number(messageId)) && Number(messageId) > 0)
@@ -5310,13 +5257,13 @@ function openSummaryPanel(triggerEl = null) {
   lastSummaryTriggerEl = triggerEl instanceof HTMLElement
     ? triggerEl
     : (document.activeElement instanceof HTMLElement ? document.activeElement : mobileSummaryBtn);
-  if (!isSummaryOperationInFlight) {
+  if (!summaryState.isSummaryOperationInFlight) {
     resetSummaryProgress({ hide: true });
   }
-  if (summaryPreviewConversationId !== currentConvId) {
+  if (summaryState.summaryPreviewConversationId !== chatState.currentConvId) {
     resetSummaryPreview();
   }
-  setSummaryBusyState(isSummaryOperationInFlight);
+  setSummaryBusyState(summaryState.isSummaryOperationInFlight);
   syncMessageSelectionMode({ render: true });
   void refreshSummarySettingsFromServer();
   if (summaryFocusInput) {
@@ -5336,7 +5283,7 @@ function closeSummaryPanel({ restoreFocus = true } = {}) {
 }
 
 async function runConversationSummary({ triggerButton = null, closePanel = false } = {}) {
-  if (!currentConvId) {
+  if (!chatState.currentConvId) {
     showToast("No active conversation to summarize.", "warning");
     return;
   }
@@ -5352,7 +5299,7 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
   }
 
   try {
-    const response = await fetch(`/api/conversations/${currentConvId}/summarize`, {
+    const response = await fetch(`/api/conversations/${chatState.currentConvId}/summarize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
@@ -5363,7 +5310,7 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
     }
     if (data.applied) {
       if (Array.isArray(data.messages)) {
-        history = data.messages.map(normalizeHistoryEntry);
+        chatState.history = data.messages.map(normalizeHistoryEntry);
         rebuildTokenStatsFromHistory();
         renderConversationHistory();
       }
@@ -5380,11 +5327,11 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
           : "Summary completed.",
         "success"
       );
-      latestSummaryStatus = { applied: true, reason: "applied", failure_stage: null, failure_detail: "Manual summary completed." };
+      summaryState.latestSummaryStatus = { applied: true, reason: "applied", failure_stage: null, failure_detail: "Manual summary completed." };
     } else {
       failSummaryProgress(data.failure_detail || data.reason || "Summary was not applied.");
       showToast(data.failure_detail || data.reason || "Summary was not applied.", "warning");
-      latestSummaryStatus = { applied: false, reason: data.reason, failure_detail: data.failure_detail };
+      summaryState.latestSummaryStatus = { applied: false, reason: data.reason, failure_detail: data.failure_detail };
     }
   } catch (error) {
     failSummaryProgress(error.message || "Failed to summarize.");
@@ -5402,7 +5349,7 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
 }
 
 async function downloadConversation(format) {
-  if (!currentConvId) {
+  if (!chatState.currentConvId) {
     setExportStatus("Conversation is not available yet.", "warning");
     return;
   }
@@ -5410,7 +5357,7 @@ async function downloadConversation(format) {
   setExportStatus(`Preparing ${format.toUpperCase()} export…`, "muted");
   try {
     const reasoningByMessageId = collectConversationReasoningExportMap();
-    const response = await fetch(`/api/conversations/${currentConvId}/export?format=${encodeURIComponent(format)}`, {
+    const response = await fetch(`/api/conversations/${chatState.currentConvId}/export?format=${encodeURIComponent(format)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reasoning_by_message_id: reasoningByMessageId }),
@@ -5424,7 +5371,7 @@ async function downloadConversation(format) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = getSuggestedDownloadFilename(response, `${currentConvTitle || "conversation"}.${format}`);
+    anchor.download = getSuggestedDownloadFilename(response, `${chatState.currentConvTitle || "conversation"}.${format}`);
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
@@ -5451,7 +5398,7 @@ function getSuggestedDownloadFilename(response, fallbackFilename) {
   }
 }
 
-function collectConversationReasoningExportMap(entries = history, conversationId = currentConvId) {
+function collectConversationReasoningExportMap(entries = chatState.history, conversationId = chatState.currentConvId) {
   const reasoningByMessageId = {};
   getVisibleHistoryEntries(entries).forEach((message) => {
     if (!message || message.role !== "assistant" || !isPersistedMessageId(message.id)) {
@@ -5470,14 +5417,14 @@ function collectConversationReasoningExportMap(entries = history, conversationId
 
 async function downloadCanvasDocument(format) {
   const canvasDocument = getActiveCanvasDocument();
-  if (!canvasDocument || !currentConvId) {
+  if (!canvasDocument || !chatState.currentConvId) {
     setCanvasStatus("Canvas document is not available yet.", "warning");
     return;
   }
 
   setCanvasStatus(`Preparing ${format.toUpperCase()} download…`, "muted");
   try {
-    const response = await fetch(`/api/conversations/${currentConvId}/canvas/export?format=${encodeURIComponent(format)}&document_id=${encodeURIComponent(canvasDocument.id)}`, {
+    const response = await fetch(`/api/conversations/${chatState.currentConvId}/canvas/export?format=${encodeURIComponent(format)}&document_id=${encodeURIComponent(canvasDocument.id)}`, {
       cache: "no-store",
     });
     if (!response.ok) {
@@ -5501,7 +5448,7 @@ async function downloadCanvasDocument(format) {
 }
 
 async function deleteCanvasDocuments({ documentId = null, clearAll = false, confirmed = false } = {}) {
-  if (!currentConvId) {
+  if (!chatState.currentConvId) {
     setCanvasStatus("Canvas is not available yet.", "warning");
     return;
   }
@@ -5543,7 +5490,7 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
     }
 
     const query = params.toString();
-    const response = await fetch(`/api/conversations/${currentConvId}/canvas${query ? `?${query}` : ""}`, {
+    const response = await fetch(`/api/conversations/${chatState.currentConvId}/canvas${query ? `?${query}` : ""}`, {
       method: "DELETE",
     });
     const payload = await response.json().catch(() => ({}));
@@ -5558,7 +5505,7 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
       activeCanvasDocumentId: payload => (
         payload.cleared
           ? null
-          : String(payload?.active_document_id || getActiveCanvasDocument(history)?.id || "").trim() || null
+          : String(payload?.active_document_id || getActiveCanvasDocument(chatState.history)?.id || "").trim() || null
       ),
     },
     onSuccess: (payload) => {
@@ -5575,7 +5522,7 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
 
 async function renameCanvasDocument() {
   const activeDocument = getActiveCanvasDocument();
-  if (!currentConvId || !activeDocument) {
+  if (!chatState.currentConvId || !activeDocument) {
     setCanvasStatus("No canvas document to rename.", "warning");
     return;
   }
@@ -5589,7 +5536,7 @@ async function renameCanvasDocument() {
   }
 
   return withCanvasMutation("rename", async () => {
-    const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
+    const response = await fetch(`/api/conversations/${chatState.currentConvId}/canvas`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ document_id: activeDocument.id, title: nextTitle }),
@@ -5603,7 +5550,7 @@ async function renameCanvasDocument() {
     statusMessage: "Renaming...",
     stateOverrides: {
       // Use activeDocument.id as fallback (different from other operations)
-      activeCanvasDocumentId: payload => String(payload?.active_document_id || activeDocument.id || "").trim() || activeCanvasDocumentId,
+      activeCanvasDocumentId: payload => String(payload?.active_document_id || activeDocument.id || "").trim() || canvasState.activeCanvasDocumentId,
     },
     onSuccess: () => {
       renderConversationHistory({ preserveScroll: true });
@@ -5614,7 +5561,7 @@ async function renameCanvasDocument() {
 
 async function saveCanvasEdits() {
   const activeDocument = getActiveCanvasDocument();
-  if (!currentConvId || !activeDocument || !canvasEditorEl) {
+  if (!chatState.currentConvId || !activeDocument || !canvasEditorEl) {
     setCanvasStatus("Canvas document is not available yet.", "warning");
     return;
   }
@@ -5627,7 +5574,7 @@ async function saveCanvasEdits() {
   cancelPendingConversationRefreshes();
 
   return withCanvasMutation("save", async () => {
-    const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
+    const response = await fetch(`/api/conversations/${chatState.currentConvId}/canvas`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
@@ -5750,7 +5697,7 @@ const INPUT_BREAKDOWN_LABELS = {
   rag_context: "RAG context",
   internal_state: "Agent working state",
   user_messages: "User messages",
-  assistant_history: "Assistant history",
+  assistant_history: "Assistant chatState.history",
   assistant_tool_calls: "Assistant tool calls",
   tool_results: "Tool results",
   unknown_provider_overhead: "Unknown/Provider overhead",
@@ -6352,7 +6299,7 @@ function normalizeHistoryEntry(entry) {
   };
 }
 
-function buildRequestMessagesFromHistory(entries = history) {
+function buildRequestMessagesFromHistory(entries = chatState.history) {
   return getVisibleHistoryEntries(entries).map((item) => ({
     role: item.role,
     content: item.content,
@@ -6376,11 +6323,11 @@ function isRenderableHistoryEntry(message) {
   return message.role === "user" || message.role === "assistant" || message.role === "summary";
 }
 
-function getVisibleHistoryEntries(entries = history) {
+function getVisibleHistoryEntries(entries = chatState.history) {
   return entries.filter(isRenderableHistoryEntry);
 }
 
-function getConversationSignature(entries = history) {
+function getConversationSignature(entries = chatState.history) {
   return getVisibleHistoryEntries(entries)
     .map((message) => {
       const metadata = message.metadata ? JSON.stringify(message.metadata) : "";
@@ -6578,7 +6525,7 @@ function getPendingClarification(metadata) {
   };
 }
 
-function findLatestPendingClarificationMessageId(entries = history) {
+function findLatestPendingClarificationMessageId(entries = chatState.history) {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const message = entries[index];
     if (!message || message.role !== "assistant") {
@@ -6656,7 +6603,7 @@ function updateClarificationFieldVisibility(form, clarification) {
 }
 
 function getClarificationDraftStorageKey(messageId) {
-  const normalizedConvId = Number.isInteger(Number(currentConvId)) ? String(Number(currentConvId)) : "conversation";
+  const normalizedConvId = Number.isInteger(Number(chatState.currentConvId)) ? String(Number(chatState.currentConvId)) : "conversation";
   const normalizedMessageId = Number.isInteger(Number(messageId)) ? String(Number(messageId)) : "message";
   return `${CLARIFICATION_DRAFT_STORAGE_PREFIX}.${normalizedConvId}.${normalizedMessageId}`;
 }
@@ -6843,7 +6790,7 @@ function collectClarificationAnswers(form, clarification) {
 function shouldGenerateConversationTitle() {
   const visibleEntries = getVisibleHistoryEntries();
   return Boolean(
-    currentConvId &&
+    chatState.currentConvId &&
     visibleEntries.length === 2 &&
     visibleEntries[0]?.role === "user" &&
     visibleEntries[1]?.role === "assistant" &&
@@ -6891,7 +6838,7 @@ function getHistoryMessageIndex(messageId) {
   if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
     return -1;
   }
-  return history.findIndex((item) => Number(item.id) === normalizedId);
+  return chatState.history.findIndex((item) => Number(item.id) === normalizedId);
 }
 
 function isPersistedMessageId(messageId) {
@@ -6901,7 +6848,7 @@ function isPersistedMessageId(messageId) {
 
 function getHistoryMessage(messageId) {
   const index = getHistoryMessageIndex(messageId);
-  return index >= 0 ? history[index] : null;
+  return index >= 0 ? chatState.history[index] : null;
 }
 
 function isPrunableHistoryMessage(message) {
@@ -6978,7 +6925,7 @@ function focusInlineEditor(messageId) {
 }
 
 function beginInlineEditingMessage(messageId) {
-  if (isStreaming || isFixing) {
+  if (chatState.isStreaming || chatState.isFixing) {
     return;
   }
 
@@ -7017,7 +6964,7 @@ function cancelInlineEditingMessage({ focusAction = false } = {}) {
 }
 
 async function saveEditedHistoryMessage(messageId, nextContent, options = {}) {
-  if (isStreaming || isFixing) {
+  if (chatState.isStreaming || chatState.isFixing) {
     return;
   }
 
@@ -7066,7 +7013,7 @@ async function saveEditedHistoryMessage(messageId, nextContent, options = {}) {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          conversation_id: currentConvId,
+          conversation_id: chatState.currentConvId,
           content: storedContent,
           ...(message.role === "user" ? { metadata: updatedUserMetadata } : {}),
         }),
@@ -7079,7 +7026,7 @@ async function saveEditedHistoryMessage(messageId, nextContent, options = {}) {
       const updatedMessage = data?.message ? normalizeHistoryEntry(data.message) : null;
       const index = getHistoryMessageIndex(messageId);
       if (updatedMessage && index >= 0) {
-        history[index] = updatedMessage;
+        chatState.history[index] = updatedMessage;
       }
     }
 
@@ -7121,7 +7068,7 @@ function refreshEditBanner() {
 }
 
 function beginEditingMessage(messageId) {
-  if (isStreaming || isFixing) {
+  if (chatState.isStreaming || chatState.isFixing) {
     return;
   }
 
@@ -7190,7 +7137,7 @@ function createMessageActions(message, options = {}) {
         }
         openDeleteMessageConfirm(messageId);
       },
-      disabled: !isPersistedMessageId(messageId) || isDeletingThisMessage || isStreaming || isFixing,
+      disabled: !isPersistedMessageId(messageId) || isDeletingThisMessage || chatState.isStreaming || chatState.isFixing,
     });
     deleteButton.classList.add("msg-action-btn--danger");
     actions.appendChild(deleteButton);
@@ -7314,7 +7261,7 @@ function clearPendingDeleteMessage(options = {}) {
 }
 
 function openDeleteMessageConfirm(messageId) {
-  if (isStreaming || isFixing) {
+  if (chatState.isStreaming || chatState.isFixing) {
     return;
   }
   pendingDeleteMessageId = Number(messageId);
@@ -7323,7 +7270,7 @@ function openDeleteMessageConfirm(messageId) {
 
 async function deleteConversationMessage(messageId) {
   const normalizedMessageId = Number(messageId);
-  if (!isPersistedMessageId(normalizedMessageId) || !currentConvId) {
+  if (!isPersistedMessageId(normalizedMessageId) || !chatState.currentConvId) {
     showToast("Message could not be deleted.", "error");
     return;
   }
@@ -7337,7 +7284,7 @@ async function deleteConversationMessage(messageId) {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       signal: activeDeleteMessageAbortController.signal,
-      body: JSON.stringify({ conversation_id: currentConvId }),
+      body: JSON.stringify({ conversation_id: chatState.currentConvId }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -7351,9 +7298,9 @@ async function deleteConversationMessage(messageId) {
       cancelInlineEditingMessage({ focusAction: false });
     }
 
-    history = Array.isArray(payload.messages)
+    chatState.history = Array.isArray(payload.messages)
       ? payload.messages.map(normalizeHistoryEntry)
-      : history.filter((item) => Number(item.id) !== normalizedMessageId);
+      : chatState.history.filter((item) => Number(item.id) !== normalizedMessageId);
     pendingDeleteMessageId = null;
     deletingMessageId = null;
     activeDeleteMessageAbortController = null;
@@ -7490,7 +7437,7 @@ function getPreviousUserMessage(messageId) {
   }
 
   for (let candidateIndex = index - 1; candidateIndex >= 0; candidateIndex -= 1) {
-    const candidate = history[candidateIndex];
+    const candidate = chatState.history[candidateIndex];
     if (candidate && candidate.role === "user") {
       return candidate;
     }
@@ -7518,7 +7465,7 @@ async function copyUserMessageContent(message) {
 }
 
 async function regenerateAssistantMessage(messageId) {
-  if (isStreaming || isFixing) {
+  if (chatState.isStreaming || chatState.isFixing) {
     return;
   }
 
@@ -7718,10 +7665,10 @@ function renderConversationHistory(options = {}) {
     : 0;
 
   // Build a signature to detect if content actually changed
-  const currentSignature = getConversationSignature(history);
+  const currentSignature = getConversationSignature(chatState.history);
 
   // Check if UI state changed (including transitions TO or FROM active states)
-  const currentUiState = { editingMessageId, inlineEditingMessageId, messageSelectionMode };
+  const currentUiState = { editingMessageId, inlineEditingMessageId, messageSelectionMode: uiState.messageSelectionMode };
   const uiStateChanged =
     lastRenderedUiState.editingMessageId !== currentUiState.editingMessageId ||
     lastRenderedUiState.inlineEditingMessageId !== currentUiState.inlineEditingMessageId ||
@@ -7746,7 +7693,7 @@ function renderConversationHistory(options = {}) {
   const fragment = document.createDocumentFragment();
   fragment.appendChild(emptyState);
 
-  if (!history.length) {
+  if (!chatState.history.length) {
     emptyState.style.display = "";
     messagesEl.replaceChildren(fragment);
     scrollToBottom();
@@ -7757,7 +7704,7 @@ function renderConversationHistory(options = {}) {
 
   emptyState.style.display = "none";
   const visibleEntries = getVisibleHistoryEntries();
-  const selectionModeForRender = messageSelectionMode;
+  const selectionModeForRender = uiState.messageSelectionMode;
   const selectableMessageIdSetForRender = selectionModeForRender ? getSelectableMessageIdSet(selectionModeForRender) : null;
 
   // Build a map of existing message elements for potential reuse
@@ -7824,42 +7771,42 @@ function renderConversationHistory(options = {}) {
 }
 
 async function refreshConversationFromServer() {
-  if (!currentConvId) {
+  if (!chatState.currentConvId) {
     return false;
   }
 
-  const response = await fetch(`/api/conversations/${currentConvId}`);
+  const response = await fetch(`/api/conversations/${chatState.currentConvId}`);
   if (!response.ok) {
     return false;
   }
 
   const data = await response.json().catch(() => null);
-  if (!data || Number(data.conversation?.id) !== Number(currentConvId)) {
+  if (!data || Number(data.conversation?.id) !== Number(chatState.currentConvId)) {
     return false;
   }
 
   const serverHistory = Array.isArray(data.messages) ? data.messages.map(normalizeHistoryEntry) : [];
   const serverSignature = getConversationSignature(serverHistory);
   const serverMemorySignature = getConversationMemorySignature(data.memory || []);
-  const messagesChanged = serverSignature !== lastConversationSignature;
-  const memoryChanged = serverMemorySignature !== lastConversationMemorySignature;
+  const messagesChanged = serverSignature !== uiState.lastConversationSignature;
+  const memoryChanged = serverMemorySignature !== uiState.lastConversationMemorySignature;
 
   if (!messagesChanged && !memoryChanged) {
     return false;
   }
 
   if (messagesChanged) {
-    history = serverHistory;
-    currentConvTitle = String(data.conversation?.title || currentConvTitle || "New Chat").trim() || "New Chat";
-    currentConversationTitleSource = String(data.conversation?.title_source || currentConversationTitleSource || "system").trim().toLowerCase() || "system";
-    currentConversationTitleOverridden = data.conversation?.title_overridden === true || Number(data.conversation?.title_overridden || 0) === 1;
-    currentConversationPersonaName = resolveConversationPersonaName(data.conversation?.persona_id, data.conversation?.persona?.name || "");
-    latestSummaryStatus = null;
+    chatState.history = serverHistory;
+    chatState.currentConvTitle = String(data.conversation?.title || chatState.currentConvTitle || "New Chat").trim() || "New Chat";
+    chatState.currentConversationTitleSource = String(data.conversation?.title_source || chatState.currentConversationTitleSource || "system").trim().toLowerCase() || "system";
+    chatState.currentConversationTitleOverridden = data.conversation?.title_overridden === true || Number(data.conversation?.title_overridden || 0) === 1;
+    chatState.currentConversationPersonaName = resolveConversationPersonaName(data.conversation?.persona_id, data.conversation?.persona?.name || "");
+    summaryState.latestSummaryStatus = null;
     clearPendingDeleteMessage({ render: false });
-    streamingCanvasDocuments = [];
+    canvasState.streamingCanvasDocuments = [];
     resetStreamingCanvasPreview();
-    activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
-    lastConversationSignature = serverSignature;
+    canvasState.activeCanvasDocumentId = getActiveCanvasDocument(chatState.history)?.id || null;
+    uiState.lastConversationSignature = serverSignature;
     renderConversationHistory({ preserveScroll: true });
     renderCanvasPanel();
     updateExportPanel();
@@ -7877,44 +7824,44 @@ async function refreshConversationFromServer() {
 }
 
 function scheduleConversationRefreshAfterStream() {
-  if (!currentConvId) {
+  if (!chatState.currentConvId) {
     return;
   }
 
-  const refreshGeneration = ++conversationRefreshGeneration;
-  pendingConversationRefreshTimers.forEach((timerId) => window.clearTimeout(timerId));
-  pendingConversationRefreshTimers.clear();
+  const refreshGeneration = ++uiState.conversationRefreshGeneration;
+  uiState.pendingConversationRefreshTimers.forEach((timerId) => window.clearTimeout(timerId));
+  uiState.pendingConversationRefreshTimers.clear();
 
   [800, 2000, 5000, 10000].forEach((delay) => {
     const timerId = window.setTimeout(async () => {
-      pendingConversationRefreshTimers.delete(timerId);
-      if (refreshGeneration !== conversationRefreshGeneration || !currentConvId || isStreaming || isFixing) {
+      uiState.pendingConversationRefreshTimers.delete(timerId);
+      if (refreshGeneration !== uiState.conversationRefreshGeneration || !chatState.currentConvId || chatState.isStreaming || chatState.isFixing) {
         return;
       }
 
       try {
         const refreshed = await refreshConversationFromServer();
         if (refreshed) {
-          pendingConversationRefreshTimers.forEach((pendingTimerId) => window.clearTimeout(pendingTimerId));
-          pendingConversationRefreshTimers.clear();
+          uiState.pendingConversationRefreshTimers.forEach((pendingTimerId) => window.clearTimeout(pendingTimerId));
+          uiState.pendingConversationRefreshTimers.clear();
         }
       } catch (_) {
         // Ignore transient refresh errors and keep polling.
       }
     }, delay);
-    pendingConversationRefreshTimers.add(timerId);
+    uiState.pendingConversationRefreshTimers.add(timerId);
   });
 }
 
 function cancelPendingConversationRefreshes() {
-  conversationRefreshGeneration += 1;
-  pendingConversationRefreshTimers.forEach((timerId) => window.clearTimeout(timerId));
-  pendingConversationRefreshTimers.clear();
+  uiState.conversationRefreshGeneration += 1;
+  uiState.pendingConversationRefreshTimers.forEach((timerId) => window.clearTimeout(timerId));
+  uiState.pendingConversationRefreshTimers.clear();
 }
 
 function rebuildTokenStatsFromHistory() {
   resetTokenStats();
-  history.forEach((message) => {
+  chatState.history.forEach((message) => {
     if (message.role === "assistant" && message.usage) {
       updateStats(message.usage);
     }
@@ -7973,8 +7920,8 @@ function createAssistantStreamingGroup() {
   asstBubble.hidden = true;
   renderAssistantLoadingBubble(asstBubble);
 
-  activeAssistantStreamingBubble = asstBubble;
-  activeAssistantStreamingHasVisibleAnswer = false;
+  chatState.activeAssistantStreamingBubble = asstBubble;
+  chatState.activeAssistantStreamingHasVisibleAnswer = false;
 
   asstGroup.appendChild(metaRow);
   asstGroup.appendChild(stepLog);
@@ -7986,18 +7933,18 @@ function createAssistantStreamingGroup() {
 }
 
 function clearEmptyAssistantStreamingBubble() {
-  if (!activeAssistantStreamingBubble || activeAssistantStreamingHasVisibleAnswer) {
+  if (!chatState.activeAssistantStreamingBubble || chatState.activeAssistantStreamingHasVisibleAnswer) {
     return false;
   }
 
-  activeAssistantStreamingBubble.remove();
-  activeAssistantStreamingBubble = null;
+  chatState.activeAssistantStreamingBubble.remove();
+  chatState.activeAssistantStreamingBubble = null;
   return true;
 }
 
 function resetAssistantStreamingBubbleState() {
-  activeAssistantStreamingBubble = null;
-  activeAssistantStreamingHasVisibleAnswer = false;
+  chatState.activeAssistantStreamingBubble = null;
+  chatState.activeAssistantStreamingHasVisibleAnswer = false;
 }
 
 function shouldAutoCollapseReasoning() {
@@ -8027,9 +7974,9 @@ function applyPersistedMessageIds(persistedIds, assistantEntry) {
 
   const userId = Number(persistedIds.user_message_id);
   if (isPersistedMessageId(userId)) {
-    for (let index = history.length - 1; index >= 0; index -= 1) {
-      if (history[index].role === "user") {
-        history[index].id = userId;
+    for (let index = chatState.history.length - 1; index >= 0; index -= 1) {
+      if (chatState.history[index].role === "user") {
+        chatState.history[index].id = userId;
         break;
       }
     }
@@ -8038,7 +7985,7 @@ function applyPersistedMessageIds(persistedIds, assistantEntry) {
   const assistantId = Number(persistedIds.assistant_message_id);
   if (assistantEntry && isPersistedMessageId(assistantId)) {
     assistantEntry.id = assistantId;
-    saveAssistantReasoning(currentConvId, assistantId, assistantEntry?.metadata?.reasoning_content || "");
+    saveAssistantReasoning(chatState.currentConvId, assistantId, assistantEntry?.metadata?.reasoning_content || "");
   }
 }
 
@@ -8099,7 +8046,7 @@ function getEffectiveSummaryTriggerValue() {
   return baseTrigger;
 }
 
-function estimateSummaryTriggerTokens(entries = history) {
+function estimateSummaryTriggerTokens(entries = chatState.history) {
   return (entries || []).reduce((total, entry) => {
     const role = String(entry?.role || "").trim();
     if (!role) {
@@ -8178,7 +8125,7 @@ function describeSummaryFailure(status) {
 
 async function undoConversationSummary(summaryId, { triggerButton = null } = {}) {
   const normalizedSummaryId = Number(summaryId || 0);
-  if (!currentConvId || !normalizedSummaryId) {
+  if (!chatState.currentConvId || !normalizedSummaryId) {
     showToast("No summary is available to undo.", "warning");
     return;
   }
@@ -8192,7 +8139,7 @@ async function undoConversationSummary(summaryId, { triggerButton = null } = {})
   }
 
   try {
-    const response = await fetch(`/api/conversations/${currentConvId}/summaries/${normalizedSummaryId}/undo`, {
+    const response = await fetch(`/api/conversations/${chatState.currentConvId}/summaries/${normalizedSummaryId}/undo`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -8202,13 +8149,13 @@ async function undoConversationSummary(summaryId, { triggerButton = null } = {})
     }
 
     if (Array.isArray(data.messages)) {
-      history = data.messages.map(normalizeHistoryEntry);
+      chatState.history = data.messages.map(normalizeHistoryEntry);
       rebuildTokenStatsFromHistory();
       renderConversationHistory();
     }
     resetSummaryPreview();
 
-    latestSummaryStatus = {
+    summaryState.latestSummaryStatus = {
       applied: false,
       reason: "summary_undone",
       failure_stage: null,
@@ -8417,11 +8364,11 @@ function getConversationDisplayTitle(conversation) {
 
 function getCurrentConversationDisplayTitle() {
   return getConversationDisplayTitle({
-    title: currentConvTitle,
-    title_source: currentConversationTitleSource,
-    title_overridden: currentConversationTitleOverridden,
-    persona_id: currentConversationPersonaId,
-    persona_name: currentConversationPersonaName,
+    title: chatState.currentConvTitle,
+    title_source: chatState.currentConversationTitleSource,
+    title_overridden: chatState.currentConversationTitleOverridden,
+    persona_id: chatState.currentConversationPersonaId,
+    persona_name: chatState.currentConversationPersonaName,
   });
 }
 
@@ -8473,16 +8420,16 @@ function syncPersonaSelectors(value = "") {
 }
 
 function applyConversationPersonaSelection(personaId) {
-  currentConversationPersonaId = normalizePersonaId(personaId);
-  currentConversationPersonaName = resolveConversationPersonaName(currentConversationPersonaId, currentConversationPersonaName);
-  syncPersonaSelectors(currentConversationPersonaId);
+  chatState.currentConversationPersonaId = normalizePersonaId(personaId);
+  chatState.currentConversationPersonaName = resolveConversationPersonaName(chatState.currentConversationPersonaId, chatState.currentConversationPersonaName);
+  syncPersonaSelectors(chatState.currentConversationPersonaId);
 }
 
 async function persistConversationPersona(personaId) {
-  if (!currentConvId) {
+  if (!chatState.currentConvId) {
     return;
   }
-  const response = await fetch(`/api/conversations/${currentConvId}`, {
+  const response = await fetch(`/api/conversations/${chatState.currentConvId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ persona_id: normalizePersonaId(personaId) || null }),
@@ -8491,11 +8438,11 @@ async function persistConversationPersona(personaId) {
   if (!response.ok) {
     throw new Error(data.error || "Unable to update conversation persona.");
   }
-  currentConvTitle = String(data.title || currentConvTitle || "New Chat").trim() || "New Chat";
-  currentConversationTitleSource = String(data.title_source || currentConversationTitleSource || "system").trim().toLowerCase() || "system";
-  currentConversationTitleOverridden = data.title_overridden === true || Number(data.title_overridden || 0) === 1;
+  chatState.currentConvTitle = String(data.title || chatState.currentConvTitle || "New Chat").trim() || "New Chat";
+  chatState.currentConversationTitleSource = String(data.title_source || chatState.currentConversationTitleSource || "system").trim().toLowerCase() || "system";
+  chatState.currentConversationTitleOverridden = data.title_overridden === true || Number(data.title_overridden || 0) === 1;
   applyConversationPersonaSelection(data.persona_id);
-  currentConversationPersonaName = resolveConversationPersonaName(data.persona_id, "");
+  chatState.currentConversationPersonaName = resolveConversationPersonaName(data.persona_id, "");
   updateExportPanel();
   await loadSidebar();
 }
@@ -8568,12 +8515,12 @@ if (canvasOverlay) {
 }
 if (canvasZoomOutBtn) {
   canvasZoomOutBtn.addEventListener("click", () => {
-    setCanvasZoomLevelIndex(canvasZoomLevelIndex - 1);
+    setCanvasZoomLevelIndex(uiState.canvasZoomLevelIndex - 1);
   });
 }
 if (canvasZoomInBtn) {
   canvasZoomInBtn.addEventListener("click", () => {
-    setCanvasZoomLevelIndex(canvasZoomLevelIndex + 1);
+    setCanvasZoomLevelIndex(uiState.canvasZoomLevelIndex + 1);
   });
 }
 if (canvasFullscreenToggleBtn) {
@@ -8664,7 +8611,7 @@ if (conversationExportPdfBtn) {
 if (canvasCopyBtn) {
   canvasCopyBtn.addEventListener("click", async () => {
     closeCanvasOverflowMenu();
-    const document = getCanvasDocumentById(getCanvasRenderableDocuments(), activeCanvasDocumentId) || getActiveCanvasDocument();
+    const document = getCanvasDocumentById(getCanvasRenderableDocuments(), canvasState.activeCanvasDocumentId) || getActiveCanvasDocument();
     if (!document) {
       setCanvasStatus("Clipboard is not available.", "warning");
       return;
@@ -8683,7 +8630,7 @@ if (canvasCopyBtn) {
 }
 if (canvasCopyRefBtn) {
   canvasCopyRefBtn.addEventListener("click", async () => {
-    const document = getCanvasDocumentById(getCanvasRenderableDocuments(), activeCanvasDocumentId) || getActiveCanvasDocument();
+    const document = getCanvasDocumentById(getCanvasRenderableDocuments(), canvasState.activeCanvasDocumentId) || getActiveCanvasDocument();
     const reference = getCanvasDocumentLabel(document);
     if (!reference) {
       setCanvasStatus("Reference copy is not available.", "warning");
@@ -8768,7 +8715,7 @@ if (canvasOverflowMenu) {
 if (canvasTreeToggleBtn) {
   canvasTreeToggleBtn.addEventListener("click", () => {
     closeCanvasOverflowMenu();
-    setCanvasMobileTreeOpen(!isCanvasMobileTreeOpen);
+    setCanvasMobileTreeOpen(!uiState.isCanvasMobileTreeOpen);
   });
 }
 if (canvasSearchInput) {
@@ -8782,7 +8729,7 @@ if (canvasPathFilter) {
 }
 if (canvasFormatSelect) {
   canvasFormatSelect.addEventListener("change", () => {
-    if (isCanvasEditing) {
+    if (canvasState.isCanvasEditing) {
       scheduleCanvasEditingPreviewRender();
     }
   });
@@ -8848,13 +8795,13 @@ if (mobileSummaryBtn) {
 }
 
 async function handlePersonaSelectionChange(nextPersonaId) {
-  const previousPersonaId = currentConversationPersonaId;
+  const previousPersonaId = chatState.currentConversationPersonaId;
   applyConversationPersonaSelection(nextPersonaId);
-  if (!currentConvId) {
+  if (!chatState.currentConvId) {
     return;
   }
   try {
-    await persistConversationPersona(currentConversationPersonaId);
+    await persistConversationPersona(chatState.currentConversationPersonaId);
   } catch (error) {
     applyConversationPersonaSelection(previousPersonaId);
     showError(error.message || "Unable to update conversation persona.");
@@ -8891,8 +8838,8 @@ window.addEventListener("resize", () => {
   updateHeaderOffset();
   if (!isMobileViewport()) {
     closeMobileTools();
-    isCanvasFullscreen = false;
-    canvasZoomLevelIndex = 0;
+    uiState.isCanvasFullscreen = false;
+    uiState.canvasZoomLevelIndex = 0;
   }
   setCanvasMobileTreeOpen(false);
   closeCanvasOverflowMenu();
@@ -8944,11 +8891,11 @@ window.addEventListener("keydown", (event) => {
       return;
     }
     if (isCanvasOpen()) {
-      if (isCanvasMobileTreeOpen) {
+      if (uiState.isCanvasMobileTreeOpen) {
         setCanvasMobileTreeOpen(false);
         return;
       }
-      if (isCanvasEditing) {
+      if (canvasState.isCanvasEditing) {
         cancelCanvasEditing({ statusMessage: "Canvas edit cancelled.", tone: "muted" });
       } else if (clearCanvasSearchInput({ statusMessage: "Canvas search cleared.", tone: "muted" })) {
         return;
@@ -8994,7 +8941,7 @@ document.addEventListener("click", (event) => {
     }
   }
 
-  if (isCanvasMobileTreeOpen && isMobileViewport()) {
+  if (uiState.isCanvasMobileTreeOpen && isMobileViewport()) {
     const clickedInsideTree = target instanceof Node && (canvasTreePanel?.contains(target) || canvasTreeToggleBtn?.contains(target));
     if (!clickedInsideTree) {
       setCanvasMobileTreeOpen(false);
@@ -9025,11 +8972,11 @@ async function loadSidebar() {
       items.className = "sidebar-section__items";
 
       conversations.forEach((conversation) => {
-        if (conversation.id === currentConvId) {
-          currentConvTitle = String(conversation.title || "New Chat").trim() || "New Chat";
-          currentConversationTitleSource = String(conversation.title_source || currentConversationTitleSource || "system").trim().toLowerCase() || "system";
-          currentConversationTitleOverridden = conversation.title_overridden === true || Number(conversation.title_overridden || 0) === 1;
-          currentConversationPersonaName = resolveConversationPersonaName(conversation.persona_id, conversation.persona_name || "");
+        if (conversation.id === chatState.currentConvId) {
+          chatState.currentConvTitle = String(conversation.title || "New Chat").trim() || "New Chat";
+          chatState.currentConversationTitleSource = String(conversation.title_source || chatState.currentConversationTitleSource || "system").trim().toLowerCase() || "system";
+          chatState.currentConversationTitleOverridden = conversation.title_overridden === true || Number(conversation.title_overridden || 0) === 1;
+          chatState.currentConversationPersonaName = resolveConversationPersonaName(conversation.persona_id, conversation.persona_name || "");
         }
         const conversationDisplayTitle = getConversationDisplayTitle(conversation);
         const conversationPersonaName = resolveConversationPersonaName(conversation.persona_id, conversation.persona_name || "");
@@ -9037,7 +8984,7 @@ async function loadSidebar() {
           ? `<span class="sidebar-persona-label" title="Persona: ${escHtml(conversationPersonaName)}">${escHtml(conversationPersonaName)}</span>`
           : "";
         const item = document.createElement("div");
-        item.className = "sidebar-item" + (conversation.id === currentConvId ? " active" : "");
+        item.className = "sidebar-item" + (conversation.id === chatState.currentConvId ? " active" : "");
         item.dataset.id = conversation.id;
         item.innerHTML =
           `<span class="sidebar-title">${escHtml(conversationDisplayTitle)}</span>` +
@@ -9056,7 +9003,7 @@ async function loadSidebar() {
           if (event.target.closest(".sidebar-del") || event.target.closest(".sidebar-edit")) {
             return;
           }
-          if (conversation.id !== currentConvId) {
+          if (conversation.id !== chatState.currentConvId) {
             openConversation(conversation.id);
             closeSidebarOnMobile();
           }
@@ -9090,12 +9037,12 @@ function updateConversationTitleInState(conversationId, titleOrPayload) {
     ? titleOrPayload
     : { title: titleOrPayload };
   const normalizedTitle = String(payload.title || "New Chat").trim() || "New Chat";
-  if (Number(conversationId) === Number(currentConvId)) {
-    currentConvTitle = normalizedTitle;
-    currentConversationTitleSource = String(payload.title_source || "manual").trim().toLowerCase() || "manual";
-    currentConversationTitleOverridden = payload.title_overridden === true
+  if (Number(conversationId) === Number(chatState.currentConvId)) {
+    chatState.currentConvTitle = normalizedTitle;
+    chatState.currentConversationTitleSource = String(payload.title_source || "manual").trim().toLowerCase() || "manual";
+    chatState.currentConversationTitleOverridden = payload.title_overridden === true
       || Number(payload.title_overridden || 0) === 1
-      || currentConversationTitleSource === "manual";
+      || chatState.currentConversationTitleSource === "manual";
     updateExportPanel();
   }
 }
@@ -9275,16 +9222,16 @@ async function openConversation(id) {
 
   clearPendingDeleteMessage({ render: false });
   resetTokenStats();
-  history = [];
-  latestSummaryStatus = null;
-  userScrolledUp = false;
-  currentConvId = id;
-  currentConvTitle = String(data.conversation?.title || "New Chat").trim() || "New Chat";
-  currentConversationTitleSource = String(data.conversation?.title_source || "system").trim().toLowerCase() || "system";
-  currentConversationTitleOverridden = data.conversation?.title_overridden === true || Number(data.conversation?.title_overridden || 0) === 1;
-  currentConversationPersonaId = normalizePersonaId(data.conversation?.persona_id);
-  currentConversationPersonaName = resolveConversationPersonaName(currentConversationPersonaId, data.conversation?.persona?.name || "");
-  syncPersonaSelectors(currentConversationPersonaId);
+  chatState.history = [];
+  summaryState.latestSummaryStatus = null;
+  uiState.userScrolledUp = false;
+  chatState.currentConvId = id;
+  chatState.currentConvTitle = String(data.conversation?.title || "New Chat").trim() || "New Chat";
+  chatState.currentConversationTitleSource = String(data.conversation?.title_source || "system").trim().toLowerCase() || "system";
+  chatState.currentConversationTitleOverridden = data.conversation?.title_overridden === true || Number(data.conversation?.title_overridden || 0) === 1;
+  chatState.currentConversationPersonaId = normalizePersonaId(data.conversation?.persona_id);
+  chatState.currentConversationPersonaName = resolveConversationPersonaName(chatState.currentConversationPersonaId, data.conversation?.persona?.name || "");
+  syncPersonaSelectors(chatState.currentConversationPersonaId);
   const conversationModelId = String(data.conversation?.model || "").trim();
   const nextModelId = resolvePreferredModelSelection(conversationModelId);
   if (nextModelId) {
@@ -9295,17 +9242,17 @@ async function openConversation(id) {
   }
   clearEditTarget();
   clearInlineEditingTarget();
-  selectedSummaryMessageIds = new Set();
+  uiState.selectedSummaryMessageIds = new Set();
   resetCanvasWorkspaceState();
 
-  history = Array.isArray(data.messages) ? data.messages.map(normalizeHistoryEntry) : [];
+  chatState.history = Array.isArray(data.messages) ? data.messages.map(normalizeHistoryEntry) : [];
   applyConversationMemoryState(data);
   applyConversationToolOverridesState(data);
   applyConversationParameterOverridesState(data);
-  streamingCanvasDocuments = [];
+  canvasState.streamingCanvasDocuments = [];
   resetStreamingCanvasPreview();
-  activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
-  lastConversationSignature = getConversationSignature(history);
+  canvasState.activeCanvasDocumentId = getActiveCanvasDocument(chatState.history)?.id || null;
+  uiState.lastConversationSignature = getConversationSignature(chatState.history);
   renderConversationHistory();
   renderCanvasPanel();
   updateExportPanel();
@@ -9319,7 +9266,7 @@ async function openConversation(id) {
 async function deleteConversation(id) {
   try {
     await fetch(`/api/conversations/${id}`, { method: "DELETE" });
-    if (id === currentConvId) {
+    if (id === chatState.currentConvId) {
       startNewChat();
     } else {
       loadSidebar();
@@ -9331,28 +9278,28 @@ async function deleteConversation(id) {
 
 function startNewChat() {
   clearPendingDeleteMessage({ render: false });
-  conversationRefreshGeneration += 1;
-  pendingConversationRefreshTimers.forEach((timerId) => window.clearTimeout(timerId));
-  pendingConversationRefreshTimers.clear();
-  userScrolledUp = false;
-  currentConvId = null;
-  currentConvTitle = "New Chat";
-  currentConversationPersonaId = "";
-  currentConversationPersonaName = "";
-  currentConversationTitleSource = "system";
-  currentConversationTitleOverridden = false;
-  history = [];
-  conversationMemoryEntries = [];
-  conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
-  currentConversationToolOverrides = null;
-  currentConversationParameterOverrides = null;
-  latestSummaryStatus = null;
-  selectedSummaryMessageIds = new Set();
-  streamingCanvasDocuments = [];
+  uiState.conversationRefreshGeneration += 1;
+  uiState.pendingConversationRefreshTimers.forEach((timerId) => window.clearTimeout(timerId));
+  uiState.pendingConversationRefreshTimers.clear();
+  uiState.userScrolledUp = false;
+  chatState.currentConvId = null;
+  chatState.currentConvTitle = "New Chat";
+  chatState.currentConversationPersonaId = "";
+  chatState.currentConversationPersonaName = "";
+  chatState.currentConversationTitleSource = "system";
+  chatState.currentConversationTitleOverridden = false;
+  chatState.history = [];
+  chatState.conversationMemoryEntries = [];
+  chatState.conversationMemoryEnabled = featureFlags.conversation_memory_enabled !== false;
+  chatState.currentConversationToolOverrides = null;
+  chatState.currentConversationParameterOverrides = null;
+  summaryState.latestSummaryStatus = null;
+  uiState.selectedSummaryMessageIds = new Set();
+  canvasState.streamingCanvasDocuments = [];
   resetStreamingCanvasPreview();
-  activeCanvasDocumentId = null;
-  lastConversationSignature = "";
-  lastConversationMemorySignature = "";
+  canvasState.activeCanvasDocumentId = null;
+  uiState.lastConversationSignature = "";
+  uiState.lastConversationMemorySignature = "";
   clearEditTarget();
   clearInlineEditingTarget();
   resetCanvasWorkspaceState();
@@ -9365,7 +9312,7 @@ function startNewChat() {
   if (preferredModelId) {
     syncModelSelectors(preferredModelId, getKnownModelLabel(preferredModelId));
   }
-  syncPersonaSelectors(currentConversationPersonaId);
+  syncPersonaSelectors(chatState.currentConversationPersonaId);
   clearToastRegion();
   loadSidebar();
   inputEl.focus();
@@ -9635,11 +9582,11 @@ inputEl.addEventListener("blur", () => {
 });
 
 messagesEl.addEventListener("scroll", () => {
-  if (!isStreaming) {
+  if (!chatState.isStreaming) {
     return;
   }
   const distanceFromBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
-  userScrolledUp = distanceFromBottom > 100;
+  uiState.userScrolledUp = distanceFromBottom > 100;
 });
 
 inputEl.addEventListener("keydown", (event) => {
@@ -9649,7 +9596,7 @@ inputEl.addEventListener("keydown", (event) => {
     return;
   }
 
-  if ((event.key === "ArrowDown" || event.key === "ArrowUp") && isSlashCommandMenuOpen() && slashCommandSuggestions.length) {
+  if ((event.key === "ArrowDown" || event.key === "ArrowUp") && isSlashCommandMenuOpen() && uiState.slashCommandSuggestions.length) {
     event.preventDefault();
     moveSlashCommandSelection(event.key === "ArrowDown" ? 1 : -1);
     return;
@@ -9667,30 +9614,30 @@ inputEl.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     if ("ontouchstart" in window || navigator.maxTouchPoints > 0) return;
     event.preventDefault();
-    if (!isStreaming && !isFixing) {
+    if (!chatState.isStreaming && !chatState.isFixing) {
       sendMessage();
     }
   }
 });
 
 async function requestActiveChatCancellation() {
-  activeUserCancelRequested = true;
+  chatState.activeUserCancelRequested = true;
 
-  if (activeChatCancellationFallbackTimer !== null) {
-    window.clearTimeout(activeChatCancellationFallbackTimer);
-    activeChatCancellationFallbackTimer = null;
+  if (chatState.activeChatCancellationFallbackTimer !== null) {
+    window.clearTimeout(chatState.activeChatCancellationFallbackTimer);
+    chatState.activeChatCancellationFallbackTimer = null;
   }
 
   // Abort the SSE stream immediately so the UI stops streaming at once.
-  if (activeAbortController) {
-    activeAbortController.abort();
+  if (chatState.activeAbortController) {
+    chatState.activeAbortController.abort();
   }
 
   clearEmptyAssistantStreamingBubble();
   scrollToBottom();
 
   // Notify the server in the background so it can save partial output gracefully.
-  const runId = String(activeChatRunId || "").trim();
+  const runId = String(chatState.activeChatRunId || "").trim();
   if (runId) {
     try {
       await fetch(`/api/chat-runs/${encodeURIComponent(runId)}/cancel`, {
@@ -9713,7 +9660,7 @@ editBannerCancelBtn.addEventListener("click", () => {
 });
 
 sendBtn.addEventListener("click", () => {
-  if (!isStreaming && !isFixing) {
+  if (!chatState.isStreaming && !chatState.isFixing) {
     sendMessage();
   }
 });
@@ -9734,17 +9681,17 @@ canvasDocumentEl?.addEventListener("click", (event) => {
   void copyCodeBlock(button);
 });
 fixBtn.addEventListener("click", () => {
-  if (!isStreaming && !isFixing) {
+  if (!chatState.isStreaming && !chatState.isFixing) {
     fixMessage();
   }
 });
 attachBtn.addEventListener("click", () => {
-  if (isStreaming || isFixing) return;
+  if (chatState.isStreaming || chatState.isFixing) return;
   imageInputEl.click();
 });
 
 attachBtn.addEventListener("contextmenu", (e) => {
-  if (isStreaming || isFixing) return;
+  if (chatState.isStreaming || chatState.isFixing) return;
   e.preventDefault();
   docInputEl.click();
 });
@@ -9796,7 +9743,7 @@ function normalizeYouTubeUrlInput(value) {
 }
 
 function promptForYouTubeUrl() {
-  const initialValue = selectedYouTubeUrl || "https://www.youtube.com/watch?v=";
+  const initialValue = attachmentState.selectedYouTubeUrl || "https://www.youtube.com/watch?v=";
   const nextValue = window.prompt("Paste a YouTube video URL", initialValue);
   if (nextValue === null) {
     return;
@@ -9806,12 +9753,12 @@ function promptForYouTubeUrl() {
     showError("Enter a valid YouTube URL.");
     return;
   }
-  selectedYouTubeUrl = normalizedUrl;
+  attachmentState.selectedYouTubeUrl = normalizedUrl;
   renderAttachmentPreview();
 }
 
 youtubeUrlBtn?.addEventListener("click", () => {
-  if (isStreaming || isFixing) return;
+  if (chatState.isStreaming || chatState.isFixing) return;
   if (!Boolean(featureFlags.youtube_transcripts_enabled)) {
     showError("YouTube transcript feature is disabled in .env.");
     return;
@@ -9833,7 +9780,7 @@ function resetChatDragState() {
 }
 
 function handleChatDragEnter(event) {
-  if (isStreaming || isFixing || !hasDraggedFiles(event.dataTransfer)) {
+  if (chatState.isStreaming || chatState.isFixing || !hasDraggedFiles(event.dataTransfer)) {
     return;
   }
   event.preventDefault();
@@ -9842,7 +9789,7 @@ function handleChatDragEnter(event) {
 }
 
 function handleChatDragOver(event) {
-  if (isStreaming || isFixing || !hasDraggedFiles(event.dataTransfer)) {
+  if (chatState.isStreaming || chatState.isFixing || !hasDraggedFiles(event.dataTransfer)) {
     return;
   }
   event.preventDefault();
@@ -9864,7 +9811,7 @@ function handleChatDragLeave(event) {
 }
 
 function handleChatDrop(event) {
-  if (isStreaming || isFixing || !hasDraggedFiles(event.dataTransfer)) {
+  if (chatState.isStreaming || chatState.isFixing || !hasDraggedFiles(event.dataTransfer)) {
     return;
   }
   event.preventDefault();
@@ -9885,8 +9832,8 @@ window.addEventListener("dragend", resetChatDragState);
 
 function handleSelectedFiles(files, options = {}) {
   const documentsOnly = options.documentsOnly === true;
-  const nextImages = [...selectedImageFiles];
-  const nextDocuments = [...selectedDocumentFiles];
+  const nextImages = [...attachmentState.selectedImageFiles];
+  const nextDocuments = [...attachmentState.selectedDocumentFiles];
 
   for (const file of files || []) {
     if (!file) {
@@ -9919,8 +9866,8 @@ function handleSelectedFiles(files, options = {}) {
     nextImages.push(file);
   }
 
-  selectedImageFiles = dedupeFiles(nextImages);
-  selectedDocumentFiles = dedupeFiles(nextDocuments);
+  attachmentState.selectedImageFiles = dedupeFiles(nextImages);
+  attachmentState.selectedDocumentFiles = dedupeFiles(nextDocuments);
   syncSelectedDocumentSubmissionModes();
   renderAttachmentPreview();
 }
@@ -9931,9 +9878,9 @@ function resetTokenStats() {
 }
 
 function setStreaming(active) {
-  isStreaming = active;
+  chatState.isStreaming = active;
   if (!active) {
-    userScrolledUp = false;
+    uiState.userScrolledUp = false;
     activeAnswerRenderPending = false;
     canvasState.lastPreviewRenderAt = 0;
     canvasState.resetDeferred();
@@ -9954,7 +9901,7 @@ function setStreaming(active) {
 }
 
 function setFixing(active) {
-  isFixing = active;
+  chatState.isFixing = active;
   sendBtn.disabled = active;
   fixBtn.disabled = active;
   inputEl.disabled = active;
@@ -10024,13 +9971,13 @@ function formatFileSize(size) {
 }
 
 function clearSelectedImage() {
-  selectedImageFiles = [];
+  attachmentState.selectedImageFiles = [];
   imageInputEl.value = "";
   renderAttachmentPreview();
 }
 
 function clearSelectedDocument() {
-  selectedDocumentFiles = [];
+  attachmentState.selectedDocumentFiles = [];
   selectedDocumentSubmissionModes = new Map();
   docInputEl.value = "";
   renderAttachmentPreview();
@@ -10038,22 +9985,22 @@ function clearSelectedDocument() {
 
 function removeSelectedAttachment(kind, fileKey) {
   if (kind === "image") {
-    selectedImageFiles = selectedImageFiles.filter((file) => getAttachmentFileKey(file) !== fileKey);
+    attachmentState.selectedImageFiles = attachmentState.selectedImageFiles.filter((file) => getAttachmentFileKey(file) !== fileKey);
   } else if (kind === "document") {
-    selectedDocumentFiles = selectedDocumentFiles.filter((file) => getAttachmentFileKey(file) !== fileKey);
+    attachmentState.selectedDocumentFiles = attachmentState.selectedDocumentFiles.filter((file) => getAttachmentFileKey(file) !== fileKey);
     selectedDocumentSubmissionModes.delete(String(fileKey || ""));
   } else if (kind === "video") {
-    selectedYouTubeUrl = "";
+    attachmentState.selectedYouTubeUrl = "";
   }
   syncSelectedDocumentSubmissionModes();
   renderAttachmentPreview();
 }
 
 function clearAllAttachments() {
-  selectedImageFiles = [];
-  selectedDocumentFiles = [];
+  attachmentState.selectedImageFiles = [];
+  attachmentState.selectedDocumentFiles = [];
   selectedDocumentSubmissionModes = new Map();
-  selectedYouTubeUrl = "";
+  attachmentState.selectedYouTubeUrl = "";
   imageInputEl.value = "";
   docInputEl.value = "";
   renderAttachmentPreview();
@@ -10072,9 +10019,9 @@ function describePreferredImageAnalysisMethod() {
 
 function renderAttachmentPreview() {
   const attachments = [
-    ...selectedImageFiles.map((file) => ({ kind: "image", file })),
-    ...selectedDocumentFiles.map((file) => ({ kind: "document", file })),
-    ...(selectedYouTubeUrl ? [{ kind: "video", url: selectedYouTubeUrl }] : []),
+    ...attachmentState.selectedImageFiles.map((file) => ({ kind: "image", file })),
+    ...attachmentState.selectedDocumentFiles.map((file) => ({ kind: "document", file })),
+    ...(attachmentState.selectedYouTubeUrl ? [{ kind: "video", url: attachmentState.selectedYouTubeUrl }] : []),
   ];
 
   if (!attachments.length) {
@@ -10282,7 +10229,7 @@ function updateVisionDetails(group, metadata) {
   appendVisionDetails(group, metadata);
 }
 
-function getReasoningText(metadata, messageId = null, conversationId = currentConvId) {
+function getReasoningText(metadata, messageId = null, conversationId = chatState.currentConvId) {
   if (!metadata || typeof metadata !== "object") {
     return getAssistantReasoning(conversationId, messageId);
   }
@@ -10629,8 +10576,8 @@ function findPersistedAssistantEntryForSubAgentPrompt(preferredAssistantId = nul
     return null;
   }
 
-  for (let index = history.length - 1; index >= 0; index -= 1) {
-    const entry = history[index];
+  for (let index = chatState.history.length - 1; index >= 0; index -= 1) {
+    const entry = chatState.history[index];
     if (!entry || entry.role !== "assistant") {
       continue;
     }
@@ -10685,12 +10632,12 @@ async function saveSubAgentResearchToCanvas(assistantMessageId, traceIndex, trac
   const openCanvasOnSave = options?.openCanvasOnSave !== false;
   const statusMessage = String(options?.statusMessage || "Research saved to Canvas.").trim() || "Research saved to Canvas.";
   const toastMessage = String(options?.toastMessage || statusMessage).trim() || statusMessage;
-  if (!currentConvId) {
+  if (!chatState.currentConvId) {
     showError("Create a conversation first so the research can be saved to Canvas.");
     return;
   }
 
-  const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
+  const response = await fetch(`/api/conversations/${chatState.currentConvId}/canvas`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -10707,14 +10654,14 @@ async function saveSubAgentResearchToCanvas(assistantMessageId, traceIndex, trac
     throw new Error(payload.error || "Research could not be saved to Canvas.");
   }
 
-  history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
-  streamingCanvasDocuments = [];
+  chatState.history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : chatState.history;
+  canvasState.streamingCanvasDocuments = [];
   resetStreamingCanvasPreview();
-  activeCanvasDocumentId = String(payload.active_document_id || "").trim() || getActiveCanvasDocument(history)?.id || null;
+  canvasState.activeCanvasDocumentId = String(payload.active_document_id || "").trim() || getActiveCanvasDocument(chatState.history)?.id || null;
   rebuildTokenStatsFromHistory();
   renderConversationHistory({ preserveScroll: true });
   renderCanvasPanel();
-  lastConversationSignature = getConversationSignature(history);
+  uiState.lastConversationSignature = getConversationSignature(chatState.history);
   loadSidebar();
   if (openCanvasOnSave) {
     openCanvas(null, { deferPanelRender: false });
@@ -10734,7 +10681,7 @@ function maybePromptToSaveSubAgentResearch(assistantEntry) {
     ? assistantEntry
     : findPersistedAssistantEntryForSubAgentPrompt(assistantEntry?.id);
 
-  if (!resolvedEntry || !isPersistedMessageId(resolvedEntry.id) || !currentConvId) {
+  if (!resolvedEntry || !isPersistedMessageId(resolvedEntry.id) || !chatState.currentConvId) {
     return;
   }
 
@@ -10743,11 +10690,11 @@ function maybePromptToSaveSubAgentResearch(assistantEntry) {
     return;
   }
 
-  if (hasSubAgentCanvasPromptBeenShown(currentConvId, resolvedEntry.id, pendingTrace.index)) {
+  if (hasSubAgentCanvasPromptBeenShown(chatState.currentConvId, resolvedEntry.id, pendingTrace.index)) {
     return;
   }
 
-  markSubAgentCanvasPromptShown(currentConvId, resolvedEntry.id, pendingTrace.index);
+  markSubAgentCanvasPromptShown(chatState.currentConvId, resolvedEntry.id, pendingTrace.index);
 
   const taskHeading = getSubAgentTaskHeading(
     String(pendingTrace.entry.task_full || pendingTrace.entry.task || pendingTrace.entry.summary || "Research").trim(),
@@ -10763,7 +10710,7 @@ function maybePromptToSaveSubAgentResearch(assistantEntry) {
       toastMessage: "Research auto-saved to Canvas.",
     },
   ).catch((error) => {
-    clearSubAgentCanvasPromptShown(currentConvId, resolvedEntry.id, pendingTrace.index);
+    clearSubAgentCanvasPromptShown(chatState.currentConvId, resolvedEntry.id, pendingTrace.index);
     showError(error.message || "Research could not be saved to Canvas.");
   });
 }
@@ -11161,7 +11108,7 @@ function appendClarificationPanel(group, metadata, options = {}) {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (isStreaming || isFixing) {
+    if (chatState.isStreaming || chatState.isFixing) {
       return;
     }
 
@@ -11240,7 +11187,7 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
     position: options.position ?? null,
     tool_calls: Array.isArray(options.toolCalls) ? options.toolCalls : [],
   };
-  const selectionMode = options.selectionMode || messageSelectionMode;
+  const selectionMode = options.selectionMode || uiState.messageSelectionMode;
   const selectableMessageIdSet = options.selectableMessageIdSet || (selectionMode ? getSelectableMessageIdSet(selectionMode) : null);
   const activeSelectionMode = selectionMode && selectableMessageIdSet?.has(Number(historyMessage.id || 0))
     ? selectionMode
@@ -11264,7 +11211,7 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
   if (role === "summary" && normalizedMetadata?.is_summary) {
     const coveredCount = Number(normalizedMetadata.covered_message_count || 0);
     const generatedAt = formatSummaryTimestamp(normalizedMetadata.generated_at);
-    const sourceLabel = SUMMARY_SOURCE_LABELS[String(normalizedMetadata.summary_source || "").trim()] || "Conversation history";
+    const sourceLabel = SUMMARY_SOURCE_LABELS[String(normalizedMetadata.summary_source || "").trim()] || "Conversation chatState.history";
     const formatLabel = String(normalizedMetadata.summary_format || "").trim() === "structured_json"
       ? "Structured"
       : "Plain text";
@@ -11309,8 +11256,8 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
     summaryUndoButton.type = "button";
     summaryUndoButton.className = "msg-action-btn msg-action-btn--with-label";
     summaryUndoButton.textContent = "Undo";
-    const canUndoSummary = Number.isInteger(Number(options.messageId)) && Number(options.messageId) > 0 && Boolean(currentConvId);
-    summaryUndoButton.disabled = isSummaryOperationInFlight || !canUndoSummary;
+    const canUndoSummary = Number.isInteger(Number(options.messageId)) && Number(options.messageId) > 0 && Boolean(chatState.currentConvId);
+    summaryUndoButton.disabled = summaryState.isSummaryOperationInFlight || !canUndoSummary;
     summaryUndoButton.addEventListener("click", () => {
       void undoConversationSummary(Number(options.messageId || 0), { triggerButton: summaryUndoButton });
     });
@@ -11436,7 +11383,7 @@ function appendGroup(role, text, metadata = null, options = {}) {
 let scrollToBottomFrame = null;
 
 function scrollToBottom() {
-  if (userScrolledUp) {
+  if (uiState.userScrolledUp) {
     return;
   }
   if (scrollToBottomFrame !== null) {
@@ -11503,9 +11450,9 @@ async function sendMessage(options = {}) {
   const rawInputText = forcedText || inputEl.value.trim();
   const slashCommand = parseComposerSlashCommand(rawInputText);
   const text = slashCommand.requested ? slashCommand.text : rawInputText;
-  const pendingImages = [...selectedImageFiles];
-  const pendingDocuments = [...selectedDocumentFiles];
-  const pendingYouTubeUrl = selectedYouTubeUrl;
+  const pendingImages = [...attachmentState.selectedImageFiles];
+  const pendingDocuments = [...attachmentState.selectedDocumentFiles];
+  const pendingYouTubeUrl = attachmentState.selectedYouTubeUrl;
   if (!text && !slashCommand.requested && !pendingImages.length && !pendingDocuments.length && !pendingYouTubeUrl) {
     return { ok: false, errorCode: "" };
   }
@@ -11560,14 +11507,14 @@ async function sendMessage(options = {}) {
   inputEl.style.height = "auto";
   clearAllAttachments();
 
-  if (!currentConvId) {
+  if (!chatState.currentConvId) {
     const response = await fetch("/api/conversations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title: "New Chat",
         model: modelSel.value,
-        persona_id: currentConversationPersonaId || null,
+        persona_id: chatState.currentConversationPersonaId || null,
       }),
     });
     const conversation = await response.json().catch(() => ({}));
@@ -11577,10 +11524,10 @@ async function sendMessage(options = {}) {
     if (!Number.isInteger(Number(conversation?.id))) {
       throw new Error("Unable to create a conversation.");
     }
-    currentConvId = conversation.id;
-    currentConvTitle = String(conversation.title || "New Chat").trim() || "New Chat";
-    currentConversationPersonaId = normalizePersonaId(conversation.persona_id);
-    syncPersonaSelectors(currentConversationPersonaId);
+    chatState.currentConvId = conversation.id;
+    chatState.currentConvTitle = String(conversation.title || "New Chat").trim() || "New Chat";
+    chatState.currentConversationPersonaId = normalizePersonaId(conversation.persona_id);
+    syncPersonaSelectors(chatState.currentConversationPersonaId);
     loadSidebar();
     updateExportPanel();
   }
@@ -11610,37 +11557,37 @@ async function sendMessage(options = {}) {
       userMetadata = sanitizeEditedUserMetadata(editingEntry.metadata);
     }
 
-    history = history.slice(0, editIndex + 1).map((item) => ({
+    chatState.history = chatState.history.slice(0, editIndex + 1).map((item) => ({
       ...normalizeHistoryEntry(item),
       metadata: item.metadata && typeof item.metadata === "object" ? { ...item.metadata } : null,
     }));
-    history[editIndex] = {
-      ...history[editIndex],
+    chatState.history[editIndex] = {
+      ...chatState.history[editIndex],
       content: text,
       metadata: userMetadata,
     };
-    streamingCanvasDocuments = [];
+    canvasState.streamingCanvasDocuments = [];
     resetStreamingCanvasPreview();
-    isCanvasEditing = false;
-    editingCanvasDocumentId = null;
-    activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
+    canvasState.isCanvasEditing = false;
+    canvasState.editingCanvasDocumentId = null;
+    canvasState.activeCanvasDocumentId = getActiveCanvasDocument(chatState.history)?.id || null;
     rebuildTokenStatsFromHistory();
     renderConversationHistory({ preserveScroll: true });
     renderCanvasPanel();
     clearEditTarget();
   } else {
     const userEntry = { id: null, role: "user", content: text, metadata: userMetadata };
-    history.push(userEntry);
+    chatState.history.push(userEntry);
   }
 
   const controller = new AbortController();
   const streamRequestId = createStreamRequestId();
-  activeAbortController = controller;
-  activeChatRunId = streamRequestId;
-  activeUserCancelRequested = false;
-  conversationRefreshGeneration += 1;
-  pendingConversationRefreshTimers.forEach((timerId) => window.clearTimeout(timerId));
-  pendingConversationRefreshTimers.clear();
+  chatState.activeAbortController = controller;
+  chatState.activeChatRunId = streamRequestId;
+  chatState.activeUserCancelRequested = false;
+  uiState.conversationRefreshGeneration += 1;
+  uiState.pendingConversationRefreshTimers.forEach((timerId) => window.clearTimeout(timerId));
+  uiState.pendingConversationRefreshTimers.clear();
   setStreaming(true);
   renderConversationHistory({ preserveScroll: true });
   userGroup = messagesEl.querySelector(".msg-group.user:last-of-type");
@@ -11722,7 +11669,7 @@ async function sendMessage(options = {}) {
       visibleAnswer = fullAnswer;
       renderBubbleWithCursor(asstBubble, visibleAnswer);
       if (String(visibleAnswer || "").trim()) {
-        activeAssistantStreamingHasVisibleAnswer = true;
+        chatState.activeAssistantStreamingHasVisibleAnswer = true;
       }
       scrollToBottom();
       flushDeferredCanvasRenderWork();
@@ -11760,7 +11707,7 @@ async function sendMessage(options = {}) {
     visibleAnswer = fullAnswer;
     renderBubbleWithCursor(asstBubble, visibleAnswer);
     if (String(visibleAnswer || "").trim()) {
-      activeAssistantStreamingHasVisibleAnswer = true;
+      chatState.activeAssistantStreamingHasVisibleAnswer = true;
     }
     flushDeferredCanvasRenderWork();
   };
@@ -11804,7 +11751,7 @@ async function sendMessage(options = {}) {
       const formData = new FormData();
       formData.append("messages", JSON.stringify(requestMessages));
       formData.append("model", modelSel.value);
-      formData.append("conversation_id", String(currentConvId));
+      formData.append("conversation_id", String(chatState.currentConvId));
       formData.append("user_content", text);
       formData.append("stream_request_id", streamRequestId);
       appendSlashCommandFormData(formData, slashCommand);
@@ -11837,7 +11784,7 @@ async function sendMessage(options = {}) {
         body: JSON.stringify({
           messages: requestMessages,
           model: modelSel.value,
-          conversation_id: currentConvId,
+          conversation_id: chatState.currentConvId,
           stream_request_id: streamRequestId,
           edited_message_id: editedMessageId,
           user_content: text,
@@ -11858,7 +11805,7 @@ async function sendMessage(options = {}) {
     await streamNdjsonResponse(response, (event) => {
       if (event.type === "status" && event.status === "compacting") {
         const compactingMessage = String(event.message || "Compacting conversation...").trim() || "Compacting conversation...";
-        if (!activeAssistantStreamingHasVisibleAnswer) {
+        if (!chatState.activeAssistantStreamingHasVisibleAnswer) {
           renderAssistantLoadingBubble(asstBubble, compactingMessage);
         } else {
           asstBubble.hidden = false;
@@ -11873,7 +11820,7 @@ async function sendMessage(options = {}) {
           maxSteps: event.max_steps || latestStepInfo.maxSteps,
         };
       } else if (event.type === "vision_complete" || event.type === "ocr_complete") {
-        const lastMessage = history[history.length - 1];
+        const lastMessage = chatState.history[chatState.history.length - 1];
         if (lastMessage && lastMessage.role === "user") {
           const attachment = event.attachment || {
             kind: "image",
@@ -11891,7 +11838,7 @@ async function sendMessage(options = {}) {
         }
         scrollToBottom();
       } else if (event.type === "video_transcript_ready") {
-        const lastMessage = history[history.length - 1];
+        const lastMessage = chatState.history[chatState.history.length - 1];
         if (lastMessage && lastMessage.role === "user") {
           const attachment = event.attachment || {
             kind: "video",
@@ -11905,7 +11852,7 @@ async function sendMessage(options = {}) {
         }
         scrollToBottom();
       } else if (event.type === "document_processed") {
-        const lastMessage = history[history.length - 1];
+        const lastMessage = chatState.history[chatState.history.length - 1];
         if (lastMessage && lastMessage.role === "user") {
           const attachment = event.attachment || {
             kind: "document",
@@ -11926,7 +11873,7 @@ async function sendMessage(options = {}) {
         }
         scrollToBottom();
       } else if (event.type === "step_update") {
-        if (!activeAssistantStreamingHasVisibleAnswer) {
+        if (!chatState.activeAssistantStreamingHasVisibleAnswer) {
           const detailParts = [String(event.tool || "").replaceAll("_", " ").trim(), String(event.preview || "").trim()].filter(Boolean);
           renderAssistantLoadingBubble(asstBubble, "Preparing response…", detailParts.join(" • "));
         }
@@ -12084,7 +12031,7 @@ async function sendMessage(options = {}) {
         }
         rawAnswer = syncedAnswer;
         fullAnswer = rawAnswer;
-        activeAssistantStreamingHasVisibleAnswer = true;
+        chatState.activeAssistantStreamingHasVisibleAnswer = true;
         flushAnswerRender();
         asstBubble.classList.remove("thinking");
         asstBubble.classList.remove("cursor");
@@ -12094,7 +12041,7 @@ async function sendMessage(options = {}) {
         rawAnswer += event.text || "";
         fullAnswer = rawAnswer;
         if (String(fullAnswer || "").trim()) {
-          activeAssistantStreamingHasVisibleAnswer = true;
+          chatState.activeAssistantStreamingHasVisibleAnswer = true;
         }
         scheduleAnswerRender();
       } else if (event.type === "clarification_request") {
@@ -12102,7 +12049,7 @@ async function sendMessage(options = {}) {
         rawAnswer = String(event.text || "").trim();
         fullAnswer = rawAnswer;
         if (String(fullAnswer || "").trim()) {
-          activeAssistantStreamingHasVisibleAnswer = true;
+          chatState.activeAssistantStreamingHasVisibleAnswer = true;
         }
         asstBubble.classList.remove("thinking");
         asstBubble.classList.remove("cursor");
@@ -12127,7 +12074,7 @@ async function sendMessage(options = {}) {
         scrollToBottom();
       } else if (event.type === "assistant_sub_agent_trace_update") {
         assistantSubAgentTraces = mergeAssistantSubAgentTraceEntry(assistantSubAgentTraces, event.entry);
-        if (!activeAssistantStreamingHasVisibleAnswer && event.entry?.status === "running") {
+        if (!chatState.activeAssistantStreamingHasVisibleAnswer && event.entry?.status === "running") {
           renderAssistantLoadingBubble(
             asstBubble,
             "Research agent is running…",
@@ -12154,7 +12101,7 @@ async function sendMessage(options = {}) {
         setCanvasStatus(getCanvasStreamingStatusMessage(event.tool, previewDocument, "loading"), "muted");
       } else if (event.type === "canvas_executing") {
         if (isCanvasStreamingPreviewTool(event.tool, event)) {
-          const executingPreview = [...streamingCanvasPreviews.values()][0] || null;
+          const executingPreview = [...canvasState.streamingPreviews.values()][0] || null;
           setCanvasStatus(getCanvasStreamingStatusMessage(event.tool, executingPreview, "executing"), "muted");
         }
       } else if (event.type === "canvas_content_delta") {
@@ -12175,7 +12122,7 @@ async function sendMessage(options = {}) {
         const nextDocuments = Array.isArray(event.documents)
           ? event.documents.map((document) => normalizeCanvasDocument(document)).filter((document) => document.id)
           : [];
-        const previousActiveId = String(activeCanvasDocumentId || "").trim();
+        const previousActiveId = String(canvasState.activeCanvasDocumentId || "").trim();
         const requestedActiveId = String(event.active_document_id || "").trim();
         const nextActiveCandidate = getCanvasDocumentById(nextDocuments, requestedActiveId)
           || getCanvasDocumentById(nextDocuments, previousActiveId)
@@ -12185,16 +12132,16 @@ async function sendMessage(options = {}) {
         const previousVersionOfNextDocument = getCanvasDocumentById(previousDocuments, nextActiveCandidate?.id || previousActiveId);
         const hadStreamingPreviewForDoc =
           nextActiveCandidate &&
-          [...streamingCanvasPreviews.values()].some((p) => p.id === nextActiveCandidate.id);
+          [...canvasState.streamingPreviews.values()].some((p) => p.id === nextActiveCandidate.id);
         resetStreamingCanvasPreview();
-        streamingCanvasDocuments = nextDocuments;
-        if (streamingCanvasDocuments.length) {
-          activeCanvasDocumentId = String(nextActiveCandidate?.id || "").trim() || streamingCanvasDocuments[streamingCanvasDocuments.length - 1].id;
-          assistantCanvasActiveDocumentId = activeCanvasDocumentId;
+        canvasState.streamingCanvasDocuments = nextDocuments;
+        if (canvasState.streamingCanvasDocuments.length) {
+          canvasState.activeCanvasDocumentId = String(nextActiveCandidate?.id || "").trim() || canvasState.streamingCanvasDocuments[canvasState.streamingCanvasDocuments.length - 1].id;
+          assistantCanvasActiveDocumentId = canvasState.activeCanvasDocumentId;
           assistantCanvasCleared = false;
           const shouldPrioritizeCommittedCanvasRender = hadStreamingPreviewForDoc || isCanvasOpen();
           requestCanvasPanelRender({ deferForStreaming: !shouldPrioritizeCommittedCanvasRender });
-          const pendingCanvasRequest = pendingDocumentCanvasOpen;
+          const pendingCanvasRequest = attachmentState.pendingDocumentCanvasOpen;
           const canvasWasOpen = isCanvasOpen();
           const activeDocumentChangeMessage = describeCanvasActiveDocumentChange(previousSelectedDocument, nextActiveCandidate, requestedActiveId);
           if (pendingCanvasRequest) {
@@ -12226,9 +12173,9 @@ async function sendMessage(options = {}) {
             setCanvasStatus("Canvas updated. Open the panel to review.", "success");
           }
         } else if (event.cleared) {
-          isCanvasEditing = false;
-          editingCanvasDocumentId = null;
-          activeCanvasDocumentId = null;
+          canvasState.isCanvasEditing = false;
+          canvasState.editingCanvasDocumentId = null;
+          canvasState.activeCanvasDocumentId = null;
           assistantCanvasActiveDocumentId = null;
           assistantCanvasCleared = true;
           requestCanvasPanelRender({ deferForStreaming: true });
@@ -12240,17 +12187,17 @@ async function sendMessage(options = {}) {
         }
       } else if (event.type === "history_sync") {
         receivedHistorySync = true;
-        history = Array.isArray(event.messages) ? event.messages.map(normalizeHistoryEntry) : [];
-        streamingCanvasDocuments = [];
+        chatState.history = Array.isArray(event.messages) ? event.messages.map(normalizeHistoryEntry) : [];
+        canvasState.streamingCanvasDocuments = [];
         resetStreamingCanvasPreview();
-        activeCanvasDocumentId = getActiveCanvasDocument(history)?.id || null;
+        canvasState.activeCanvasDocumentId = getActiveCanvasDocument(chatState.history)?.id || null;
         rebuildTokenStatsFromHistory();
         renderConversationHistory();
         renderCanvasPanel();
       } else if (event.type === "conversation_summary_status") {
-        latestSummaryStatus = event && typeof event === "object" ? { ...event } : null;
+        summaryState.latestSummaryStatus = event && typeof event === "object" ? { ...event } : null;
       } else if (event.type === "conversation_summary_applied") {
-        latestSummaryStatus = event && typeof event === "object"
+        summaryState.latestSummaryStatus = event && typeof event === "object"
           ? { ...event, applied: true, reason: "applied", failure_stage: null, failure_detail: "Summary completed successfully." }
           : { applied: true, reason: "applied", failure_stage: null, failure_detail: "Summary completed successfully." };
         const coveredCount = Number(event.covered_message_count || 0);
@@ -12279,7 +12226,7 @@ async function sendMessage(options = {}) {
     if (pendingReasoningRenderTimer !== null) {
       flushReasoningRender();
     }
-    pendingDocumentCanvasOpen = null;
+    attachmentState.pendingDocumentCanvasOpen = null;
     finalizeAssistantBubble(asstBubble, fullAnswer);
     const assistantEntry = {
       id: null,
@@ -12291,18 +12238,18 @@ async function sendMessage(options = {}) {
         tool_trace: assistantToolTrace,
         tool_results: assistantToolResults,
         sub_agent_traces: assistantSubAgentTraces,
-        canvas_documents: streamingCanvasDocuments,
-        active_document_id: assistantCanvasActiveDocumentId || activeCanvasDocumentId,
+        canvas_documents: canvasState.streamingCanvasDocuments,
+        active_document_id: assistantCanvasActiveDocumentId || canvasState.activeCanvasDocumentId,
         canvas_cleared: assistantCanvasCleared,
         usage: latestUsage,
         pending_clarification: pendingClarification,
       }),
     };
     if (!receivedHistorySync) {
-      history.push(...assistantToolHistory, assistantEntry);
+      chatState.history.push(...assistantToolHistory, assistantEntry);
       applyPersistedMessageIds(persistedMessageIds, assistantEntry);
     }
-    saveAssistantReasoning(currentConvId, persistedMessageIds?.assistant_message_id || assistantEntry.id, rawReasoning);
+    saveAssistantReasoning(chatState.currentConvId, persistedMessageIds?.assistant_message_id || assistantEntry.id, rawReasoning);
     finalizeAssistantStreamingGroup(asstGroup, stepLog, assistantEntry.metadata);
     maybePromptToSaveSubAgentResearch(
       receivedHistorySync
@@ -12312,23 +12259,23 @@ async function sendMessage(options = {}) {
     clearEditTarget();
 
     if (shouldGenerateConversationTitle()) {
-      generateTitle(currentConvId);
+      generateTitle(chatState.currentConvId);
     } else {
       loadSidebar();
     }
-    lastConversationSignature = getConversationSignature(history);
+    uiState.lastConversationSignature = getConversationSignature(chatState.history);
     scheduleConversationRefreshAfterStream();
     sendSucceeded = true;
   } catch (error) {
     sendErrorCode = String(error?.code || "").trim();
-    const wasCancelledByUser = error?.name === "AbortError" && activeUserCancelRequested;
+    const wasCancelledByUser = error?.name === "AbortError" && chatState.activeUserCancelRequested;
     if (pendingAnswerRenderTimer !== null) {
       flushAnswerRender();
     }
     if (pendingReasoningRenderTimer !== null) {
       flushReasoningRender();
     }
-    pendingDocumentCanvasOpen = null;
+    attachmentState.pendingDocumentCanvasOpen = null;
     clearEmptyAssistantStreamingBubble();
     if (fullAnswer.trim() || rawReasoning.trim()) {
       finalizeAssistantBubble(asstBubble, fullAnswer);
@@ -12343,18 +12290,18 @@ async function sendMessage(options = {}) {
           tool_trace: assistantToolTrace,
           tool_results: assistantToolResults,
           sub_agent_traces: assistantSubAgentTraces,
-          canvas_documents: streamingCanvasDocuments,
-          active_document_id: assistantCanvasActiveDocumentId || activeCanvasDocumentId,
+          canvas_documents: canvasState.streamingCanvasDocuments,
+          active_document_id: assistantCanvasActiveDocumentId || canvasState.activeCanvasDocumentId,
           canvas_cleared: assistantCanvasCleared,
           usage: latestUsage,
           pending_clarification: pendingClarification,
         }),
       };
       if (!receivedHistorySync) {
-        history.push(...assistantToolHistory, assistantEntry);
+        chatState.history.push(...assistantToolHistory, assistantEntry);
         applyPersistedMessageIds(persistedMessageIds, assistantEntry);
       }
-      saveAssistantReasoning(currentConvId, persistedMessageIds?.assistant_message_id || assistantEntry.id, rawReasoning);
+      saveAssistantReasoning(chatState.currentConvId, persistedMessageIds?.assistant_message_id || assistantEntry.id, rawReasoning);
       finalizeAssistantStreamingGroup(asstGroup, stepLog, assistantEntry.metadata);
       maybePromptToSaveSubAgentResearch(
         receivedHistorySync
@@ -12369,14 +12316,14 @@ async function sendMessage(options = {}) {
       } else if (error.name !== "AbortError") {
         showError("Connection was interrupted. The partial answer was preserved.");
       }
-      lastConversationSignature = getConversationSignature(history);
+      uiState.lastConversationSignature = getConversationSignature(chatState.history);
       scheduleConversationRefreshAfterStream();
     } else {
       if (wasCancelledByUser) {
           showToast("Stopping response. Final state is being saved in the background…", "warning");
         scheduleConversationRefreshAfterStream();
-      } else if (currentConvId) {
-        await openConversation(currentConvId);
+      } else if (chatState.currentConvId) {
+        await openConversation(chatState.currentConvId);
       } else {
         startNewChat();
       }
@@ -12385,15 +12332,15 @@ async function sendMessage(options = {}) {
       }
     }
   } finally {
-    if (activeChatCancellationFallbackTimer !== null) {
-      window.clearTimeout(activeChatCancellationFallbackTimer);
-      activeChatCancellationFallbackTimer = null;
+    if (chatState.activeChatCancellationFallbackTimer !== null) {
+      window.clearTimeout(chatState.activeChatCancellationFallbackTimer);
+      chatState.activeChatCancellationFallbackTimer = null;
     }
-    if (activeChatRunId === streamRequestId) {
-      activeChatRunId = null;
+    if (chatState.activeChatRunId === streamRequestId) {
+      chatState.activeChatRunId = null;
     }
-    activeUserCancelRequested = false;
-    activeAbortController = null;
+    chatState.activeUserCancelRequested = false;
+    chatState.activeAbortController = null;
     setStreaming(false);
     renderConversationHistory({ preserveScroll: true });
     resetAssistantStreamingBubbleState();
