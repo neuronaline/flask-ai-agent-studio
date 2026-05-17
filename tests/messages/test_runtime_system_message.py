@@ -38,7 +38,6 @@ class TestRuntimeSystemMessage:
             active_tool_names=[
                 "append_scratchpad",
                 "ask_clarifying_question",
-                "image_explain",
                 "search_knowledge_base",
             ],
             retrieved_context="Context block",
@@ -60,7 +59,6 @@ class TestRuntimeSystemMessage:
         assert "Default away" in content
         assert "Scratchpad Policy" in content
         assert "Clarification**: If a good answer depends" in content
-        assert "Image Follow-up**: Use for follow-up questions" in content
         assert "Tool Memory" in content
         assert "Remembered web result" in content
         assert "Knowledge Base" in content
@@ -201,7 +199,7 @@ class TestRuntimeSystemMessage:
 
         content = message["content"]
         assert "## Clarification Response" in content
-        assert "do NOT save them with save_to_conversation_memory" in content
+        assert "Proceed directly to the task using these answers" in content
         assert "## Knowledge Base" in content
         assert content.index("## Clarification Response") < content.index("## Knowledge Base")
 
@@ -241,7 +239,7 @@ class TestRuntimeSystemMessage:
 
         content = message["content"]
         assert "## Clarification Response" in content
-        assert "do NOT save them with save_to_conversation_memory" in content
+        assert "Proceed directly to the task using these answers" in content
         assert "Round 1" in content
         assert "- Reklam butceniz ne kadar? → Gunluk 200-300 TL" in content
         assert "Round 2" in content
@@ -270,8 +268,6 @@ class TestRuntimeSystemMessage:
             active_tool_names=[
                 "create_canvas_document",
                 "batch_canvas_edits",
-                "transform_canvas_lines",
-                "update_canvas_metadata",
                 "set_canvas_viewport",
                 "clear_canvas_viewport",
                 "delete_canvas_document",
@@ -337,7 +333,6 @@ class TestRuntimeSystemMessage:
     def test_runtime_system_message_represents_ignored_canvas_documents_as_metadata_only(self):
         message = build_runtime_system_message(
             active_tool_names=[
-                "update_canvas_metadata",
                 "expand_canvas_document",
                 "search_canvas_document",
             ],
@@ -382,7 +377,6 @@ class TestRuntimeSystemMessage:
             [
                 "search_web",
                 "fetch_url",
-                "image_explain",
                 "search_canvas_document",
                 "search_knowledge_base",
             ]
@@ -712,16 +706,6 @@ class TestRuntimeSystemMessage:
         assert "before line-level edits" in scroll_description
         assert "Use this first when the user asks you to find something inside a large canvas" in search_guidance
 
-    def test_update_canvas_metadata_tool_spec_supports_ignored_documents(self):
-        metadata_spec = TOOL_SPEC_BY_NAME["update_canvas_metadata"]
-        metadata_properties = metadata_spec["parameters"]["properties"]
-        guidance = metadata_spec["prompt"]["guidance"]
-
-        assert "ignored" in metadata_properties
-        assert "ignored_reason" in metadata_properties
-        assert "ignored=true" in guidance
-        assert "ignored=false" in guidance
-
     def test_runtime_system_message_mentions_expand_snapshot_rule(self):
         message = build_runtime_system_message(
             active_tool_names=[
@@ -965,25 +949,6 @@ class TestRuntimeSystemMessage:
         assert "current news verification" in TOOL_SPEC_BY_NAME["search_news_google"]["description"]
         assert TOOL_SPEC_BY_NAME["read_scratchpad"]["parameters"]["required"] == []
 
-    def test_memory_tool_specs_separate_scratchpad_and_conversation_memory(self):
-        scratchpad_guidance = TOOL_SPEC_BY_NAME["append_scratchpad"]["prompt"]["guidance"]
-        conversation_guidance = TOOL_SPEC_BY_NAME["save_to_conversation_memory"]["prompt"]["guidance"]
-        persona_guidance = TOOL_SPEC_BY_NAME["save_to_persona_memory"]["prompt"]["guidance"]
-
-        assert "conversation memory instead" in scratchpad_guidance
-        assert "matter in future conversations" in scratchpad_guidance
-        assert "Default to this over scratchpad" in conversation_guidance
-        assert "Pass multiple entries in one call" in conversation_guidance
-        assert "current chat" in persona_guidance
-        assert "conversation memory instead" in persona_guidance
-
-    def test_search_tool_specs_allow_optional_conversation_memory_promotion(self):
-        knowledge_base_spec = TOOL_SPEC_BY_NAME["search_knowledge_base"]
-
-        assert "save_to_conversation_memory" in knowledge_base_spec["parameters"]["properties"]
-        assert "memory_key" in knowledge_base_spec["parameters"]["properties"]
-        assert "survive later turns in this chat" in knowledge_base_spec["prompt"]["guidance"]
-
     def test_runtime_system_message_renders_persona_memory_and_policy(self):
         message = build_runtime_system_message(
             active_tool_names=["save_to_persona_memory", "delete_persona_memory_entry"],
@@ -1000,6 +965,4 @@ class TestRuntimeSystemMessage:
         content = message["content"]
         assert "## Persona Memory" in content
         assert "#5 09:15 - Repo style: Prefer concise progress updates." in content
-        assert "Shared durable memory for the currently active persona" in content
         assert "save_to_persona_memory" in content
-        assert "conversation memory instead" in content

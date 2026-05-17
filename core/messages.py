@@ -394,15 +394,6 @@ def build_persona_memory_section(entries) -> list[str]:
     return parts
 
 
-def _build_image_policy_payload(active_tool_names: list[str]) -> dict | None:
-    if "image_explain" not in set(active_tool_names or []):
-        return None
-    return {
-        "tool": "image_explain",
-        "guidance": get_prompt("policies.image_followup.guidance", ""),
-    }
-
-
 def _build_clarification_policy_payload(
     active_tool_names: list[str], clarification_max_questions: int | None = None
 ) -> dict | None:
@@ -620,8 +611,7 @@ def _build_clarification_response_payload(
     return {
         "guidance": (
             "The following answers were provided by the user in response to your clarification questions. "
-            "Proceed directly to the task using these answers — do NOT save them with save_to_conversation_memory "
-            "(the clarification system already persists and auto-injects them). "
+            "Proceed directly to the task using these answers. "
             "Do not re-list the original clarification questions in your answer unless the user explicitly asks for them. "
             "Saving them again wastes tool steps and creates duplicate context."
         ),
@@ -1892,7 +1882,7 @@ def _build_ignored_canvas_documents_section(canvas_payload: dict) -> list[str]:
     prefer_path = any(str(entry.get("path") or "").strip() for entry in ignored_documents)
     lines = [
         "## Ignored Canvas Documents",
-        "- These documents still exist in Canvas state, but their content is intentionally omitted from the prompt until re-enabled with update_canvas_metadata and ignored=false.",
+        "- These documents still exist in Canvas state, but their content is intentionally omitted from the prompt until re-enabled with ignored=false.",
     ]
 
     for entry in ignored_documents[:6]:
@@ -2043,9 +2033,9 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "## Canvas",
         "- Prefer the smallest valid change. Use batch_canvas_edits for all line-level operations.",
         "- Batch known non-overlapping edits for the same document with batch_canvas_edits.",
-        "- Use transform_canvas_lines for bulk find-replace.",
+        "- Use batch_canvas_edits with a single replace operation for bulk find-replace.",
         "- Verify affected region with a read-only tool after mutating.",
-        "- update_canvas_metadata handles title, role, dependency, or symbol changes (not content). Set ignored=true to hide a document.",
+        "- Set ignored=true to hide a document; re-enable with ignored=false when needed.",
         "- Do not use line-based tools on an ignored document until re-enabled with ignored=false.",
         "- When targeting, prefer document_path over document_id when shown in the prompt.",
         "- All code must be inside the `lines` array as properly escaped JSON strings.",
@@ -2137,7 +2127,7 @@ def _build_canvas_runtime_context_sections(
             active_lines.append(preview_compaction_note)
     if active_document_ignored:
         active_lines.append(
-            "- Guidance: This canvas document is intentionally ignored for automatic prompt content. Its metadata stays visible so you can re-enable it later with update_canvas_metadata and ignored=false when needed."
+            "- Guidance: This canvas document is intentionally ignored for automatic prompt content. Its metadata stays visible so you can re-enable it later with ignored=false when needed."
         )
     elif not get_canvas_document_capabilities(active_document)["line_addressable"]:
         active_lines.append(
@@ -2616,10 +2606,6 @@ def _build_runtime_static_parts(
     clarification_policy = _build_clarification_policy_payload(runtime_tool_names, clarification_max_questions)
     if clarification_policy:
         policies.append(f"**Clarification**: {clarification_policy['guidance']}")
-    image_policy = _build_image_policy_payload(runtime_tool_names)
-    if image_policy:
-        policies.append(f"**Image Follow-up**: {image_policy['guidance']}")
-
     if policies:
         parts.append(get_prompt("system.policies_intro", "## Important Policies\n") + "\n".join(f"- {policy}" for policy in policies) + "\n")
 

@@ -49,8 +49,6 @@ from services.canvas_service import (
     search_canvas_document,
     set_canvas_viewport,
     scale_canvas_char_limit,
-    transform_canvas_lines,
-    update_canvas_metadata,
 )
 from core.config import (
     AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS,
@@ -80,8 +78,6 @@ from core.prompts import get_prompt
 from core.db import (
     append_to_scratchpad,
     count_scratchpad_notes,
-    delete_conversation_memory_entry,
-    delete_persona_memory_entry,
     get_context_compaction_keep_recent_rounds,
     get_context_compaction_threshold,
     get_effective_conversation_persona,
@@ -98,10 +94,7 @@ from core.db import (
     get_prompt_max_input_tokens,
     get_rag_source_types,
     get_search_tool_query_limit,
-    insert_conversation_memory_entry,
-    insert_persona_memory_entry,
     parse_message_tool_calls,
-    read_image_asset_bytes,
     replace_scratchpad,
 )
 from core.messages import (
@@ -112,7 +105,6 @@ from core.messages import (
     CANVAS_RUNTIME_CONTEXT_REFRESH_HEADINGS,
     refresh_canvas_sections_in_context_injection,
 )
-from services.image_service import answer_image_question
 from lib.model_registry import (
     DEEPSEEK_PROVIDER,
     DEFAULT_CHAT_MODEL,
@@ -173,7 +165,6 @@ CANVAS_STREAM_CONTENT_TOOL_NAMES = {
 }
 CANVAS_STREAM_REPLACE_CONTENT_TOOL_NAMES = {
     "batch_canvas_edits",
-    "transform_canvas_lines",
 }
 # Derived: all tools that open a streaming canvas operation.
 CANVAS_STREAM_OPEN_TOOL_NAMES = CANVAS_STREAM_CONTENT_TOOL_NAMES | CANVAS_STREAM_REPLACE_CONTENT_TOOL_NAMES
@@ -3778,222 +3769,8 @@ def _build_search_memory_value(tool_name: str, result: dict) -> str:
     return f"{prefix} Top results: {' | '.join(fragments)}"
 
 
-def _maybe_save_search_result_to_conversation_memory(
-    tool_name: str, tool_args: dict, result: dict, runtime_state: dict
-) -> dict | None:
-    if not _coerce_tool_bool(tool_args.get("save_to_conversation_memory")):
-        return None
-
-    if not CONVERSATION_MEMORY_ENABLED:
-        return {
-            "status": "disabled",
-            "error": "Conversation memory is disabled.",
-        }
-
-    matches = result.get("matches") if isinstance(result.get("matches"), list) else []
-    count = max(0, int(result.get("count") or len(matches)))
-    if count <= 0 or not matches:
-        return {
-            "status": "no_matches",
-            "saved": False,
-        }
-
-    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
-    conversation_id = int(agent_context.get("conversation_id") or 0)
-    if conversation_id <= 0:
-        return {
-            "status": "unavailable",
-            "saved": False,
-            "error": "No active conversation context was provided.",
-        }
-
-    source_message_id = agent_context.get("source_message_id")
-    message_id = int(source_message_id) if source_message_id not in (None, "") else None
-    key = str(tool_args.get("memory_key") or "").strip() or _build_search_memory_default_key(
-        tool_name, result.get("query", "")
-    )
-    entry = insert_conversation_memory_entry(
-        conversation_id,
-        "tool_result",
-        key,
-        _build_search_memory_value(tool_name, result),
-        message_id=message_id,
-        mutation_context={"source_message_id": message_id},
-    )
-    updated = entry.get("updated_existing") is True
-    return {
-        "status": "ok",
-        "saved": True,
-        "key": entry.get("key") or key,
-        "updated_existing": updated,
-    }
-
-
-def _build_search_summary(base_summary: str, conversation_memory_result: dict | None) -> str:
-    if not isinstance(conversation_memory_result, dict):
-        return base_summary
-
-    status = str(conversation_memory_result.get("status") or "").strip().lower()
-    key = str(conversation_memory_result.get("key") or "").strip()
-    if status == "ok":
-        action = "updated" if conversation_memory_result.get("updated_existing") else "saved"
-        if key:
-            return f"{base_summary}; conversation memory {action}: {key}"
-        return f"{base_summary}; conversation memory {action}"
-    if status == "no_matches":
-        return f"{base_summary}; conversation memory skipped: no matches"
-    if status == "disabled":
-        return f"{base_summary}; conversation memory disabled"
-    if status == "unavailable":
-        return f"{base_summary}; conversation memory unavailable"
+def _build_search_summary(base_summary: str) -> str:
     return base_summary
-
-
-def _run_save_to_conversation_memory(tool_args: dict, runtime_state: dict):
-    if not CONVERSATION_MEMORY_ENABLED:
-        return {"status": "error", "error": "Conversation memory is disabled."}, "Conversation memory disabled"
-
-    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
-    conversation_id = int(agent_context.get("conversation_id") or 0)
-    if conversation_id <= 0:
-        return {
-            "status": "error",
-            "error": "No active conversation context was provided.",
-        }, "Conversation memory unavailable"
-
-    source_message_id = agent_context.get("source_message_id")
-    message_id = int(source_message_id) if source_message_id not in (None, "") else None
-    mutation_context = {"source_message_id": message_id}
-
-    # Batch path: entries array
-    raw_entries = tool_args.get("entries")
-    if isinstance(raw_entries, list) and raw_entries:
-        results = []
-        summaries = []
-        for item in raw_entries:
-            if not isinstance(item, dict):
-                continue
-            entry = insert_conversation_memory_entry(
-                conversation_id,
-                item.get("entry_type", ""),
-                item.get("key", ""),
-                item.get("value", ""),
-                message_id=message_id,
-                mutation_context=mutation_context,
-            )
-            updated = entry.get("updated_existing") is True
-            results.append({"key": entry.get("key") or item.get("key", ""), "updated_existing": updated})
-            summaries.append(f"{'updated' if updated else 'saved'}: {entry.get('key') or item.get('key', '')}")
-        return {"status": "ok", "saved": results}, "Conversation memory batch — " + ", ".join(summaries)
-
-    # Single-entry fallback (original behaviour)
-    entry = insert_conversation_memory_entry(
-        conversation_id,
-        tool_args.get("entry_type", ""),
-        tool_args.get("key", ""),
-        tool_args.get("value", ""),
-        message_id=message_id,
-        mutation_context=mutation_context,
-    )
-    updated = entry.get("updated_existing") is True
-    return {
-        "status": "ok",
-        "key": entry.get("key") or tool_args.get("key", ""),
-        "updated_existing": updated,
-    }, (f"Conversation memory updated: {entry['key']}" if updated else f"Conversation memory saved: {entry['key']}")
-
-
-def _run_delete_conversation_memory_entry(tool_args: dict, runtime_state: dict):
-    if not CONVERSATION_MEMORY_ENABLED:
-        return {"status": "error", "error": "Conversation memory is disabled."}, "Conversation memory disabled"
-
-    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
-    conversation_id = int(agent_context.get("conversation_id") or 0)
-    if conversation_id <= 0:
-        return {
-            "status": "error",
-            "error": "No active conversation context was provided.",
-        }, "Conversation memory unavailable"
-
-    source_message_id = agent_context.get("source_message_id")
-    message_id = int(source_message_id) if source_message_id not in (None, "") else None
-    entry_id = int(tool_args.get("entry_id") or 0)
-    deleted = delete_conversation_memory_entry(
-        entry_id,
-        conversation_id,
-        mutation_context={"source_message_id": message_id},
-    )
-    return {
-        "status": "ok" if deleted else "not_found",
-        "deleted": deleted,
-        "entry_id": entry_id,
-    }, (f"Conversation memory deleted: {entry_id}" if deleted else f"Conversation memory not found: {entry_id}")
-
-
-def _run_save_to_persona_memory(tool_args: dict, runtime_state: dict):
-    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
-    conversation_id = int(agent_context.get("conversation_id") or 0)
-    if conversation_id <= 0:
-        return {
-            "status": "error",
-            "error": "No active conversation context was provided.",
-        }, "Persona memory unavailable"
-
-    persona = get_effective_conversation_persona(conversation_id)
-    if not isinstance(persona, dict) or int(persona.get("id") or 0) <= 0:
-        return {
-            "status": "error",
-            "error": "No active persona is available for this conversation.",
-        }, "Persona memory unavailable"
-
-    source_message_id = agent_context.get("source_message_id")
-    message_id = int(source_message_id) if source_message_id not in (None, "") else None
-    entry = insert_persona_memory_entry(
-        int(persona["id"]),
-        tool_args.get("key", ""),
-        tool_args.get("value", ""),
-        message_id=message_id,
-        mutation_context={"conversation_id": conversation_id, "source_message_id": message_id},
-    )
-    updated = entry.get("updated_existing") is True
-    return {
-        "status": "ok",
-        "persona_id": int(persona["id"]),
-        "key": entry.get("key") or tool_args.get("key", ""),
-        "updated_existing": updated,
-    }, (f"Persona memory updated: {entry['key']}" if updated else f"Persona memory saved: {entry['key']}")
-
-
-def _run_delete_persona_memory_entry(tool_args: dict, runtime_state: dict):
-    agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
-    conversation_id = int(agent_context.get("conversation_id") or 0)
-    if conversation_id <= 0:
-        return {
-            "status": "error",
-            "error": "No active conversation context was provided.",
-        }, "Persona memory unavailable"
-
-    persona = get_effective_conversation_persona(conversation_id)
-    if not isinstance(persona, dict) or int(persona.get("id") or 0) <= 0:
-        return {
-            "status": "error",
-            "error": "No active persona is available for this conversation.",
-        }, "Persona memory unavailable"
-
-    source_message_id = agent_context.get("source_message_id")
-    message_id = int(source_message_id) if source_message_id not in (None, "") else None
-    entry_id = int(tool_args.get("entry_id") or 0)
-    deleted = delete_persona_memory_entry(
-        entry_id,
-        int(persona["id"]),
-        mutation_context={"conversation_id": conversation_id, "source_message_id": message_id},
-    )
-    return {
-        "status": "ok" if deleted else "not_found",
-        "deleted": deleted,
-        "entry_id": entry_id,
-        "persona_id": int(persona["id"]),
-    }, (f"Persona memory deleted: {entry_id}" if deleted else f"Persona memory not found: {entry_id}")
 
 
 def _run_ask_clarifying_question(tool_args: dict, runtime_state: dict):
@@ -4009,45 +3786,6 @@ def _run_ask_clarifying_question(tool_args: dict, runtime_state: dict):
 def _execute_streaming_tool_with_event_buffer(tool_name: str, tool_args: dict, runtime_state: dict):
     result, summary = _execute_tool(tool_name, tool_args, runtime_state=runtime_state)
     return result, summary, []
-
-
-def _run_image_explain(tool_args: dict, runtime_state: dict):
-    image_id = str(tool_args.get("image_id") or "").strip()
-    conversation_id = tool_args.get("conversation_id")
-    question = str(tool_args.get("question") or "").strip()
-    try:
-        normalized_conversation_id = int(conversation_id)
-    except (TypeError, ValueError):
-        return {
-            "status": "error",
-            "error": "conversation_id must be an integer.",
-        }, "Invalid conversation id"
-
-    asset, image_bytes = read_image_asset_bytes(image_id, conversation_id=normalized_conversation_id)
-    if not asset or not image_bytes:
-        return {
-            "status": "missing_image",
-            "error": "Stored image not found. Ask the user to re-upload the image.",
-            "image_id": image_id,
-            "conversation_id": normalized_conversation_id,
-        }, "Stored image not found"
-
-    answer = answer_image_question(
-        image_bytes,
-        asset.get("mime_type", ""),
-        question,
-        initial_analysis=asset.get("initial_analysis"),
-        settings=get_app_settings(),
-        model_id=str(((runtime_state.get("agent_context") or {}).get("model") or "")).strip(),
-        conversation_id=normalized_conversation_id,
-        source_message_id=int(((runtime_state.get("agent_context") or {}).get("source_message_id") or 0)) or None,
-    )
-    return {
-        "status": "ok",
-        "image_id": image_id,
-        "conversation_id": normalized_conversation_id,
-        "answer": answer,
-    }, "Image question answered"
 
 
 def _run_transcribe_youtube_video(tool_args: dict, runtime_state: dict):
@@ -4096,6 +3834,7 @@ def _run_transcribe_youtube_video(tool_args: dict, runtime_state: dict):
 
 
 def _run_search_knowledge_base(tool_args: dict, runtime_state: dict):
+    del runtime_state
     result = search_knowledge_base_tool(
         tool_args.get("query", ""),
         category=tool_args.get("category"),
@@ -4103,16 +3842,7 @@ def _run_search_knowledge_base(tool_args: dict, runtime_state: dict):
         allowed_source_types=get_rag_source_types(),
         min_similarity=tool_args.get("min_similarity"),
     )
-    conversation_memory_result = _maybe_save_search_result_to_conversation_memory(
-        "search_knowledge_base",
-        tool_args,
-        result,
-        runtime_state,
-    )
-    if conversation_memory_result is not None:
-        result = dict(result)
-        result["conversation_memory"] = conversation_memory_result
-    return result, _build_search_summary(f"{result.get('count', 0)} knowledge chunks found", conversation_memory_result)
+    return result, _build_search_summary(f"{result.get('count', 0)} knowledge chunks found")
 
 
 def _run_expand_truncated_tool_result(tool_args: dict, runtime_state: dict):
@@ -4371,72 +4101,6 @@ def _run_batch_canvas_edits(tool_args: dict, runtime_state: dict):
     return result, f"Canvas batch edit applied in {batch_result['document']['title']}"
 
 
-def _run_transform_canvas_lines(tool_args: dict, runtime_state: dict):
-    canvas_state = _get_canvas_runtime_state(runtime_state)
-    count_only = tool_args.get("count_only") is True
-    case_sensitive = True if "case_sensitive" not in tool_args else tool_args.get("case_sensitive") is True
-    result = transform_canvas_lines(
-        canvas_state,
-        tool_args.get("pattern", ""),
-        tool_args.get("replacement", ""),
-        document_id=tool_args.get("document_id"),
-        document_path=tool_args.get("document_path"),
-        scope=tool_args.get("scope") or "all",
-        is_regex=tool_args.get("is_regex") is True,
-        case_sensitive=case_sensitive,
-        count_only=count_only,
-    )
-    if count_only:
-        return result, f"Canvas transform matched {result.get('matches_found', 0)} line(s)"
-    if int(result.get("matches_replaced") or 0) <= 0:
-        return result, f"Canvas transform matched {result.get('matches_found', 0)} line(s)"
-    document = result.get("document") if isinstance(result.get("document"), dict) else None
-    if document and result.get("affected_lines"):
-        clear_overlapping_canvas_viewports(
-            canvas_state,
-            document_id=document.get("id"),
-            document_path=document.get("path"),
-            edit_start_line=min(result.get("affected_lines") or [0]),
-            edit_end_line=max(result.get("affected_lines") or [0]),
-        )
-    if document:
-        tool_result = build_canvas_tool_result(document, action="lines_transformed")
-        tool_result["matches_found"] = result.get("matches_found", 0)
-        tool_result["matches_replaced"] = result.get("matches_replaced", 0)
-        tool_result["affected_lines"] = result.get("affected_lines") or []
-        tool_result["scope"] = result.get("scope")
-        return tool_result, f"Canvas transformed in {document['title']}"
-    return result, f"Canvas transform matched {result.get('matches_found', 0)} line(s)"
-
-
-def _run_update_canvas_metadata(tool_args: dict, runtime_state: dict):
-    canvas_state = _get_canvas_runtime_state(runtime_state)
-    result = update_canvas_metadata(
-        canvas_state,
-        document_id=tool_args.get("document_id"),
-        document_path=tool_args.get("document_path"),
-        title=tool_args.get("title"),
-        summary=tool_args.get("summary"),
-        role=tool_args.get("role"),
-        ignored=tool_args.get("ignored"),
-        ignored_reason=tool_args.get("ignored_reason"),
-        add_imports=tool_args.get("add_imports"),
-        remove_imports=tool_args.get("remove_imports"),
-        add_exports=tool_args.get("add_exports"),
-        remove_exports=tool_args.get("remove_exports"),
-        add_dependencies=tool_args.get("add_dependencies"),
-        remove_dependencies=tool_args.get("remove_dependencies"),
-        add_symbols=tool_args.get("add_symbols"),
-    )
-    tool_result = build_canvas_tool_result(result["document"], action="metadata_updated")
-    tool_result["updated_fields"] = result.get("updated_fields") or []
-    if result["document"].get("ignored") is True:
-        return tool_result, f"Canvas document ignored: {result['document']['title']}"
-    if "ignored" in (result.get("updated_fields") or []):
-        return tool_result, f"Canvas document re-enabled: {result['document']['title']}"
-    return tool_result, f"Canvas metadata updated for {result['document']['title']}"
-
-
 def _run_set_canvas_viewport(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
     auto_unpin_on_edit = True if "auto_unpin_on_edit" not in tool_args else tool_args.get("auto_unpin_on_edit") is True
@@ -4570,12 +4234,7 @@ _TOOL_EXECUTORS = {
     "append_scratchpad": _run_append_scratchpad,
     "replace_scratchpad": _run_replace_scratchpad,
     "read_scratchpad": _run_read_scratchpad,
-    "save_to_conversation_memory": _run_save_to_conversation_memory,
-    "delete_conversation_memory_entry": _run_delete_conversation_memory_entry,
-    "save_to_persona_memory": _run_save_to_persona_memory,
-    "delete_persona_memory_entry": _run_delete_persona_memory_entry,
     "ask_clarifying_question": _run_ask_clarifying_question,
-    "image_explain": _run_image_explain,
     "transcribe_youtube_video": _run_transcribe_youtube_video,
     "search_knowledge_base": _run_search_knowledge_base,
     "expand_truncated_tool_result": _run_expand_truncated_tool_result,
@@ -4589,8 +4248,6 @@ _TOOL_EXECUTORS = {
     "batch_read_canvas_documents": _run_batch_read_canvas_documents,
     "search_canvas_document": _run_search_canvas_document,
     "create_canvas_document": _run_create_canvas_document,
-    "transform_canvas_lines": _run_transform_canvas_lines,
-    "update_canvas_metadata": _run_update_canvas_metadata,
     "set_canvas_viewport": _run_set_canvas_viewport,
     "clear_canvas_viewport": _run_clear_canvas_viewport,
     "batch_canvas_edits": _run_batch_canvas_edits,
@@ -4961,29 +4618,12 @@ def collect_agent_response(
 def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
     tool_name = _normalize_tool_name(tool_name)
     tool_args = tool_args if isinstance(tool_args, dict) else {}
-    if tool_name in {"save_to_conversation_memory", "save_to_persona_memory"}:
-        entry_type = str(tool_args.get("entry_type") or "").strip()
-        key = str(tool_args.get("key") or "").strip()
-        value = str(tool_args.get("value") or "").strip()
-        compact = ": ".join(part for part in (key, value) if part)
-        if entry_type and compact:
-            return f"{entry_type} | {compact}"[:300]
-        return (compact or entry_type)[:300]
-    if tool_name in {"delete_conversation_memory_entry", "delete_persona_memory_entry"}:
-        return str(tool_args.get("entry_id") or "").strip()[:300]
     if tool_name in {"search_web", "search_news_ddgs", "search_news_google"}:
         values = _get_search_tool_queries(tool_args)
         if isinstance(values, list):
             return ", ".join(str(value).strip() for value in values if str(value).strip())[:300]
     if tool_name == "search_knowledge_base":
-        query = str(tool_args.get("query") or "").strip()
-        if _coerce_tool_bool(tool_args.get("save_to_conversation_memory")):
-            memory_key = str(tool_args.get("memory_key") or "").strip()
-            suffix = f"save:{memory_key}" if memory_key else "save:auto"
-            if query:
-                return f"{query} | {suffix}"[:300]
-            return suffix[:300]
-        return query[:300]
+        return str(tool_args.get("query") or "").strip()[:300]
     if tool_name == "fetch_url":
         return str(tool_args.get("url") or "").strip()[:300]
     if tool_name == "fetch_url_summarized":

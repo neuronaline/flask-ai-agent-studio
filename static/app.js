@@ -1502,8 +1502,8 @@ const sanitizer = globalThis.DOMPurify || null;
 const highlighter = globalThis.hljs || null;
 const SIDEBAR_STORAGE_KEY = "chatbot.sidebarOpen";
 const CLARIFICATION_DRAFT_STORAGE_PREFIX = "chatbot.clarificationDraft";
-const CANVAS_STREAMING_PREVIEW_TOOLS = new Set(["create_canvas_document", "batch_canvas_edits", "transform_canvas_lines"]);
-const CANVAS_EDIT_PREVIEW_TOOLS = new Set(["batch_canvas_edits", "transform_canvas_lines"]);
+const CANVAS_STREAMING_PREVIEW_TOOLS = new Set(["create_canvas_document", "batch_canvas_edits"]);
+const CANVAS_EDIT_PREVIEW_TOOLS = new Set(["batch_canvas_edits"]);
 const CANVAS_PAGE_HEADING_TEXT_RE = /^Page\s+(\d+)$/i;
 const PENDING_CANVAS_UPLOAD_PREVIEW_KEY = "pending-canvas-upload";
 

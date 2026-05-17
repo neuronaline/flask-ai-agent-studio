@@ -71,8 +71,6 @@ CANVAS_MUTATING_TOOL_NAMES: frozenset[str] = frozenset({
     "create_canvas_document",
     "rewrite_canvas_document",
     "batch_canvas_edits",
-    "transform_canvas_lines",
-    "update_canvas_metadata",
     "set_canvas_viewport",
     "clear_canvas_viewport",
     "replace_canvas_lines",
@@ -88,8 +86,6 @@ CANVAS_CONTENT_MUTATING_TOOL_NAMES: frozenset[str] = frozenset({
     "create_canvas_document",
     "rewrite_canvas_document",
     "batch_canvas_edits",
-    "transform_canvas_lines",
-    "update_canvas_metadata",
     "replace_canvas_lines",
     "insert_canvas_lines",
     "delete_canvas_lines",
@@ -430,7 +426,7 @@ def _raise_canvas_document_capability_error(document: dict, action: str, capabil
     if document.get("ignored") is True:
         raise ValueError(
             f"{action} is not available for the ignored canvas document '{title}'. "
-            "Re-enable it with update_canvas_metadata and ignored=false before using text-addressable tools."
+            "Re-enable it with ignored=false before using text-addressable tools."
         )
     if capability == "editable":
         raise ValueError(

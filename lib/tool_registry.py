@@ -205,161 +205,6 @@ TOOL_SPECS = [
         },
     },
     {
-        "name": "save_to_conversation_memory",
-        "description": (
-            "Save one or more compact conversation-scoped memory entries for this chat only. "
-            "Use this as the default place to store important chat-specific details, active constraints, decisions, discovered repo or environment facts, or critical tool outcomes that should not be lost later in the same conversation. "
-            "Pass multiple entries in the 'entries' array to save them all in one call instead of calling this tool repeatedly. "
-            "If the same key already exists, the entry is refreshed instead of duplicated."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "entries": {
-                    "type": "array",
-                    "description": (
-                        "List of memory entries to save in one call. "
-                        "Use this instead of calling the tool multiple times. "
-                        "Each item must have entry_type, key, and value."
-                    ),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "entry_type": {
-                                "type": "string",
-                                "enum": ["user_info", "task_context", "tool_result", "decision"],
-                                "description": "Classification for the memory entry.",
-                            },
-                            "key": {
-                                "type": "string",
-                                "description": "Short label for the fact or result. Keep it compact and specific.",
-                            },
-                            "value": {
-                                "type": "string",
-                                "description": "Single-line micro-summary of the information to remember for later turns in this same chat.",
-                            },
-                        },
-                        "required": ["entry_type", "key", "value"],
-                    },
-                    "minItems": 1,
-                },
-                "entry_type": {
-                    "type": "string",
-                    "enum": ["user_info", "task_context", "tool_result", "decision"],
-                    "description": "Classification for a single memory entry (use 'entries' array instead when saving multiple).",
-                },
-                "key": {
-                    "type": "string",
-                    "description": "Short label for a single memory entry (use 'entries' array instead when saving multiple).",
-                },
-                "value": {
-                    "type": "string",
-                    "description": "Single-line micro-summary for a single memory entry (use 'entries' array instead when saving multiple).",
-                },
-            },
-        },
-        "prompt": {
-            "purpose": "Writes one or more short conversation-specific memory entries that will be auto-injected in later turns of this same chat.",
-            "inputs": {
-                "entries": "[{entry_type, key, value}, ...] — preferred when saving multiple facts at once",
-                "entry_type": "user_info, task_context, tool_result, or decision (single-entry fallback)",
-                "key": "short label (single-entry fallback)",
-                "value": "one compact factual line (single-entry fallback)",
-            },
-            "guidance": (
-                "Use this for important chat-specific details, constraints, decisions, and tool outcomes. "
-                "Default to this over scratchpad unless the fact is durable and cross-conversation. "
-                "Pass multiple entries in one call by using the entries array where each item is an object with entry_type, key, and value fields — for example: {\"entries\": [{\"entry_type\": \"task_context\", \"key\": \"user_goal\", \"value\": \"install Python package\"}]}. "
-                "To save a single entry, pass entry_type, key, and value as separate top-level arguments instead. "
-                "Reuse the same key when updating existing entries to keep memory compact."
-            ),
-        },
-    },
-    {
-        "name": "delete_conversation_memory_entry",
-        "description": (
-            "Delete one outdated or incorrect conversation memory entry by id. "
-            "Use this to clean up stale memory inside the current chat."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "entry_id": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Conversation memory entry id to remove.",
-                },
-            },
-            "required": ["entry_id"],
-        },
-        "prompt": {
-            "purpose": "Removes one obsolete conversation-scoped memory entry.",
-            "inputs": {
-                "entry_id": "id shown in the Conversation Memory prompt section",
-            },
-            "guidance": "Use this when an earlier conversation-memory entry is no longer valid, was superseded, or should not keep influencing later turns.",
-        },
-    },
-    {
-        "name": "save_to_persona_memory",
-        "description": (
-            "Save one compact persona-scoped memory entry for the currently active persona. "
-            "This memory is shared across conversations that use the same persona. "
-            "If the same key already exists, the entry is refreshed instead of duplicated."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "string",
-                    "description": "Short label for the stable persona-scoped fact. Keep it compact and specific.",
-                },
-                "value": {
-                    "type": "string",
-                    "description": "Single-line micro-summary of the information to remember across future conversations that use this persona.",
-                },
-            },
-            "required": ["key", "value"],
-        },
-        "prompt": {
-            "purpose": "Writes one short persona-scoped memory entry that will be auto-injected in later conversations using this same persona.",
-            "inputs": {
-                "key": "short label",
-                "value": "one compact factual line",
-            },
-            "guidance": (
-                "Use for stable persona-scoped facts that survive beyond the current chat. "
-                "If the detail only matters for this chat, use conversation memory instead. "
-                "Reuse the same key when updating to keep persona memory compact."
-            ),
-        },
-    },
-    {
-        "name": "delete_persona_memory_entry",
-        "description": (
-            "Delete one outdated or incorrect persona memory entry by id. "
-            "Use this to clean up stale persona-scoped memory."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "entry_id": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Persona memory entry id to remove.",
-                },
-            },
-            "required": ["entry_id"],
-        },
-        "prompt": {
-            "purpose": "Removes one obsolete persona-scoped memory entry.",
-            "inputs": {
-                "entry_id": "id shown in the Persona Memory prompt section",
-            },
-            "guidance": "Use this when an earlier persona-memory entry is no longer valid, was superseded, or should stop influencing future conversations for this persona.",
-        },
-    },
-    {
         "name": "ask_clarifying_question",
         "description": (
             "Ask the user one or more structured clarification questions and stop answering until they reply. "
@@ -410,45 +255,6 @@ TOOL_SPECS = [
                 "Use depends_on only for short follow-up branches that should stay hidden until a previous answer makes them relevant. "
                 'Each questions item must be an object with id, label, and input_type; example: {"id":"scope","label":"Which scope?","input_type":"text"}. '
                 "Use plain UI text only for intro, labels, placeholders, and options. Do not include Q:/A: prefixes, markdown bullets, XML/tag wrappers, code fences, or markers like <| and |>."
-            ),
-        },
-    },
-    {
-        "name": "image_explain",
-        "description": (
-            "Answer a follow-up question about a previously uploaded image saved in the current conversation. "
-            "Use this when the user refers back to an earlier image or screenshot and the stored visual context may matter. "
-            "Always send the follow-up question in English."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "image_id": {
-                    "type": "string",
-                    "description": "The globally unique stored image_id for the referenced uploaded image.",
-                },
-                "conversation_id": {
-                    "type": "integer",
-                    "description": "The current conversation id used to verify that the image belongs to this chat.",
-                },
-                "question": {
-                    "type": "string",
-                    "description": "A focused follow-up question about the image. Write this question in English.",
-                },
-            },
-            "required": ["image_id", "conversation_id", "question"],
-        },
-        "prompt": {
-            "purpose": "Asks the configured helper image model a new question about a stored image from this conversation.",
-            "inputs": {
-                "image_id": "stored image id",
-                "conversation_id": "current conversation id",
-                "question": "follow-up question written in English",
-            },
-            "guidance": (
-                "Use this when the user asks about a previously uploaded image instead of relying only on the cached summary. "
-                "Always send the question in English. The tool response will be in English and uses the helper image model configured in Settings. "
-                "If the referenced image is ambiguous, ask the user to clarify which image they mean before calling the tool."
             ),
         },
     },
@@ -511,14 +317,6 @@ TOOL_SPECS = [
                     "minimum": 0.0,
                     "maximum": 1.0,
                 },
-                "save_to_conversation_memory": {
-                    "type": "boolean",
-                    "description": "If true, save a compact summary of the strongest search findings to conversation memory for this chat.",
-                },
-                "memory_key": {
-                    "type": "string",
-                    "description": "Optional short conversation-memory key to use when save_to_conversation_memory is true. Reuse the same key to refresh an existing finding.",
-                },
             },
             "required": ["query"],
         },
@@ -529,10 +327,8 @@ TOOL_SPECS = [
                 "category": "optional category",
                 "top_k": "1-12 results",
                 "min_similarity": "optional threshold 0.0-1.0",
-                "save_to_conversation_memory": "optional boolean",
-                "memory_key": "optional short memory label",
             },
-            "guidance": "Use category when the likely source type is clear, and use at most a few focused searches. Synthesize from returned chunks instead of retrying near-duplicate queries. If the current context is already sufficient, do not search again; unnecessary searches waste tokens. If the finding should survive later turns in this chat, set save_to_conversation_memory=true and provide a short memory_key.",
+            "guidance": "Use category when the likely source type is clear, and use at most a few focused searches. Synthesize from returned chunks instead of retrying near-duplicate queries. If the current context is already sufficient, do not search again; unnecessary searches waste tokens.",
         },
     },
     {
@@ -1113,105 +909,6 @@ TOOL_SPECS = [
         },
     },
     {
-        "name": "transform_canvas_lines",
-        "description": "Apply a plain-text or regex find-replace across a full canvas document or a specific line scope.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {
-                    "type": "string",
-                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
-                },
-                "pattern": {"type": "string", "description": "Search text or regex pattern."},
-                "replacement": {
-                    "type": "string",
-                    "description": "Replacement text. Regex capture groups may use $1, $2, and so on.",
-                },
-                "scope": {"type": "string", "description": "Use 'all' or 'lines_<start>_<end>'."},
-                "is_regex": {"type": "boolean"},
-                "case_sensitive": {"type": "boolean"},
-                "count_only": {
-                    "type": "boolean",
-                    "description": "When true, report matches without mutating the document.",
-                },
-            },
-            "required": ["pattern", "replacement"],
-        },
-        "prompt": {
-            "purpose": "Performs a scoped plain-text or regex transformation across one canvas document.",
-            "inputs": {
-                "document_id": "optional target id",
-                "document_path": "optional target project-relative path",
-                "pattern": "search text or regex",
-                "replacement": "replacement text",
-                "scope": "all or lines range",
-                "is_regex": "regex toggle",
-                "case_sensitive": "case sensitivity toggle",
-                "count_only": "preview-only toggle",
-            },
-            "guidance": (
-                "Use this for bulk find-replace work across a document or a bounded line range. "
-                "If the exact impact is uncertain, run with count_only=true first, then apply the real replacement."
-            ),
-        },
-    },
-    {
-        "name": "update_canvas_metadata",
-        "description": "Update canvas document metadata such as title, summary, role, ignored state, ignore reason, imports, exports, dependencies, or important symbols without changing content lines.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {
-                    "type": "string",
-                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
-                },
-                "title": {"type": "string"},
-                "summary": {"type": "string"},
-                "role": {
-                    "type": "string",
-                    "enum": ["source", "config", "dependency", "docs", "test", "script", "note"],
-                },
-                "ignored": {
-                    "type": "boolean",
-                    "description": "Set true to hide this document's content from future automatic prompt excerpts without deleting it. Set false to re-enable the document later.",
-                },
-                "ignored_reason": {
-                    "type": "string",
-                    "description": "Short reason explaining why the document is being ignored. Required when turning ignored on for a document that does not already have a reason.",
-                },
-                "add_imports": {"type": "array", "items": {"type": "string"}},
-                "remove_imports": {"type": "array", "items": {"type": "string"}},
-                "add_exports": {"type": "array", "items": {"type": "string"}},
-                "remove_exports": {"type": "array", "items": {"type": "string"}},
-                "add_dependencies": {"type": "array", "items": {"type": "string"}},
-                "remove_dependencies": {"type": "array", "items": {"type": "string"}},
-                "add_symbols": {"type": "array", "items": {"type": "string"}},
-            },
-        },
-        "prompt": {
-            "purpose": "Updates canvas metadata without touching document content.",
-            "inputs": {
-                "document_id": "optional target id",
-                "document_path": "optional target project-relative path",
-                "title": "new title",
-                "summary": "new summary",
-                "role": "new role",
-                "ignored": "set true to suppress future prompt content or false to re-enable it",
-                "ignored_reason": "short reason for ignoring the document",
-                "add_imports": "imports to append",
-                "remove_imports": "imports to remove",
-                "add_exports": "exports to append",
-                "remove_exports": "exports to remove",
-                "add_dependencies": "dependencies to append",
-                "remove_dependencies": "dependencies to remove",
-                "add_symbols": "symbols to append",
-            },
-            "guidance": "Use this when only metadata should change and the document body must remain untouched. Set ignored=true with ignored_reason to hide a document's content from future prompt excerpts without deleting it, and set ignored=false later when that document should become visible again.",
-        },
-    },
-    {
         "name": "set_canvas_viewport",
         "description": "Pin a text line range from a text-addressable canvas document so it is automatically injected into later prompts for a limited number of turns.",
         "parameters": {
@@ -1370,11 +1067,6 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
     "get_context_node_detail": {
         "ui_hidden": True,
     },
-    "image_explain": {
-        "read_only": True,
-        "parallel_safe": True,
-        "state_domains": ("image",),
-    },
     "transcribe_youtube_video": {
         "state_domains": ("video",),
     },
@@ -1443,17 +1135,6 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "state_domains": ("canvas",),
         "requires_canvas_document": True,
         "requires_text_addressable_canvas": True,
-        "requires_editable_canvas": True,
-    },
-    "transform_canvas_lines": {
-        "state_domains": ("canvas",),
-        "requires_canvas_document": True,
-        "requires_text_addressable_canvas": True,
-        "requires_editable_canvas": True,
-    },
-    "update_canvas_metadata": {
-        "state_domains": ("canvas",),
-        "requires_canvas_document": True,
         "requires_editable_canvas": True,
     },
     "set_canvas_viewport": {
@@ -1541,11 +1222,6 @@ def is_tool_parallel_safe(tool_name: str, tool_args: dict | None = None) -> bool
     normalized_tool_name = str(tool_name or "").strip()
     metadata = TOOL_RUNTIME_METADATA.get(normalized_tool_name)
     if not metadata or metadata.get("parallel_safe") is not True:
-        return False
-    normalized_tool_args = tool_args if isinstance(tool_args, dict) else {}
-    if normalized_tool_name == "search_knowledge_base" and _coerce_runtime_tool_bool(
-        normalized_tool_args.get("save_to_conversation_memory")
-    ):
         return False
     return True
 

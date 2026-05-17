@@ -24,34 +24,6 @@ system:
     ## Current Date and Time
     > **AUTHORITATIVE CURRENT TIME:**
 
-memory:
-  persona:
-    header: |
-      ## Persona Memory
-
-    intro: |
-      *Shared durable memory for the currently active persona.*
-
-    guidance: |
-      Use save_to_persona_memory for stable persona facts. DO save: preferences, recurring conventions, reusable domain facts. Default away: current-chat details. DO NOT save: one-off tasks, raw tool outputs, volatile state.
-
-  conversation:
-    header: |
-      ## Conversation Memory
-
-    intro: |
-      *Primary durable working memory for this chat.*
-
-    guidance: |
-      Use save_to_conversation_memory for important chat-scoped facts. DO save: confirmed details, active goals, firm constraints, decisions, discovered facts. Save incrementally after clarifications, tool results, plan changes. Default away: raw outputs, broad summaries, or durable facts better suited for scratchpad.
-
-  conversation_priority:
-    header: |
-      ## Conversation Memory Priority
-
-    guidance: |
-      Earlier turns have been summarized or compacted. Treat Conversation Memory as the durable record for older constraints, decisions, and findings.
-
 scratchpad:
   header: |
     ## Scratchpad (AI Persistent Memory)
@@ -64,7 +36,7 @@ scratchpad:
 
   policy: |
     DO save: rare durable general facts likely to matter across future conversations.
-    Default away: current-chat details (use conversation memory instead).
+    Default away: current-chat details.
     DO NOT save: one-off tasks, transient project state, raw tool outputs, web/search results.
     Style: each notes item = one short standalone fact.
 

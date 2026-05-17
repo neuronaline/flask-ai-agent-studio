@@ -156,15 +156,10 @@ def _filter_visible_operation_model_fallback_preferences(preferences: dict | Non
 
 
 TOOL_PERMISSION_LABELS = {
-    "save_to_conversation_memory": "Save chat memory",
-    "delete_conversation_memory_entry": "Delete chat memory",
-    "save_to_persona_memory": "Save persona memory",
-    "delete_persona_memory_entry": "Delete persona memory",
     "append_scratchpad": "Append persistent scratchpad",
     "replace_scratchpad": "Rewrite persistent scratchpad section",
     "read_scratchpad": "Read persistent scratchpad",
     "ask_clarifying_question": "Ask interactive clarification questions",
-    "image_explain": "Follow up on stored images",
     "transcribe_youtube_video": "Transcribe YouTube video",
     "search_knowledge_base": "Knowledge base search",
     "search_web": "Web search",
@@ -178,8 +173,6 @@ TOOL_PERMISSION_LABELS = {
     "search_canvas_document": "Search canvas document",
     "batch_canvas_edits": "Batch canvas edits",
     "batch_read_canvas_documents": "Read multiple canvas documents",
-    "transform_canvas_lines": "Transform canvas lines",
-    "update_canvas_metadata": "Update canvas metadata",
     "set_canvas_viewport": "Set canvas viewport",
     "clear_canvas_viewport": "Clear canvas viewport",
     "delete_canvas_document": "Delete canvas document",
@@ -188,15 +181,10 @@ TOOL_PERMISSION_LABELS = {
 }
 
 TOOL_PERMISSION_DESCRIPTIONS = {
-    "save_to_conversation_memory": "Save a short chat-scoped memory entry for later turns in this conversation.",
-    "delete_conversation_memory_entry": "Remove one outdated chat-scoped memory entry.",
-    "save_to_persona_memory": "Save a short persona-scoped memory entry shared across conversations using that persona.",
-    "delete_persona_memory_entry": "Remove one outdated persona-scoped memory entry.",
     "append_scratchpad": "Append durable facts to a named persistent memory section.",
     "replace_scratchpad": "Fully rewrite one persistent memory section.",
     "read_scratchpad": "Read the current persistent memory before editing.",
     "ask_clarifying_question": "Pause and ask the user structured questions before answering.",
-    "image_explain": "Ask follow-up questions about a previously uploaded image.",
     "transcribe_youtube_video": "Validate a YouTube URL and generate a local speech transcript with a prompt-ready context block.",
     "search_knowledge_base": "Semantic search over synced chats and uploaded documents.",
     "search_web": "Live web search via DuckDuckGo for current facts.",
@@ -210,8 +198,6 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "search_canvas_document": "Search for text or patterns inside canvas documents.",
     "batch_canvas_edits": "Apply several non-overlapping line edits to a canvas document in one call.",
     "batch_read_canvas_documents": "Read multiple canvas documents or ranges in one call.",
-    "transform_canvas_lines": "Apply a text transformation to a range of lines in a canvas document.",
-    "update_canvas_metadata": "Update the title, language, or other metadata of a canvas document.",
     "set_canvas_viewport": "Pin a line range as the active viewport for a canvas document.",
     "clear_canvas_viewport": "Remove the pinned viewport so the full canvas is shown.",
     "delete_canvas_document": "Permanently remove a canvas document from the conversation.",
@@ -271,15 +257,10 @@ TOOL_PERMISSION_SECTION_METADATA = {
 
 def _get_tool_permission_section_key(name: str) -> str:
     if name in {
-        "save_to_conversation_memory",
-        "delete_conversation_memory_entry",
-        "save_to_persona_memory",
-        "delete_persona_memory_entry",
         "append_scratchpad",
         "replace_scratchpad",
         "read_scratchpad",
         "ask_clarifying_question",
-        "image_explain",
         "transcribe_youtube_video",
         "search_knowledge_base",
     }:
@@ -299,8 +280,6 @@ def _get_tool_permission_section_key(name: str) -> str:
         "search_canvas_document",
         "batch_canvas_edits",
         "batch_read_canvas_documents",
-        "transform_canvas_lines",
-        "update_canvas_metadata",
         "set_canvas_viewport",
         "clear_canvas_viewport",
         "delete_canvas_document",

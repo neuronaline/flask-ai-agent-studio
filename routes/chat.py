@@ -156,7 +156,7 @@ from core.messages import (
     prepare_context_injection_for_history,
     prepend_runtime_context,
 )
-from services.image_service import analyze_uploaded_image, can_answer_image_questions
+from services.image_service import analyze_uploaded_image
 from utils.image_utils import read_uploaded_image
 from lib.model_registry import (
     apply_model_target_request_options,
@@ -4927,8 +4927,6 @@ def register_chat_routes(app) -> None:
             except Exception:
                 LOGGER.exception("Failed to evaluate first-turn title state for conversation_id=%s", conv_id)
         disabled_tool_names: list[str] = []
-        if not can_answer_image_questions(settings, fallback_model_id=model):
-            disabled_tool_names.append("image_explain")
         fetch_url_clip_aggressiveness = get_fetch_url_clip_aggressiveness(settings)
         fetch_url_token_threshold = get_fetch_url_token_threshold(settings)
         clarification_response = None

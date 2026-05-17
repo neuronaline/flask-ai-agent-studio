@@ -35,28 +35,12 @@ _FALLBACK_PROMPTS: dict[str, Any] = {
         "policies_intro": "## Important Policies",
         "time_context_header": "## Current Date and Time\n> **AUTHORITATIVE CURRENT TIME:**",
     },
-    "memory": {
-        "persona": {
-            "header": "## Persona Memory",
-            "intro": "*Shared durable memory for the currently active persona.*",
-            "guidance": "Use save_to_persona_memory for stable persona facts. DO save: preferences, recurring conventions, reusable domain facts. Default away: current-chat details. DO NOT save: one-off tasks, raw tool outputs, volatile state.",
-        },
-        "conversation": {
-            "header": "## Conversation Memory",
-            "intro": "*Primary durable working memory for this chat.*",
-            "guidance": "Use save_to_conversation_memory for important chat-scoped facts. DO save: confirmed details, active goals, firm constraints, decisions, discovered facts. Save incrementally after clarifications, tool results, plan changes. Default away: raw outputs, broad summaries, or durable facts better suited for scratchpad.",
-        },
-        "conversation_priority": {
-            "header": "## Conversation Memory Priority",
-            "guidance": "Earlier turns have been summarized or compacted. Treat Conversation Memory as the durable record for older constraints, decisions, and findings.",
-        },
-    },
     "scratchpad": {
         "header": "## Scratchpad (AI Persistent Memory)",
         "intro": "Rare durable cross-conversation facts. Keep it sparse.",
         "policy": (
             "DO save: rare durable general facts likely to matter across future conversations.\n"
-            "Default away: current-chat details (use conversation memory instead).\n"
+            "Default away: current-chat details.\n"
             "DO NOT save: one-off tasks, transient project state, raw tool outputs, web/search results.\n"
             "Style: each notes item = one short standalone fact."
         ),

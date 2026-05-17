@@ -4927,8 +4927,6 @@ def get_active_tool_names(settings: dict | None = None) -> list[str]:
     names = normalize_active_tool_names(source.get("active_tools"))
     if not get_rag_enabled(source):
         names = [name for name in names if name != "search_knowledge_base"]
-    if not get_image_uploads_enabled(source):
-        names = [name for name in names if name != "image_explain"]
     if not get_conversation_memory_enabled(source):
         names = [
             name for name in names if name not in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
@@ -4942,8 +4940,6 @@ def get_active_tool_names(settings: dict | None = None) -> list[str]:
         names = normalize_active_tool_names(DEFAULT_SETTINGS["active_tools"])
         if not get_rag_enabled(source):
             names = [name for name in names if name != "search_knowledge_base"]
-        if not get_image_uploads_enabled(source):
-            names = [name for name in names if name != "image_explain"]
         if not get_conversation_memory_enabled(source):
             names = [
                 name
@@ -4981,8 +4977,6 @@ def get_conversation_active_tool_names(conversation_id: int, settings: dict | No
 
     if not get_rag_enabled(source):
         names = [name for name in names if name != "search_knowledge_base"]
-    if not get_image_uploads_enabled(source):
-        names = [name for name in names if name != "image_explain"]
     if not get_conversation_memory_enabled(source):
         names = [
             name for name in names if name not in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
