@@ -3107,17 +3107,7 @@ async function createCanvasDocumentFromData({ title, content, format, language =
 
   cancelPendingConversationRefreshes();
 
-  if (canvasNewBtn) {
-    canvasNewBtn.disabled = true;
-  }
-  if (canvasUploadBtn) {
-    canvasUploadBtn.disabled = true;
-  }
-
-  setCanvasMutationState("create");
-  setCanvasStatus(statusMessage, "muted");
-
-  try {
+  return withCanvasMutation("create", async () => {
     const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
       method: "POST",
       headers: {
@@ -3135,32 +3125,24 @@ async function createCanvasDocumentFromData({ title, content, format, language =
     if (!response.ok) {
       throw new Error(payload.error || "Canvas create failed.");
     }
-
-    clearPendingCanvasUploadPreview();
-    setCanvasMutationState("", { rerender: false });
-    history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
-    streamingCanvasDocuments = [];
-    activeCanvasDocumentId = String(payload.active_document_id || payload.document?.id || "").trim() || null;
-    isCanvasEditing = true;
-    editingCanvasDocumentId = null;
-    renderConversationHistory();
-    renderCanvasPanel();
-    scheduleCanvasAutoRefreshAfterUpload();
-    setCanvasStatus("Canvas file created.", "success");
-    globalThis.requestAnimationFrame(() => {
-      if (!canvasEditorEl) {
-        return;
-      }
-      canvasEditorEl.focus();
-      const cursorPosition = canvasEditorEl.value.length;
-      canvasEditorEl.setSelectionRange(cursorPosition, cursorPosition);
-    });
-  } catch (error) {
-    clearPendingCanvasUploadPreview();
-    setCanvasMutationState("", { rerender: false });
-    setCanvasStatus(error.message || "Canvas create failed.", "danger");
-    renderCanvasPanel();
-  }
+    return payload;
+  }, {
+    statusMessage,
+    successMessage: "Canvas file created.",
+    buttonsToDisable: [canvasNewBtn, canvasUploadBtn],
+    onSuccess: () => {
+      clearPendingCanvasUploadPreview();
+      scheduleCanvasAutoRefreshAfterUpload();
+      globalThis.requestAnimationFrame(() => {
+        if (!canvasEditorEl) {
+          return;
+        }
+        canvasEditorEl.focus();
+        const cursorPosition = canvasEditorEl.value.length;
+        canvasEditorEl.setSelectionRange(cursorPosition, cursorPosition);
+      });
+    },
+  });
 }
 
 async function createCanvasDocumentFromPrompt() {
@@ -3195,19 +3177,10 @@ async function createCanvasDocumentFromFile(file) {
     return;
   }
 
-  if (canvasNewBtn) {
-    canvasNewBtn.disabled = true;
-  }
-  if (canvasUploadBtn) {
-    canvasUploadBtn.disabled = true;
-  }
-
   cancelPendingConversationRefreshes();
-  setCanvasMutationState("upload");
   showPendingCanvasUploadPreview(nextTitle);
-  setCanvasStatus(`Uploading ${nextTitle}...`, "muted");
 
-  try {
+  return withCanvasMutation("upload", async () => {
     const formData = new FormData();
     formData.append("file", file, nextTitle);
     formData.append("title", nextTitle);
@@ -3223,31 +3196,26 @@ async function createCanvasDocumentFromFile(file) {
     if (!response.ok) {
       throw new Error(payload.error || "Canvas upload failed.");
     }
-
-    clearPendingCanvasUploadPreview();
-    setCanvasMutationState("", { rerender: false });
-    history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
-    streamingCanvasDocuments = [];
-    activeCanvasDocumentId = String(payload.active_document_id || payload.document?.id || "").trim() || null;
-    isCanvasEditing = true;
-    editingCanvasDocumentId = null;
-    renderConversationHistory();
-    renderCanvasPanel();
-    setCanvasStatus("Canvas file created.", "success");
-    globalThis.requestAnimationFrame(() => {
-      if (!canvasEditorEl) {
-        return;
-      }
-      canvasEditorEl.focus();
-      const cursorPosition = canvasEditorEl.value.length;
-      canvasEditorEl.setSelectionRange(cursorPosition, cursorPosition);
-    });
-  } catch (error) {
-    clearPendingCanvasUploadPreview();
-    setCanvasMutationState("", { rerender: false });
-    setCanvasStatus(error.message || "Canvas upload failed.", "danger");
-    renderCanvasPanel();
-  }
+    return payload;
+  }, {
+    statusMessage: `Uploading ${nextTitle}...`,
+    successMessage: "Canvas file created.",
+    buttonsToDisable: [canvasNewBtn, canvasUploadBtn],
+    onSuccess: () => {
+      clearPendingCanvasUploadPreview();
+      globalThis.requestAnimationFrame(() => {
+        if (!canvasEditorEl) {
+          return;
+        }
+        canvasEditorEl.focus();
+        const cursorPosition = canvasEditorEl.value.length;
+        canvasEditorEl.setSelectionRange(cursorPosition, cursorPosition);
+      });
+    },
+    onError: () => {
+      clearPendingCanvasUploadPreview();
+    },
+  });
 }
 
 async function importGithubRepositoryToCanvas() {
@@ -3265,21 +3233,9 @@ async function importGithubRepositoryToCanvas() {
     return;
   }
 
-  if (canvasNewBtn) {
-    canvasNewBtn.disabled = true;
-  }
-  if (canvasUploadBtn) {
-    canvasUploadBtn.disabled = true;
-  }
-  if (canvasImportGithubBtn) {
-    canvasImportGithubBtn.disabled = true;
-  }
-
   cancelPendingConversationRefreshes();
-  setCanvasMutationState("import-github");
-  setCanvasStatus("Importing GitHub repository into Canvas...", "muted");
 
-  try {
+  return withCanvasMutation("import-github", async () => {
     const response = await fetch(`/api/conversations/${currentConvId}/canvas/import-github`, {
       method: "POST",
       headers: {
@@ -3291,28 +3247,25 @@ async function importGithubRepositoryToCanvas() {
     if (!response.ok) {
       throw new Error(payload.error || "GitHub import failed.");
     }
-
-    setCanvasMutationState("", { rerender: false });
-    history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
-    streamingCanvasDocuments = [];
-    activeCanvasDocumentId = String(payload.active_document_id || "").trim() || null;
-    isCanvasEditing = false;
-    editingCanvasDocumentId = null;
-    renderConversationHistory();
-    renderCanvasPanel();
-    scheduleCanvasAutoRefreshAfterUpload();
-    const importedCount = Number(payload.imported_count || 0);
-    const primaryDocumentPath = String(payload.primary_document_path || "").trim();
-    const statusParts = [`Imported ${importedCount} file${importedCount === 1 ? "" : "s"}`];
-    if (primaryDocumentPath) {
-      statusParts.push(`active: ${primaryDocumentPath}`);
-    }
-    setCanvasStatus(statusParts.join(" · "), "success");
-  } catch (error) {
-    setCanvasMutationState("", { rerender: false });
-    setCanvasStatus(error.message || "GitHub import failed.", "danger");
-    renderCanvasPanel();
-  }
+    return payload;
+  }, {
+    statusMessage: "Importing GitHub repository into Canvas...",
+    buttonsToDisable: [canvasNewBtn, canvasUploadBtn, canvasImportGithubBtn],
+    stateOverrides: {
+      isCanvasEditing: false,
+    },
+    onSuccess: (payload) => {
+      // Custom success message based on import result
+      const importedCount = Number(payload.imported_count || 0);
+      const primaryDocumentPath = String(payload.primary_document_path || "").trim();
+      const statusParts = [`Imported ${importedCount} file${importedCount === 1 ? "" : "s"}`];
+      if (primaryDocumentPath) {
+        statusParts.push(`active: ${primaryDocumentPath}`);
+      }
+      setCanvasStatus(statusParts.join(" · "), "success");
+      scheduleCanvasAutoRefreshAfterUpload();
+    },
+  });
 }
 
 function openCanvasUploadPicker() {
@@ -3926,6 +3879,110 @@ function setCanvasButtonState(button, { disabled, hidden } = {}) {
   }
   if (typeof hidden === "boolean") {
     button.hidden = hidden;
+  }
+}
+
+/**
+ * Canvas CRUD operasyonları için ortak wrapper.
+ * 6 operasyon (create, upload, import-github, delete, rename, save) aynı
+ * try/catch/setCanvasMutationState/re-render desenini tekrar ediyordu.
+ *
+ * @param {string} mutationType - Mutation state'i (örn. "create", "upload", "save")
+ * @param {Function} operation - Async fonksiyon, API çağrısı yapmalı ve payload dövmeli
+ * @param {Object} options
+ * @param {string} options.statusMessage - Başlangıç status mesajı
+ * @param {string} options.successMessage - Başarı status mesajı (opsiyonel, aksi halde varsayılan mesaj)
+ * @param {Array} options.buttonsToDisable - İşlem sırasında devre dışı bırakılacak butonlar
+ * @param {Function} options.onSuccess - Ek başarı işlemleri (payload, state güncellemelerinden sonra)
+ * @param {Function} options.onError - Ek hata işlemleri (hata yakalandıktan sonra)
+ * @param {boolean} options.skipHistoryUpdate - history'yi payload.messages'tan güncellemeyi atla
+ * @param {boolean} options.skipCanvasUpdate - renderCanvasPanel çağrısını atla
+ * @param {Object} options.stateOverrides - Başarı durumunda uygulanacak state override'ları (örn. { isCanvasEditing: false })
+ */
+async function withCanvasMutation(mutationType, operation, options = {}) {
+  const {
+    statusMessage = `${mutationType}...`,
+    successMessage = null,
+    buttonsToDisable = [],
+    onSuccess = null,
+    onError = null,
+    skipHistoryUpdate = false,
+    skipCanvasUpdate = false,
+    stateOverrides = {},
+  } = options;
+
+  // Devre dışı bırakılacak butonları işaretle
+  for (const btn of buttonsToDisable) {
+    if (btn) btn.disabled = true;
+  }
+
+  setCanvasMutationState(mutationType);
+  setCanvasStatus(statusMessage, "muted");
+
+  try {
+    const payload = await operation();
+
+    setCanvasMutationState("", { rerender: false });
+
+    if (!skipHistoryUpdate && Array.isArray(payload?.messages)) {
+      history = payload.messages.map(normalizeHistoryEntry);
+    }
+
+    // Canvas state güncellemeleri (operasyonlarda ortak)
+    // stateOverrides ile özelleştirilebilir (fonksiyon değerleri payload ile çağrılır)
+    const computedState = {
+      streamingCanvasDocuments: [],
+      activeCanvasDocumentId: String(
+        payload?.active_document_id || payload?.document?.id || ""
+      ).trim() || null,
+      isCanvasEditing: true,
+      editingCanvasDocumentId: null,
+    };
+    // Apply stateOverrides (functions are called with payload)
+    for (const [key, value] of Object.entries(stateOverrides)) {
+      computedState[key] = typeof value === "function" ? value(payload) : value;
+    }
+    streamingCanvasDocuments = computedState.streamingCanvasDocuments;
+    activeCanvasDocumentId = computedState.activeCanvasDocumentId;
+    isCanvasEditing = computedState.isCanvasEditing;
+    editingCanvasDocumentId = computedState.editingCanvasDocumentId;
+
+    renderConversationHistory();
+    if (!skipCanvasUpdate) {
+      renderCanvasPanel();
+    }
+
+    // Call onSuccess first - if it returns false, skip default success handling
+    let defaultSuccessMessage = successMessage || (payload?.message || `${mutationType} completed.`);
+    if (onSuccess) {
+      const onSuccessResult = await onSuccess(payload);
+      if (onSuccessResult === false) {
+        // onSuccess handled everything (status, renders) - don't overwrite
+        return payload;
+      }
+      // If onSuccess returns a string, use it as the success message
+      if (typeof onSuccessResult === "string") {
+        defaultSuccessMessage = onSuccessResult;
+      }
+    }
+    setCanvasStatus(defaultSuccessMessage, "success");
+
+    return payload;
+  } catch (error) {
+    setCanvasMutationState("", { rerender: false });
+    if (!skipCanvasUpdate) {
+      renderCanvasPanel();
+    }
+    setCanvasStatus(error.message || `${mutationType} failed.`, "danger");
+
+    if (onError) {
+      await onError(error);
+    }
+  } finally {
+    // Butonları yeniden etkinleştir
+    for (const btn of buttonsToDisable) {
+      if (btn) btn.disabled = false;
+    }
   }
 }
 
@@ -5475,8 +5532,8 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
   }
 
   cancelPendingConversationRefreshes();
-  setCanvasMutationState(clearAll ? "clear" : "delete");
-  try {
+
+  return withCanvasMutation(clearAll ? "clear" : "delete", async () => {
     const params = new URLSearchParams();
     if (targetDocumentId) {
       params.set("document_id", targetDocumentId);
@@ -5493,29 +5550,27 @@ async function deleteCanvasDocuments({ documentId = null, clearAll = false, conf
     if (!response.ok) {
       throw new Error(payload.error || "Canvas delete failed.");
     }
-    setCanvasMutationState("", { rerender: false });
-    history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
-    streamingCanvasDocuments = [];
-    isCanvasEditing = false;
-    editingCanvasDocumentId = null;
-    activeCanvasDocumentId = payload.cleared
-      ? null
-      : String(payload.active_document_id || getActiveCanvasDocument(history)?.id || "").trim() || null;
-    renderConversationHistory();
-    renderCanvasPanel();
-
-    if (payload.cleared) {
-      setCanvasAttention(false);
-      setCanvasStatus("Canvas cleared.", "success");
-      return;
-    }
-
-    setCanvasStatus("Canvas document deleted.", "success");
-  } catch (error) {
-    setCanvasMutationState("", { rerender: false });
-    renderCanvasPanel();
-    setCanvasStatus(error.message || "Canvas delete failed.", "danger");
-  }
+    return payload;
+  }, {
+    statusMessage: clearAll ? "Clearing Canvas..." : "Deleting document...",
+    stateOverrides: {
+      isCanvasEditing: false,
+      activeCanvasDocumentId: payload => (
+        payload.cleared
+          ? null
+          : String(payload?.active_document_id || getActiveCanvasDocument(history)?.id || "").trim() || null
+      ),
+    },
+    onSuccess: (payload) => {
+      if (payload.cleared) {
+        // Return false to skip wrapper's default success handling (original had early return)
+        setCanvasAttention(false);
+        setCanvasStatus("Canvas cleared.", "success");
+        return false;
+      }
+      setCanvasStatus("Canvas document deleted.", "success");
+    },
+  });
 }
 
 async function renameCanvasDocument() {
@@ -5532,9 +5587,8 @@ async function renameCanvasDocument() {
   if (!nextTitle || nextTitle === currentTitle) {
     return;
   }
-  setCanvasStatus("Renaming...", "muted");
-  setCanvasMutationState("rename");
-  try {
+
+  return withCanvasMutation("rename", async () => {
     const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -5544,17 +5598,18 @@ async function renameCanvasDocument() {
     if (!response.ok) {
       throw new Error(payload.error || "Rename failed.");
     }
-    setCanvasMutationState("", { rerender: false });
-    history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
-    activeCanvasDocumentId = String(payload.active_document_id || activeDocument.id || "").trim() || activeCanvasDocumentId;
-    renderConversationHistory({ preserveScroll: true });
-    renderCanvasPanel();
-    setCanvasStatus(`Renamed to "${nextTitle}".`, "success");
-  } catch (error) {
-    setCanvasMutationState("", { rerender: false });
-    renderCanvasPanel();
-    setCanvasStatus(error.message || "Rename failed.", "danger");
-  }
+    return payload;
+  }, {
+    statusMessage: "Renaming...",
+    stateOverrides: {
+      // Use activeDocument.id as fallback (different from other operations)
+      activeCanvasDocumentId: payload => String(payload?.active_document_id || activeDocument.id || "").trim() || activeCanvasDocumentId,
+    },
+    onSuccess: () => {
+      renderConversationHistory({ preserveScroll: true });
+      setCanvasStatus(`Renamed to "${nextTitle}".`, "success");
+    },
+  });
 }
 
 async function saveCanvasEdits() {
@@ -5570,10 +5625,8 @@ async function saveCanvasEdits() {
   const nextContent = canvasEditorEl.value.replace(/\r\n?/g, "\n");
   const nextFormat = getCanvasFormatControlValue();
   cancelPendingConversationRefreshes();
-  setCanvasMutationState("save");
-  setCanvasStatus("Saving canvas edits...", "muted");
 
-  try {
+  return withCanvasMutation("save", async () => {
     const response = await fetch(`/api/conversations/${currentConvId}/canvas`, {
       method: "PATCH",
       headers: {
@@ -5590,21 +5643,18 @@ async function saveCanvasEdits() {
     if (!response.ok) {
       throw new Error(payload.error || "Canvas save failed.");
     }
-
-    setCanvasMutationState("", { rerender: false });
-    history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : history;
-    streamingCanvasDocuments = [];
-    activeCanvasDocumentId = String(payload.active_document_id || activeDocument.id).trim() || activeDocument.id;
-    isCanvasEditing = false;
-    editingCanvasDocumentId = null;
-    renderConversationHistory();
-    renderCanvasPanel();
-    setCanvasStatus("Canvas saved.", "success");
-  } catch (error) {
-    setCanvasMutationState("", { rerender: false });
-    renderCanvasPanel();
-    setCanvasStatus(error.message || "Canvas save failed.", "danger");
-  }
+    return payload;
+  }, {
+    statusMessage: "Saving canvas edits...",
+    stateOverrides: {
+      isCanvasEditing: false,
+      editingCanvasDocumentId: null,
+      activeCanvasDocumentId: payload => String(payload?.active_document_id || activeDocument.id).trim() || activeDocument.id,
+    },
+    onSuccess: () => {
+      setCanvasStatus("Canvas saved.", "success");
+    },
+  });
 }
 
 function renderBubbleWithCursor(bubbleEl, text) {
