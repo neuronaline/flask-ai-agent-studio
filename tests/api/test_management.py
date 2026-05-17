@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import request_security
+from lib import request_security
 
 
 def test_conversation_crud_flow(client, create_conversation):
@@ -79,7 +79,7 @@ def test_persona_crud_and_conversation_persona_override(client):
 
 
 def test_login_pin_blocks_api_with_401(client):
-    with patch("config.LOGIN_PIN", "2468"):
+    with patch("core.config.LOGIN_PIN", "2468"):
         response = client.get("/api/settings")
 
     assert response.status_code == 401
@@ -120,7 +120,7 @@ def test_rate_limit_returns_429_even_with_spoofed_forwarded_for(app, client, ses
         csrf_token = session_csrf_token
         assert csrf_token
 
-        with patch("request_security._get_rate_limit_rule", return_value=("api-write", 1, 60)):
+        with patch("lib.request_security._get_rate_limit_rule", return_value=("api-write", 1, 60)):
             first = client.post(
                 "/api/conversations",
                 json={"title": "First", "model": "deepseek-chat"},

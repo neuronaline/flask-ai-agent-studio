@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import pathlib
 
-import agent
+import agent.agent
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -23,11 +23,11 @@ class _ListLogger:
 
 def test_trace_agent_event_includes_raw_payload_when_enabled(monkeypatch) -> None:
     logger = _ListLogger()
-    monkeypatch.setattr(agent, "AGENT_TRACE_LOG_ENABLED", True)
-    monkeypatch.setattr(agent, "AGENT_TRACE_LOG_INCLUDE_RAW", True)
-    monkeypatch.setattr(agent.LOGGER, "info", logger.info)
+    monkeypatch.setattr(agent.agent, "AGENT_TRACE_LOG_ENABLED", True)
+    monkeypatch.setattr(agent.agent, "AGENT_TRACE_LOG_INCLUDE_RAW", True)
+    monkeypatch.setattr(agent.agent.LOGGER, "info", logger.info)
 
-    agent._trace_agent_event(
+    agent.agent._trace_agent_event(
         "demo_event",
         trace_id="trace-1",
         content_excerpt="short",
@@ -47,22 +47,22 @@ def test_trace_agent_event_includes_raw_payload_when_enabled(monkeypatch) -> Non
 
 def test_trace_agent_event_is_silent_when_disabled(monkeypatch) -> None:
     logger = _ListLogger()
-    monkeypatch.setattr(agent, "AGENT_TRACE_LOG_ENABLED", False)
-    monkeypatch.setattr(agent, "AGENT_TRACE_LOG_INCLUDE_RAW", True)
-    monkeypatch.setattr(agent.LOGGER, "info", logger.info)
+    monkeypatch.setattr(agent.agent, "AGENT_TRACE_LOG_ENABLED", False)
+    monkeypatch.setattr(agent.agent, "AGENT_TRACE_LOG_INCLUDE_RAW", True)
+    monkeypatch.setattr(agent.agent.LOGGER, "info", logger.info)
 
-    agent._trace_agent_event("disabled_event", raw_fields={"content": "ignored"})
+    agent.agent._trace_agent_event("disabled_event", raw_fields={"content": "ignored"})
 
     assert logger.messages == []
 
 
 def test_append_model_invocation_log_traces_raw_request_and_response_without_sink(monkeypatch) -> None:
     logger = _ListLogger()
-    monkeypatch.setattr(agent, "AGENT_TRACE_LOG_ENABLED", True)
-    monkeypatch.setattr(agent, "AGENT_TRACE_LOG_INCLUDE_RAW", True)
-    monkeypatch.setattr(agent.LOGGER, "info", logger.info)
+    monkeypatch.setattr(agent.agent, "AGENT_TRACE_LOG_ENABLED", True)
+    monkeypatch.setattr(agent.agent, "AGENT_TRACE_LOG_INCLUDE_RAW", True)
+    monkeypatch.setattr(agent.agent.LOGGER, "info", logger.info)
 
-    agent._append_model_invocation_log(
+    agent.agent._append_model_invocation_log(
         None,
         agent_context={"source_message_id": 17},
         step=2,
@@ -86,11 +86,11 @@ def test_append_model_invocation_log_traces_raw_request_and_response_without_sin
 
 def test_trace_agent_stream_payload_logs_event_type_and_full_payload(monkeypatch) -> None:
     logger = _ListLogger()
-    monkeypatch.setattr(agent, "AGENT_TRACE_LOG_ENABLED", True)
-    monkeypatch.setattr(agent, "AGENT_TRACE_LOG_INCLUDE_RAW", True)
-    monkeypatch.setattr(agent.LOGGER, "info", logger.info)
+    monkeypatch.setattr(agent.agent, "AGENT_TRACE_LOG_ENABLED", True)
+    monkeypatch.setattr(agent.agent, "AGENT_TRACE_LOG_INCLUDE_RAW", True)
+    monkeypatch.setattr(agent.agent.LOGGER, "info", logger.info)
 
-    agent.trace_agent_stream_payload(
+    agent.agent.trace_agent_stream_payload(
         "chat_stream_chunk",
         payload={"type": "answer_delta", "text": "Merhaba"},
         conversation_id=42,

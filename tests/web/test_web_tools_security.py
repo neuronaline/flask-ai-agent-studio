@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-import web_tools
+from web import web_tools
 
 
 @pytest.mark.parametrize(

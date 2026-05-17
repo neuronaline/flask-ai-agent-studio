@@ -27,53 +27,6 @@
 
   if (!personaListEl) return; // panel not in DOM
 
-  // ─── Constants ───────────────────────────────────────────────────────────────
-  const GENERAL_INSTRUCTION_TEMPLATES = [
-    {
-      id: "concise_default",
-      label: "Concise default",
-      text: "Be concise and direct. Prefer short paragraphs. Use bullets only when they improve scanning. State assumptions briefly and include the next step when useful.",
-    },
-    {
-      id: "teaching_mode",
-      label: "Teaching mode",
-      text: "Explain clearly and step by step. Define non-obvious terms, surface the reasoning behind decisions, and include one concrete example when it materially helps understanding.",
-    },
-    {
-      id: "engineering_review",
-      label: "Engineering review",
-      text: "Prioritize correctness, edge cases, regressions, and verification. Keep summaries brief and focus first on concrete findings, risks, and what changed.",
-    },
-    {
-      id: "execution_first",
-      label: "Execution first",
-      text: "Take action by default instead of proposing abstract plans. Prefer minimal working changes, explain tradeoffs briefly, and avoid unnecessary theory.",
-    },
-  ];
-
-  const AI_PERSONALITY_TEMPLATES = [
-    {
-      id: "pragmatic_engineer",
-      label: "Pragmatic engineer",
-      text: "Adopt the voice of a pragmatic senior engineer: calm, direct, rigorous, and low-fluff. Challenge weak assumptions politely and stay focused on what will actually work.",
-    },
-    {
-      id: "patient_teacher",
-      label: "Patient teacher",
-      text: "Sound like a patient technical teacher: structured, clear, encouraging without being overly casual, and attentive to knowledge gaps.",
-    },
-    {
-      id: "analytical_strategist",
-      label: "Analytical strategist",
-      text: "Sound analytical and deliberate. Compare options clearly, explain tradeoffs, and make recommendations with explicit reasoning and constraints.",
-    },
-    {
-      id: "creative_partner",
-      label: "Creative partner",
-      text: "Sound like a creative but disciplined collaborator: exploratory, idea-rich, and willing to suggest novel directions while staying grounded in the user's goal.",
-    },
-  ];
-
   // ─── State ──────────────────────────────────────────────────────────────────
   const appSettings = window.__appSettings || {};
   let hasUnsavedPersonaChanges = false;
@@ -85,11 +38,11 @@
   function getActivePersonaId() { return activePersonaId; }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
-  function autoResize(element) {
+  const autoResize = window.__domUtils?.autoResize ?? function(element) {
     if (!element) return;
     element.style.height = "auto";
     element.style.height = `${element.scrollHeight}px`;
-  }
+  };
 
   function populateBehaviorTemplateSelect(selectEl, templates) {
     if (!selectEl) return;
@@ -121,8 +74,8 @@
   }
 
   function initializeAssistantBehaviorTemplates() {
-    populateBehaviorTemplateSelect(generalInstructionsTemplateSelectEl, GENERAL_INSTRUCTION_TEMPLATES);
-    populateBehaviorTemplateSelect(aiPersonalityTemplateSelectEl, AI_PERSONALITY_TEMPLATES);
+    populateBehaviorTemplateSelect(generalInstructionsTemplateSelectEl, window.__settingsCore?.GENERAL_INSTRUCTION_TEMPLATES || []);
+    populateBehaviorTemplateSelect(aiPersonalityTemplateSelectEl, window.__settingsCore?.AI_PERSONALITY_TEMPLATES || []);
   }
 
   function normalizePersonaId(value) {
@@ -628,8 +581,8 @@
   generalInstructionsEl?.addEventListener("input", () => { autoResize(generalInstructionsEl); markPersonaDirty(); });
   aiPersonalityEl?.addEventListener("input", () => { autoResize(aiPersonalityEl); markPersonaDirty(); });
   defaultPersonaEl?.addEventListener("change", () => { if (typeof window.markDirty === "function") markDirty(); });
-  generalInstructionsTemplateApplyBtn?.addEventListener("click", () => applyBehaviorTemplate(generalInstructionsTemplateSelectEl, generalInstructionsEl, GENERAL_INSTRUCTION_TEMPLATES));
-  aiPersonalityTemplateApplyBtn?.addEventListener("click", () => applyBehaviorTemplate(aiPersonalityTemplateSelectEl, aiPersonalityEl, AI_PERSONALITY_TEMPLATES));
+  generalInstructionsTemplateApplyBtn?.addEventListener("click", () => applyBehaviorTemplate(generalInstructionsTemplateSelectEl, generalInstructionsEl, window.__settingsCore?.GENERAL_INSTRUCTION_TEMPLATES || []));
+  aiPersonalityTemplateApplyBtn?.addEventListener("click", () => applyBehaviorTemplate(aiPersonalityTemplateSelectEl, aiPersonalityEl, window.__settingsCore?.AI_PERSONALITY_TEMPLATES || []));
   openPersonasTabBtn?.addEventListener("click", () => { if (typeof activateTab === "function") activateTab("personas"); });
   personaNewBtn?.addEventListener("click", () => {
     if (hasUnsavedPersonaChanges && !window.confirm("Discard unsaved persona changes?")) return;

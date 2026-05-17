@@ -20,7 +20,7 @@ project_root_str = str(PROJECT_ROOT)
 if project_root_str not in sys.path:
     sys.path.insert(0, project_root_str)
 
-import lib.request_security
+from lib import request_security
 
 from tests.support.mocks import FakeChromaClient, fake_embed_texts
 
@@ -50,7 +50,7 @@ def block_external_network(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def isolate_test_state(monkeypatch):
-    import agent
+    import agent.agent
     import core.config as config
     import lib.model_registry as model_registry
     import rag.store as rag_store
@@ -81,7 +81,7 @@ def isolate_test_state(monkeypatch):
     monkeypatch.setattr(rag_store, "embed_texts", fake_embed_texts)
     model_registry.get_provider_client.cache_clear()
     deepseek_client = model_registry.get_provider_client(model_registry.DEEPSEEK_PROVIDER)
-    monkeypatch.setattr(agent, "client", deepseek_client)
+    monkeypatch.setattr(agent.agent, "client", deepseek_client)
     monkeypatch.setattr(routes.conversations, "client", deepseek_client)
     yield
     rag_store._client = None
@@ -91,17 +91,17 @@ def isolate_test_state(monkeypatch):
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
-    from app import create_app
+    from core.app import create_app
 
-    # Re-patch RAG_ENABLED — the module-level app = create_app() at app.py:156
+    # Re-patch RAG_ENABLED — the module-level app = create_app() at core/app.py
     # (triggered by the import above) resets patches applied by earlier fixtures.
-    import config as _config
+    import core.config as _config
     import routes.conversations as _conversations
 
     monkeypatch.setattr(_config, "RAG_ENABLED", True)
     monkeypatch.setattr(_conversations, "RAG_ENABLED", True)
 
-    monkeypatch.setattr("config.LOGIN_PIN", "")
+    monkeypatch.setattr(_config, "LOGIN_PIN", "")
     app_instance = create_app(database_path=str(tmp_path / "test.db"), load_persisted_runtime_settings=False)
     app_instance.config.update(TESTING=True)
     return app_instance

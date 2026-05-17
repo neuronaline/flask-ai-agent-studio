@@ -5,7 +5,7 @@ from collections import deque
 import pytest
 from flask import Flask, jsonify, session
 
-import request_security
+from lib import request_security
 
 
 @pytest.fixture

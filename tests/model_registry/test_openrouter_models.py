@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-import model_registry
+from lib import model_registry
 from core.app import create_app
 
 from core.db import save_app_settings
@@ -266,7 +266,7 @@ class TestOpenRouterModelRegistry:
             ]
         }
 
-        with patch("model_registry.get_provider_client", return_value=SimpleNamespace()):
+        with patch("lib.model_registry.get_provider_client", return_value=SimpleNamespace()):
             target = resolve_model_target("openrouter:anthropic/claude-sonnet-4.5", settings)
 
         assert target["extra_body"] == {
@@ -287,7 +287,7 @@ class TestOpenRouterModelRegistry:
             ]
         }
 
-        with patch("model_registry.get_provider_client", return_value=SimpleNamespace()):
+        with patch("lib.model_registry.get_provider_client", return_value=SimpleNamespace()):
             target = resolve_model_target("openrouter:anthropic/claude-sonnet-4.5", settings)
 
         assert target["extra_body"] == {"provider": {"sort": "throughput"}}
@@ -306,7 +306,7 @@ class TestOpenRouterModelRegistry:
             ],
         }
 
-        with patch("model_registry.get_provider_client", return_value=SimpleNamespace()):
+        with patch("lib.model_registry.get_provider_client", return_value=SimpleNamespace()):
             target = resolve_model_target("openrouter:anthropic/claude-sonnet-4.5", settings)
 
         assert target["extra_body"] == {"provider": {"sort": "throughput"}}
@@ -605,10 +605,10 @@ class TestOpenRouterModelRegistry:
 
         model_registry.get_provider_client.cache_clear()
         try:
-            with patch("web_tools.get_proxy_candidates_for_operation", return_value=["http://proxy.example:8080", None]), patch(
-                "model_registry.httpx.Client",
+            with patch("web.web_tools.get_proxy_candidates_for_operation", return_value=["http://proxy.example:8080", None]), patch(
+                "lib.model_registry.httpx.Client",
                 side_effect=lambda *args, **kwargs: CallbackHttpClient(*args, **kwargs),
-            ), patch("model_registry.OpenAI", side_effect=openai_factory):
+            ), patch("lib.model_registry.OpenAI", side_effect=openai_factory):
                 target = resolve_model_target("openrouter:anthropic/claude-sonnet-4.5", settings)
                 response = target["client"].chat.completions.create(model=target["api_model"], messages=[])
         finally:
@@ -638,10 +638,10 @@ class TestOpenRouterModelRegistry:
 
         model_registry.get_provider_client.cache_clear()
         try:
-            with patch("web_tools.get_proxy_candidates_for_operation", return_value=[None]), patch(
-                "model_registry.httpx.Client",
+            with patch("web.web_tools.get_proxy_candidates_for_operation", return_value=[None]), patch(
+                "lib.model_registry.httpx.Client",
                 side_effect=http_client_factory,
-            ), patch("model_registry.OpenAI", side_effect=openai_factory):
+            ), patch("lib.model_registry.OpenAI", side_effect=openai_factory):
                 client = model_registry.get_provider_client(model_registry.OPENROUTER_PROVIDER)
                 response = client.chat.completions.create(model="anthropic/claude-sonnet-4.5", messages=[], stream=True)
                 assert close_events == []
@@ -707,10 +707,10 @@ class TestOpenRouterModelRegistry:
 
         model_registry.get_provider_client.cache_clear()
         try:
-            with patch("web_tools.get_proxy_candidates_for_operation", return_value=["http://proxy.example:8080", None]), patch(
-                "model_registry.httpx.Client",
+            with patch("web.web_tools.get_proxy_candidates_for_operation", return_value=["http://proxy.example:8080", None]), patch(
+                "lib.model_registry.httpx.Client",
                 side_effect=http_client_factory,
-            ), patch("model_registry.OpenAI", side_effect=openai_factory):
+            ), patch("lib.model_registry.OpenAI", side_effect=openai_factory):
                 client = model_registry.get_provider_client(model_registry.OPENROUTER_PROVIDER)
                 response = client.chat.completions.create(model="anthropic/claude-sonnet-4.5", messages=[], stream=True)
                 chunks = list(response)
@@ -746,10 +746,10 @@ class TestOpenRouterModelRegistry:
         save_app_settings({"proxy_enabled_operations": json.dumps([PROXY_OPERATION_FETCH_URL], ensure_ascii=False)})
         model_registry.get_provider_client.cache_clear()
         try:
-            with patch("web_tools.get_proxy_candidates", return_value=["http://proxy.example:8080", None]), patch(
-                "model_registry.httpx.Client",
+            with patch("web.web_tools.get_proxy_candidates", return_value=["http://proxy.example:8080", None]), patch(
+                "lib.model_registry.httpx.Client",
                 side_effect=lambda *args, **kwargs: CallbackHttpClient(*args, **kwargs),
-            ), patch("model_registry.OpenAI", side_effect=openai_factory):
+            ), patch("lib.model_registry.OpenAI", side_effect=openai_factory):
                 client = model_registry.get_provider_client(model_registry.OPENROUTER_PROVIDER)
                 response = client.chat.completions.create(model="anthropic/claude-sonnet-4.5", messages=[])
 
@@ -789,10 +789,10 @@ class TestOpenRouterModelRegistry:
 
         model_registry.get_provider_client.cache_clear()
         try:
-            with patch("web_tools.get_proxy_candidates_for_operation", return_value=[None]), patch(
-                "model_registry.httpx.Client",
+            with patch("web.web_tools.get_proxy_candidates_for_operation", return_value=[None]), patch(
+                "lib.model_registry.httpx.Client",
                 side_effect=http_client_factory,
-            ), patch("model_registry.OpenAI", side_effect=openai_factory):
+            ), patch("lib.model_registry.OpenAI", side_effect=openai_factory):
                 client = model_registry.get_provider_client(model_registry.OPENROUTER_PROVIDER)
                 response = client.chat.completions.create(model="anthropic/claude-sonnet-4.5", messages=[], stream=True)
                 list(response)

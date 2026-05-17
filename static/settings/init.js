@@ -31,21 +31,14 @@
     return window.__settingsCore?.markDirty ?? (() => {});
   }
 
-  function getSyncImageHelperModelVisibility() {
-    return window.__settingsModels?.syncImageHelperModelVisibility ?? (() => {});
-  }
-
   function getSaveAllSettings() {
     return window.saveAllSettings ?? (() => {});
   }
 
   // ─── Event listeners ─────────────────────────────────────────────────────────
   function attachEventListeners() {
-    imageProcessingMethodEl?.addEventListener("change", () => {
-      getSyncImageHelperModelVisibility()();
-      getMarkDirty()();
-    });
-    openrouterHttpRefererEl?.addEventListener("input", getMarkDirty()());
+    imageProcessingMethodEl?.addEventListener("change", getMarkDirty());
+    openrouterHttpRefererEl?.addEventListener("input", getMarkDirty());
     openrouterAppTitleEl?.addEventListener("input", getMarkDirty());
     loginSessionTimeoutMinutesEl?.addEventListener("input", getMarkDirty());
     loginMaxFailedAttemptsEl?.addEventListener("input", getMarkDirty());

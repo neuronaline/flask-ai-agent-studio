@@ -82,10 +82,7 @@
   <div class="mobile-tools-panel__section mobile-tools-panel__section--actions">
     <button class="mobile-tools-action" id="mobile-summary-btn" type="button">Summary panel</button>
     <button class="mobile-tools-action" id="mobile-canvas-btn" type="button">Canvas panel</button>
-    <button class="mobile-tools-action" id="mobile-memory-btn" type="button">Conversation memory</button>
     <button class="mobile-tools-action" id="mobile-export-btn" type="button">Export chat</button>
-
-    <button class="mobile-tools-action" id="mobile-params-btn" type="button">Set Parameters</button>
     <a class="mobile-tools-action" id="mobile-settings-btn" href="/settings">Settings</a>
     {% if auth_enabled %}
     <form action="/logout" method="post">
@@ -153,118 +150,6 @@
   </div>
 </div>
 <div id="summary-overlay" class="summary-overlay"></div>
-
-<div id="memory-panel" class="summary-panel memory-panel" aria-hidden="true" aria-labelledby="memory-panel-title">
-  <div class="summary-panel__header">
-    <div>
-      <span id="memory-panel-title">Conversation Memory</span>
-      <p id="memory-panel-subtitle" class="summary-panel__subtitle">Open or create a conversation to view and manage memory entries.</p>
-    </div>
-    <button id="memory-close" title="Close" type="button">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-      </svg>
-    </button>
-  </div>
-  <div class="summary-panel__body">
-    <section class="summary-card">
-      <div class="memory-status-row">
-        <span id="memory-status" class="memory-status">Waiting for a conversation.</span>
-        <span id="memory-count" class="memory-count">0 entries</span>
-      </div>
-      <p class="summary-support-copy">Saved entries are injected into the prompt for the active chat only. Delete stale items here when they stop being true.</p>
-    </section>
-
-    <section class="summary-card">
-      <div class="summary-card__header">
-        <div>
-          <span>Add entry</span>
-          <p>Store one compact fact, decision, constraint, or tool result.</p>
-        </div>
-      </div>
-      <div class="memory-form-grid">
-        <label class="summary-field">
-          <span>Type</span>
-          <select id="memory-new-type" class="summary-input"></select>
-        </label>
-        <label class="summary-field">
-          <span>Key</span>
-          <input id="memory-new-key" class="summary-input" type="text" maxlength="120" placeholder="Short label" />
-        </label>
-        <label class="summary-field memory-field--wide">
-          <span>Value</span>
-          <textarea id="memory-new-value" rows="3" placeholder="One compact factual line"></textarea>
-        </label>
-      </div>
-      <div class="memory-panel__actions">
-        <button class="btn-primary" id="memory-add-btn" type="button">Save entry</button>
-      </div>
-    </section>
-
-    <section class="summary-card">
-      <div class="summary-card__header">
-        <div>
-          <span>Entries</span>
-          <p>Edit the fields below and press Save, or remove an outdated entry.</p>
-        </div>
-      </div>
-      <div id="memory-list" class="memory-list"></div>
-    </section>
-  </div>
-</div>
-<div id="memory-overlay" class="summary-overlay"></div>
-
-
-
-<div id="params-panel" class="summary-panel params-panel" aria-hidden="true" aria-labelledby="params-panel-title">
-  <div class="summary-panel__header">
-    <div>
-      <span id="params-panel-title">Set Parameters</span>
-      <p class="summary-panel__subtitle">Adjust safe chat-generation parameters for only this conversation.</p>
-    </div>
-    <button id="params-close" title="Close" type="button">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-      </svg>
-    </button>
-  </div>
-  <div class="summary-panel__body">
-    <section class="summary-card">
-      <div id="params-status" class="params-status">Open a conversation to configure reply parameters.</div>
-      <p class="summary-support-copy">These settings affect chat replies in this conversation only. Helper operations like pruning, export formatting, and image analysis keep their own fixed settings.</p>
-      <label class="conv-tools-toggle-row">
-        <input type="checkbox" id="params-use-global" />
-        <span>Use global defaults for this conversation</span>
-      </label>
-    </section>
-
-    <section class="summary-card" id="params-form-section" hidden>
-      <div class="params-grid">
-        <label class="summary-field">
-          <span>Temperature</span>
-          <input id="params-temperature-input" class="summary-input" type="number" min="0" max="2" step="0.1" placeholder="Global default" />
-          <small class="params-field-note">Lower is steadier for coding/math; higher is more varied and creative.</small>
-        </label>
-        <label class="summary-field">
-          <span>Top P</span>
-          <input id="params-top-p-input" class="summary-input" type="number" min="0" max="1" step="0.05" placeholder="Provider default" />
-          <small class="params-field-note">Limits sampling to the most likely probability mass. Lower values make outputs more predictable.</small>
-        </label>
-        <label class="summary-field">
-          <span>Max Tokens</span>
-          <input id="params-max-tokens-input" class="summary-input" type="number" min="1" max="131072" step="1" placeholder="Provider default" />
-          <small class="params-field-note">Caps how long the next replies may be. Leave blank to let the provider decide.</small>
-        </label>
-      </div>
-      <p class="summary-support-copy">OpenRouter may ignore unsupported parameters per model/provider. DeepSeek supports temperature well; the shared fields here stay on the safest common path.</p>
-    </section>
-  </div>
-  <div class="summary-panel__actions">
-    <button class="btn-ghost" id="params-reset-btn" type="button">Reset fields</button>
-    <button class="btn-primary" id="params-save-btn" type="button">Save Parameters</button>
-  </div>
-</div>
-<div id="params-overlay" class="summary-overlay"></div>
 
 <div id="export-panel" class="export-panel" aria-hidden="true" aria-labelledby="export-panel-title">
   <div class="export-panel-header">

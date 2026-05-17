@@ -36,10 +36,6 @@
   if (!customModelListEl) return; // panel not in DOM
 
   // ─── Constants ───────────────────────────────────────────────────────────────
-  const MODEL_PROVIDER_LABELS = {
-    deepseek: "DeepSeek",
-    openrouter: "OpenRouter",
-  };
 
   // ─── State ──────────────────────────────────────────────────────────────────
   const appSettings = window.__appSettings || {};
@@ -297,7 +293,7 @@
   }
 
   function getModelProviderLabel(model) {
-    return MODEL_PROVIDER_LABELS[String(model?.provider || "").trim()] || String(model?.provider || "model");
+    return (window.__settingsCore?.MODEL_PROVIDER_LABELS || {})[String(model?.provider || "").trim()] || String(model?.provider || "model");
   }
 
   function getOperationPreferenceValue(key) {

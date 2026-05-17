@@ -19,16 +19,10 @@
   const featureFlags = window.__featureFlags || appSettings.features || {};
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
-  function autoResize(element) {
+  const autoResize = window.__domUtils?.autoResize ?? function(element) {
     if (!element) return;
     element.style.height = "auto";
     element.style.height = `${element.scrollHeight}px`;
-  }
-
-  const RAG_SOURCE_TYPE_LABELS = {
-    conversation: "Chats",
-    tool_result: "Tool outputs",
-    uploaded_document: "Uploaded documents",
   };
 
   function setKbStatus(message, tone = "muted") {
@@ -52,7 +46,7 @@
 
   function summarizeKbDocument(doc) {
     const metadata = doc && typeof doc.metadata === "object" ? doc.metadata : {};
-    const parts = [RAG_SOURCE_TYPE_LABELS[doc.source_type] || doc.source_type || "Document"];
+    const parts = [(window.__settingsCore?.RAG_SOURCE_TYPE_LABELS || {})[doc.source_type] || doc.source_type || "Document"];
     if (doc.category) parts.push(doc.category);
     parts.push(`${doc.chunk_count || 0} chunks`);
     if (metadata.file_name) parts.unshift(metadata.file_name);

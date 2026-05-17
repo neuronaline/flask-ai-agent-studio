@@ -151,7 +151,8 @@
     }
 
     // Populate provider filter options dynamically
-    if (providerFilterEl && providerFilterEl.options.length <= 1) {
+    if (providerFilterEl) {
+      providerFilterEl.innerHTML = '<option value="">All providers</option>';
       const providers = [...new Set(records.map(r => r.provider).filter(Boolean))];
       providers.forEach(p => {
         const opt = document.createElement("option");

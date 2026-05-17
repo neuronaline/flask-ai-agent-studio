@@ -6,16 +6,16 @@ from unittest.mock import patch
 import pytest
 
 from services.image_service import analyze_uploaded_image, answer_image_question
-from image_utils import normalize_image_analysis
+from utils.image_utils import normalize_image_analysis
 
 
 class TestImageService:
     def test_analyze_uploaded_image_preserves_provider_failures(self):
-        with patch("image_service.IMAGE_UPLOADS_ENABLED", True), patch(
-            "image_service._resolve_processing_plan",
+        with patch("services.image_service.IMAGE_UPLOADS_ENABLED", True), patch(
+            "services.image_service._resolve_processing_plan",
             return_value=["llm_helper"],
         ), patch(
-            "image_service._run_helper_llm_image_analysis",
+            "services.image_service._run_helper_llm_image_analysis",
             side_effect=Exception("provider down"),
         ):
             with pytest.raises(Exception) as raised:
@@ -30,8 +30,8 @@ class TestImageService:
         assert str(raised.value) == "provider down"
 
     def test_analyze_uploaded_image_direct_mode_returns_passthrough_metadata(self):
-        with patch("image_service.IMAGE_UPLOADS_ENABLED", True), patch(
-            "image_service.can_model_process_images",
+        with patch("services.image_service.IMAGE_UPLOADS_ENABLED", True), patch(
+            "services.image_service.can_model_process_images",
             return_value=True,
         ):
             analysis = analyze_uploaded_image(
@@ -45,11 +45,11 @@ class TestImageService:
         assert "attached directly" in analysis["assistant_guidance"]
 
     def test_analyze_uploaded_image_helper_mode_falls_back_to_direct_mode(self):
-        with patch("image_service.IMAGE_UPLOADS_ENABLED", True), patch(
-            "image_service.can_answer_image_questions",
+        with patch("services.image_service.IMAGE_UPLOADS_ENABLED", True), patch(
+            "services.image_service.can_answer_image_questions",
             return_value=False,
         ), patch(
-            "image_service.can_model_process_images",
+            "services.image_service.can_model_process_images",
             return_value=True,
         ):
             analysis = analyze_uploaded_image(
@@ -62,14 +62,14 @@ class TestImageService:
         assert analysis["analysis_method"] == "llm_direct"
 
     def test_analyze_uploaded_image_local_ocr_does_not_fall_back_to_remote_modes(self):
-        with patch("image_service.IMAGE_UPLOADS_ENABLED", True), patch(
-            "image_service._run_local_ocr_analysis",
+        with patch("services.image_service.IMAGE_UPLOADS_ENABLED", True), patch(
+            "services.image_service._run_local_ocr_analysis",
             side_effect=RuntimeError("OCR stack unavailable"),
         ), patch(
-            "image_service._prepare_direct_multimodal_analysis",
+            "services.image_service._prepare_direct_multimodal_analysis",
             return_value={"analysis_method": "llm_direct"},
         ) as mocked_direct, patch(
-            "image_service._run_helper_llm_image_analysis",
+            "services.image_service._run_helper_llm_image_analysis",
             return_value={"analysis_method": "llm_helper"},
         ) as mocked_helper:
             with pytest.raises(RuntimeError) as raised:
@@ -109,27 +109,27 @@ class TestImageService:
             usage=SimpleNamespace(prompt_tokens=12, completion_tokens=6, total_tokens=18),
         )
 
-        with patch("image_service.IMAGE_UPLOADS_ENABLED", True), patch(
-            "image_service._resolve_processing_plan",
+        with patch("services.image_service.IMAGE_UPLOADS_ENABLED", True), patch(
+            "services.image_service._resolve_processing_plan",
             return_value=["llm_helper"],
         ), patch(
-            "image_service.optimize_image_for_processing",
+            "services.image_service.optimize_image_for_processing",
             return_value=(b"img-bytes", "image/png"),
         ), patch(
-            "image_service.resolve_model_target",
+            "services.image_service.resolve_model_target",
             return_value={
                 "api_model": "openrouter:test-vision",
                 "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **_: fake_response))),
                 "record": {"provider": "openrouter"},
             },
         ), patch(
-            "image_service._resolve_helper_model_id",
+            "services.image_service._resolve_helper_model_id",
             return_value="openrouter:test-vision",
         ), patch(
-            "image_service.can_model_use_structured_outputs",
+            "services.image_service.can_model_use_structured_outputs",
             return_value=False,
         ), patch(
-            "activity_service.log_activity_call",
+            "services.activity_service.log_activity_call",
         ) as mocked_log:
             analyze_uploaded_image(
                 b"fake image bytes",
@@ -160,20 +160,20 @@ class TestImageService:
         )
 
         with patch(
-            "image_service.optimize_image_for_processing",
+            "services.image_service.optimize_image_for_processing",
             return_value=(b"img-bytes", "image/png"),
         ), patch(
-            "image_service.resolve_model_target",
+            "services.image_service.resolve_model_target",
             return_value={
                 "api_model": "openrouter:test-vision",
                 "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **_: fake_response))),
                 "record": {"provider": "openrouter"},
             },
         ), patch(
-            "image_service._resolve_helper_model_id",
+            "services.image_service._resolve_helper_model_id",
             return_value="openrouter:test-vision",
         ), patch(
-            "activity_service.log_activity_call",
+            "services.activity_service.log_activity_call",
         ) as mocked_log:
             answer = answer_image_question(
                 b"fake image bytes",

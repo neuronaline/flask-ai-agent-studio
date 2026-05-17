@@ -183,7 +183,6 @@
     renderOperationFallbackLists,
     getOperationModelFallbackPreferencesDraft,
     renderModelManagementPanels,
-    syncImageHelperModelVisibility,
     setCustomModelStatus,
     getDraftVisibleModelOrder,
     renderSubAgentFallbackList,

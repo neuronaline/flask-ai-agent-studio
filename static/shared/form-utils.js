@@ -75,8 +75,4 @@
     readNumericSetting,
     readFloatSetting,
   };
-
-  // Also expose globally for legacy modules that expect direct access
-  window.readNumericSetting = readNumericSetting;
-  window.readFloatSetting = readFloatSetting;
 })();

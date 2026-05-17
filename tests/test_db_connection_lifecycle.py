@@ -11,7 +11,7 @@ from core.db import get_db
 
 @pytest.fixture
 def app(tmp_path):
-    with patch("config.LOGIN_PIN", ""):
+    with patch("core.config.LOGIN_PIN", ""):
         app_instance = create_app(database_path=str(tmp_path / "test.db"))
     app_instance.config.update(TESTING=True)
     return app_instance

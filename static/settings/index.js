@@ -273,7 +273,7 @@
     appSettings.general_instructions = data.general_instructions || "";
     appSettings.ai_personality = data.ai_personality || "";
     appSettings.effective_user_preferences = data.effective_user_preferences || "";
-    appSettings.default_persona_id = normalizePersonaId(data.default_persona_id);
+    appSettings.default_persona_id = window.__personaModule?.normalizePersonaId?.(data.default_persona_id) ?? null;
     appSettings.personas = Array.isArray(data.personas) ? data.personas : [];
     appSettings.scratchpad = data.scratchpad || "";
     appSettings.scratchpad_sections = data.scratchpad_sections && typeof data.scratchpad_sections === "object" ? data.scratchpad_sections : {};
@@ -552,15 +552,6 @@
     }
     window.__settingsTools?.syncOverviewStats?.();
     window.__settingsRag?.syncOverviewStats?.();
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════════
-  // Utility
-  // ═══════════════════════════════════════════════════════════════════════════════
-  function normalizePersonaId(value) {
-    if (value === null || value === undefined || value === "") return null;
-    const parsed = Number.parseInt(String(value), 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════════
