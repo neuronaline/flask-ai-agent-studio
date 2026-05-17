@@ -3087,15 +3087,6 @@ def _coerce_non_negative_int(value) -> int | None:
     return max(0, normalized)
 
 
-def _protected_breakdown_floor_keys(adjusted: dict[str, int], target_total: int) -> set[str]:
-    if target_total <= 0:
-        return set()
-    present_keys = [key for key in MESSAGE_USAGE_BREAKDOWN_PROTECTED_KEYS if adjusted.get(key, 0) > 0]
-    if not present_keys:
-        return set()
-    return set(present_keys[: min(len(present_keys), target_total)])
-
-
 def _normalize_usage_breakdown(breakdown: dict | None) -> dict | None:
     """Normalize usage breakdown without retroactive alignment.
 
@@ -4814,10 +4805,6 @@ _CANVAS_EDIT_TOOL_NAMES = {
 }
 
 
-def _ensure_canvas_inspection_tools(names: list[str]) -> list[str]:
-    return names
-
-
 def _get_bool_setting_value(source: dict, key: str, default_value: bool) -> bool:
     raw_value = source.get(key)
     if raw_value is None:
@@ -4966,7 +4953,6 @@ def get_active_tool_names(settings: dict | None = None) -> list[str]:
         if any(name in names for name in {"append_scratchpad", "replace_scratchpad"}):
             names = _ensure_tool("replace_scratchpad", names)
             names = _ensure_tool("read_scratchpad", names)
-        names = _ensure_canvas_inspection_tools(names)
         return names
     return []
 

@@ -2396,8 +2396,11 @@ def _round_time_for_cache(now: datetime, window_minutes: int = 5) -> datetime:
     normalized_now = now.astimezone().replace(second=0, microsecond=0)
     if window_minutes <= 1:
         return normalized_now
-    rounded_minute = (normalized_now.minute // window_minutes) * window_minutes
-    return normalized_now.replace(minute=rounded_minute)
+    total_minutes = normalized_now.hour * 60 + normalized_now.minute
+    rounded_total = (total_minutes // window_minutes) * window_minutes
+    rounded_hour = rounded_total // 60
+    rounded_minute = rounded_total % 60
+    return normalized_now.replace(hour=rounded_hour, minute=rounded_minute)
 
 
 def _build_current_time_context(now: datetime) -> str:

@@ -96,7 +96,6 @@ from lib.model_registry import (
     normalize_chat_parameter_overrides,
     get_model_label,
     get_operation_model,
-    get_provider_client,
     resolve_model_target,
 )
 
@@ -114,8 +113,6 @@ from services.rag_service import (
 )
 from routes.request_utils import is_valid_model_id, normalize_model_id
 from utils.image_utils import extract_json_object, extract_text_from_response_content
-
-client = get_provider_client(DEEPSEEK_PROVIDER)
 
 # Title source constants - centralized per UI-Backend-Synchronization
 TITLE_SOURCE_SYSTEM = "system"

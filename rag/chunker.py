@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Iterable
 
 from core.config import RAG_CHUNK_OVERLAP, RAG_CHUNK_SIZE
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_CHUNK_SIZE = RAG_CHUNK_SIZE
 DEFAULT_CHUNK_OVERLAP = RAG_CHUNK_OVERLAP
@@ -57,8 +60,22 @@ def _normalize_metadata_value(value):
     if isinstance(value, (int, float, bool)):
         return value
     if isinstance(value, (list, tuple, set)):
-        return ", ".join(str(item).strip() for item in value if str(item).strip())[:MAX_METADATA_VALUE_LENGTH]
-    return str(value).strip()[:MAX_METADATA_VALUE_LENGTH]
+        joined = ", ".join(str(item).strip() for item in value if str(item).strip())
+        if len(joined) > MAX_METADATA_VALUE_LENGTH:
+            LOGGER.warning(
+                "Metadata list value truncated from %d to %d chars",
+                len(joined),
+                MAX_METADATA_VALUE_LENGTH,
+            )
+        return joined[:MAX_METADATA_VALUE_LENGTH]
+    result = str(value).strip()
+    if len(result) > MAX_METADATA_VALUE_LENGTH:
+        LOGGER.warning(
+            "Metadata string value truncated from %d to %d chars",
+            len(result),
+            MAX_METADATA_VALUE_LENGTH,
+        )
+    return result[:MAX_METADATA_VALUE_LENGTH]
 
 
 def _paragraphs_from_text(text: str) -> list[str]:

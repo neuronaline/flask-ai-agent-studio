@@ -560,11 +560,6 @@ DEFAULT_SETTINGS = {
     "entropy_protect_tool_results": "true",
     "entropy_reference_boost": "true",
     "reasoning_auto_collapse": "false",
-    "pruning_enabled": "false",
-    "pruning_token_threshold": str(CHAT_SUMMARY_TRIGGER_TOKEN_COUNT),
-    "pruning_batch_size": "10",
-    "pruning_target_reduction_ratio": str(PRUNING_TARGET_REDUCTION_RATIO),
-    "pruning_min_target_tokens": str(PRUNING_MIN_TARGET_TOKENS),
 }
 
 
@@ -888,11 +883,6 @@ def get_runtime_setting(key: str):
     if key not in _RUNTIME_PROPAGATION_NAMES:
         raise KeyError(f"'{key}' is not a runtime setting")
     return globals()[key]
-
-
-def _runtime_settings_snapshot() -> dict:
-    """Tüm runtime ayarlarının anlık görüntüsünü döndürür."""
-    return {key: globals()[key] for key in _RUNTIME_PROPAGATION_NAMES}
 
 
 def __getattr__(name: str):

@@ -833,55 +833,6 @@
               <div class="settings-page-section-card">
                 <div class="settings-page-section-card__header">
                   <div>
-                    <span class="settings-section-kicker">Message refinement</span>
-                    <h3>Pruning mode</h3>
-                  </div>
-                  <p>Shorten older visible history when the conversation gets noisy, using heuristic scoring instead of a separate helper model.</p>
-                </div>
-                <div class="settings-toggle-panel">
-                  <label class="tool-toggle"><input type="checkbox" id="pruning-enabled-toggle" /> <span>Enable automatic pruning after the visible token threshold is exceeded</span></label>
-                  <p class="settings-copy">Manual pruning stays available from message actions even if automatic pruning is turned off. Automatic pruning now follows token budgets plus entropy/RAG-aware scoring instead of task-specific model routing.</p>
-                </div>
-                <fieldset id="pruning-controls-fieldset" class="settings-conditional-group settings-subsection-grid settings-subsection-grid--two">
-                  <section class="settings-subsection">
-                    <div class="settings-subsection__header">
-                      <span class="settings-subsection__eyebrow">Activation</span>
-                      <h4 class="settings-subsection__title">When pruning runs</h4>
-                    </div>
-                    <div class="settings-form-cluster">
-                      <label class="settings-label" for="pruning-token-threshold-input">Pruning trigger in visible tokens (1000-200000)</label>
-                      <input type="number" class="settings-number" id="pruning-token-threshold-input" min="1000" max="200000" value="80000" />
-                      <p class="settings-copy">Pruning becomes eligible once the visible conversation crosses this size threshold.</p>
-                    </div>
-                    <div class="settings-form-cluster">
-                      <label class="settings-label" for="pruning-batch-size-input">Prune first N eligible messages (1-50)</label>
-                      <input type="number" class="settings-number" id="pruning-batch-size-input" min="1" max="50" value="10" />
-                      <p class="settings-copy">Controls how many older messages are shortened in one automatic pruning pass.</p>
-                    </div>
-                  </section>
-
-                  <section class="settings-subsection">
-                    <div class="settings-subsection__header">
-                      <span class="settings-subsection__eyebrow">Compression floor</span>
-                      <h4 class="settings-subsection__title">How aggressive pruning is</h4>
-                    </div>
-                    <div class="settings-form-cluster">
-                      <label class="settings-label" for="pruning-target-reduction-ratio-input">Target reduction ratio (0.10-0.90)</label>
-                      <input type="number" class="settings-number" id="pruning-target-reduction-ratio-input" min="0.1" max="0.9" step="0.01" value="0.65" />
-                      <p class="settings-copy">Roughly how aggressively each candidate message should be shortened relative to its estimated token count.</p>
-                    </div>
-                    <div class="settings-form-cluster">
-                      <label class="settings-label" for="pruning-min-target-tokens-input">Minimum target tokens (50-5000)</label>
-                      <input type="number" class="settings-number" id="pruning-min-target-tokens-input" min="50" max="5000" value="160" />
-                      <p class="settings-copy">Prevents very informative technical messages from being compressed below this floor during automatic pruning.</p>
-                    </div>
-                  </section>
-                </fieldset>
-              </div>
-
-              <div class="settings-page-section-card">
-                <div class="settings-page-section-card__header">
-                  <div>
                     <span class="settings-section-kicker">Canvas visibility</span>
                     <h3>Canvas limits</h3>
                   </div>

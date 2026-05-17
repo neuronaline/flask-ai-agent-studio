@@ -1570,9 +1570,6 @@ def _coerce_batch_canvas_json_value(value):
     if not raw_value:
         return value
 
-    if not raw_value:
-        return value
-
     candidate_text = raw_value
     if candidate_text[0] not in "[{":
         opener_positions = [(candidate_text.find("["), "[", "]"), (candidate_text.find("{"), "{", "}")]
@@ -1622,19 +1619,15 @@ def _normalize_batch_canvas_list_input(value, *, keys: tuple[str, ...]):
     return normalized
 
 
-def _normalize_batch_canvas_operation_candidate(operation):
-    normalized = _coerce_batch_canvas_json_value(operation)
-    while isinstance(normalized, list) and len(normalized) == 1:
-        normalized = _coerce_batch_canvas_json_value(normalized[0])
+def _unwrap_singleton(candidate):
+    """Recursively unwrap single-element lists."""
+    while isinstance(candidate, list) and len(candidate) == 1:
+        candidate = _coerce_batch_canvas_json_value(candidate[0])
+    return candidate
 
-    if not isinstance(normalized, dict):
-        return normalized
 
-    def _unwrap_singleton(candidate):
-        while isinstance(candidate, list) and len(candidate) == 1:
-            candidate = _coerce_batch_canvas_json_value(candidate[0])
-        return candidate
-
+def _unwrap_wrapper_keys(normalized: dict) -> dict:
+    """Extract operation from wrapper keys like operation, edit, item, payload, args."""
     for wrapper_key in ("operation", "edit", "item", "payload", "args"):
         wrapped_candidate = _unwrap_singleton(_coerce_batch_canvas_json_value(normalized.get(wrapper_key)))
         if not isinstance(wrapped_candidate, dict):
@@ -1644,9 +1637,12 @@ def _normalize_batch_canvas_operation_candidate(operation):
             if key == wrapper_key:
                 continue
             merged_candidate.setdefault(key, value)
-        normalized = merged_candidate
-        break
+        return merged_candidate
+    return normalized
 
+
+def _unwrap_action_keys(normalized: dict) -> dict:
+    """Extract action from replace, insert, delete keys."""
     for action_key in ("replace", "insert", "delete"):
         wrapped_candidate = _unwrap_singleton(_coerce_batch_canvas_json_value(normalized.get(action_key)))
         if not isinstance(wrapped_candidate, dict):
@@ -1657,35 +1653,68 @@ def _normalize_batch_canvas_operation_candidate(operation):
                 continue
             merged_candidate.setdefault(key, value)
         merged_candidate["action"] = action_key
-        normalized = merged_candidate
-        break
+        return merged_candidate
+    return normalized
 
+
+def _infer_action_if_missing(normalized: dict) -> dict:
+    """Infer action type from field names when action is not explicitly set."""
     action = str(normalized.get("action") or "").strip().lower()
-    if action not in {"replace", "insert", "delete"}:
-        inferred_action = None
-        if "after_line" in normalized:
-            inferred_action = "insert"
-        elif "start_line" in normalized and "end_line" in normalized:
-            if any(key in normalized for key in ("lines", "content", "text", "value")):
-                inferred_action = "replace"
-            else:
-                inferred_action = "delete"
-        if not inferred_action:
-            return normalized
-        normalized = dict(normalized)
-        normalized["action"] = inferred_action
-        action = inferred_action
-    else:
+    if action in {"replace", "insert", "delete"}:
         normalized["action"] = action
+        return normalized
 
-    if action in {"replace", "insert"} and "lines" not in normalized:
-        line_payload = None
-        for field_name in ("lines", "content", "text", "value"):
-            if field_name in normalized:
-                line_payload = normalized.pop(field_name)
-                break
-        if line_payload is not None:
+    inferred_action = None
+    if "after_line" in normalized:
+        inferred_action = "insert"
+    elif "start_line" in normalized and "end_line" in normalized:
+        if any(key in normalized for key in ("lines", "content", "text", "value")):
+            inferred_action = "replace"
+        else:
+            inferred_action = "delete"
+
+    if not inferred_action:
+        return normalized
+
+    normalized = dict(normalized)
+    normalized["action"] = inferred_action
+    return normalized
+
+
+def _normalize_line_payload(normalized: dict) -> dict:
+    """Normalize line payload for replace/insert actions."""
+    action = normalized.get("action")
+    if action not in {"replace", "insert"} or "lines" in normalized:
+        return normalized
+
+    for field_name in ("lines", "content", "text", "value"):
+        if field_name in normalized:
+            line_payload = normalized.pop(field_name)
             normalized["lines"] = _normalize_batch_canvas_lines(line_payload, field_name="lines")
+            break
+
+    return normalized
+
+
+def _normalize_batch_canvas_operation_candidate(operation):
+    # Step 1: Coerce and unwrap singletons
+    normalized = _coerce_batch_canvas_json_value(operation)
+    normalized = _unwrap_singleton(normalized)
+
+    if not isinstance(normalized, dict):
+        return normalized
+
+    # Step 2: Unwrap wrapper keys
+    normalized = _unwrap_wrapper_keys(normalized)
+
+    # Step 3: Unwrap action keys
+    normalized = _unwrap_action_keys(normalized)
+
+    # Step 4: Infer action if missing
+    normalized = _infer_action_if_missing(normalized)
+
+    # Step 5: Normalize line payload
+    normalized = _normalize_line_payload(normalized)
 
     return normalized
 

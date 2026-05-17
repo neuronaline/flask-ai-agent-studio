@@ -30,86 +30,86 @@ CANVAS_LINE_ARRAY_DESCRIPTION = (
 )
 
 
-def _build_canvas_edit_operation_variants() -> list[dict]:
-    return [
-        {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["replace"],
-                    "description": "Replace an inclusive 1-based line range.",
-                },
-                "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to replace."},
-                "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to replace."},
-                "lines": {"type": "array", "items": {"type": "string"}, "description": CANVAS_LINE_ARRAY_DESCRIPTION},
-                "expected_start_line": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Optional first line of the current snippet that must still match before applying the edit.",
-                },
-                "expected_lines": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Optional current lines that must still match before applying the edit.",
-                },
+# Pre-computed constant instead of calling a function each time
+CANVAS_EDIT_OPERATION_VARIANTS: list[dict] = [
+    {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["replace"],
+                "description": "Replace an inclusive 1-based line range.",
             },
-            "required": ["action", "start_line", "end_line", "lines"],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["insert"],
-                    "description": "Insert new lines after a specific anchor line.",
-                },
-                "after_line": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "description": "Insert after this line number. Use 0 to insert before line 1 at the top of the file.",
-                },
-                "lines": {"type": "array", "items": {"type": "string"}, "description": CANVAS_LINE_ARRAY_DESCRIPTION},
-                "expected_start_line": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Optional first line of the current snippet that must still match before applying the insert.",
-                },
-                "expected_lines": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Optional nearby current lines that must still match before applying the insert.",
-                },
+            "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to replace."},
+            "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to replace."},
+            "lines": {"type": "array", "items": {"type": "string"}, "description": CANVAS_LINE_ARRAY_DESCRIPTION},
+            "expected_start_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional first line of the current snippet that must still match before applying the edit.",
             },
-            "required": ["action", "after_line", "lines"],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["delete"],
-                    "description": "Delete an inclusive 1-based line range.",
-                },
-                "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to delete."},
-                "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to delete."},
-                "expected_start_line": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Optional first line of the current snippet that must still match before applying the delete.",
-                },
-                "expected_lines": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Optional current lines that must still match before applying the delete.",
-                },
+            "expected_lines": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional current lines that must still match before applying the edit.",
             },
-            "required": ["action", "start_line", "end_line"],
-            "additionalProperties": False,
         },
-    ]
+        "required": ["action", "start_line", "end_line", "lines"],
+        "additionalProperties": False,
+    },
+    {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["insert"],
+                "description": "Insert new lines after a specific anchor line.",
+            },
+            "after_line": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Insert after this line number. Use 0 to insert before line 1 at the top of the file.",
+            },
+            "lines": {"type": "array", "items": {"type": "string"}, "description": CANVAS_LINE_ARRAY_DESCRIPTION},
+            "expected_start_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional first line of the current snippet that must still match before applying the insert.",
+            },
+            "expected_lines": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional nearby current lines that must still match before applying the insert.",
+            },
+        },
+        "required": ["action", "after_line", "lines"],
+        "additionalProperties": False,
+    },
+    {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["delete"],
+                "description": "Delete an inclusive 1-based line range.",
+            },
+            "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to delete."},
+            "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to delete."},
+            "expected_start_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional first line of the current snippet that must still match before applying the delete.",
+            },
+            "expected_lines": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional current lines that must still match before applying the delete.",
+            },
+        },
+        "required": ["action", "start_line", "end_line"],
+        "additionalProperties": False,
+    },
+]
 
 
 TOOL_SPECS = [
@@ -1060,7 +1060,7 @@ TOOL_SPECS = [
                     "type": "array",
                     "description": "Ordered list of non-overlapping replace, insert, or delete operations to apply against the same document snapshot.",
                     "minItems": 1,
-                    "items": {"oneOf": _build_canvas_edit_operation_variants()},
+                    "items": {"oneOf": CANVAS_EDIT_OPERATION_VARIANTS},
                 },
                 "targets": {
                     "type": "array",
@@ -1077,7 +1077,7 @@ TOOL_SPECS = [
                             "operations": {
                                 "type": "array",
                                 "minItems": 1,
-                                "items": {"oneOf": _build_canvas_edit_operation_variants()},
+                                "items": {"oneOf": CANVAS_EDIT_OPERATION_VARIANTS},
                                 "description": "Ordered list of non-overlapping replace, insert, or delete operations for this target.",
                             },
                         },

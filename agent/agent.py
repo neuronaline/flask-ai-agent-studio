@@ -241,6 +241,14 @@ MAX_COMPACTION_ATTEMPTS = 3
 EMERGENCY_TRUNCATION_MIN_TOKENS = 1500
 EMERGENCY_TRUNCATION_TARGET_RATIO = 0.60
 
+# Excerpt window scoring weights
+EXCERPT_SCORING_WEIGHTS = {
+    "lexical": 0.38,
+    "structural": 0.24,
+    "density": 0.18,
+    "reference": 0.20,
+}
+
 # Module-level logger for centralized logging
 LOGGER = get_logger(__name__)
 
@@ -1552,7 +1560,12 @@ def _score_fetch_excerpt_window(window: str, *, anchor_terms: list[str] | None =
         anchor_hits = sum(1 for term in normalized_anchor_terms if term in lowered_window)
         reference_score = min(1.0, anchor_hits / max(1, min(4, len(normalized_anchor_terms))))
 
-    return lexical_score * 0.38 + structural_score * 0.24 + density_score * 0.18 + reference_score * 0.20
+    return (
+        lexical_score * EXCERPT_SCORING_WEIGHTS["lexical"]
+        + structural_score * EXCERPT_SCORING_WEIGHTS["structural"]
+        + density_score * EXCERPT_SCORING_WEIGHTS["density"]
+        + reference_score * EXCERPT_SCORING_WEIGHTS["reference"]
+    )
 
 
 def _select_entropy_middle_excerpt_start(

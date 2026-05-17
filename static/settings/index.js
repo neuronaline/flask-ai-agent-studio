@@ -332,11 +332,6 @@
     appSettings.entropy_protect_tool_results = Boolean(data.entropy_protect_tool_results ?? true);
     appSettings.entropy_reference_boost = Boolean(data.entropy_reference_boost ?? true);
     appSettings.reasoning_auto_collapse = Boolean(data.reasoning_auto_collapse);
-    appSettings.pruning_enabled = Boolean(data.pruning_enabled);
-    appSettings.pruning_token_threshold = data.pruning_token_threshold || 80000;
-    appSettings.pruning_batch_size = data.pruning_batch_size || 10;
-    appSettings.pruning_target_reduction_ratio = data.pruning_target_reduction_ratio ?? 0.65;
-    appSettings.pruning_min_target_tokens = data.pruning_min_target_tokens ?? 160;
     appSettings.fetch_url_token_threshold = data.fetch_url_token_threshold || 3500;
     appSettings.fetch_url_clip_aggressiveness = data.fetch_url_clip_aggressiveness ?? 50;
     appSettings.fetch_html_converter_mode = data.fetch_html_converter_mode || "hybrid";

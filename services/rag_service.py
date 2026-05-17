@@ -232,6 +232,31 @@ def _conversation_rag_source_name(source_type: str, conversation_id: int, title:
     return f"{source_type}:{conversation_id}:{title}"
 
 
+# Lookup table for known RAG source types
+_RAG_HIERARCHICAL_DEFAULTS: dict[str, dict[str, str]] = {
+    RAG_SOURCE_CONVERSATION: {
+        "workspace_id": "conversation:{conversation_id}",
+        "project_id": "chat-history",
+        "document_path": "conversations/{conversation_id}",
+        "fallback_workspace_id": "conversation",
+        "fallback_document_path": "conversations",
+    },
+    RAG_SOURCE_TOOL_RESULT: {
+        "workspace_id": "conversation:{conversation_id}",
+        "project_id": "tool-results",
+        "document_path": "tool_results/{conversation_id}",
+        "fallback_workspace_id": "conversation:unknown",
+        "fallback_document_path": "tool_results",
+    },
+    RAG_SOURCE_UPLOADED_DOCUMENT: {
+        "workspace_id": "knowledge-base",
+        "project_id": "manual-uploads",
+        "document_path": "{file_name}",
+        "fallback_document_path": "uploads/{source_key}",
+    },
+}
+
+
 def _build_hierarchical_rag_metadata(
     *,
     source_type: str,
@@ -241,23 +266,29 @@ def _build_hierarchical_rag_metadata(
 ) -> dict:
     base = dict(metadata or {})
     normalized_source_type = normalize_category(source_type)
-    if normalized_source_type == RAG_SOURCE_CONVERSATION:
+
+    if normalized_source_type in _RAG_HIERARCHICAL_DEFAULTS:
+        defaults = _RAG_HIERARCHICAL_DEFAULTS[normalized_source_type]
         conversation_id = base.get("conversation_id")
-        workspace_id = f"conversation:{conversation_id}" if conversation_id not in (None, "") else "conversation"
-        project_id = "chat-history"
-        document_path = f"conversations/{conversation_id}" if conversation_id not in (None, "") else "conversations"
-    elif normalized_source_type == RAG_SOURCE_TOOL_RESULT:
-        conversation_id = base.get("conversation_id")
-        workspace_id = (
-            f"conversation:{conversation_id}" if conversation_id not in (None, "") else "conversation:unknown"
-        )
-        project_id = "tool-results"
-        document_path = f"tool_results/{conversation_id}" if conversation_id not in (None, "") else "tool_results"
-    elif normalized_source_type == RAG_SOURCE_UPLOADED_DOCUMENT:
-        workspace_id = "knowledge-base"
-        project_id = "manual-uploads"
-        file_name = str(base.get("file_name") or "").strip()
-        document_path = file_name or f"uploads/{source_key}"
+        has_conversation_id = conversation_id not in (None, "")
+
+        if normalized_source_type == RAG_SOURCE_UPLOADED_DOCUMENT:
+            workspace_id = defaults["workspace_id"]
+            project_id = defaults["project_id"]
+            file_name = str(base.get("file_name") or "").strip()
+            document_path = file_name or defaults["fallback_document_path"].format(source_key=source_key)
+        else:
+            workspace_id = (
+                defaults["workspace_id"].format(conversation_id=conversation_id)
+                if has_conversation_id
+                else defaults["fallback_workspace_id"]
+            )
+            project_id = defaults["project_id"]
+            document_path = (
+                defaults["document_path"].format(conversation_id=conversation_id)
+                if has_conversation_id
+                else defaults["fallback_document_path"]
+            )
     else:
         workspace_id = str(base.get("workspace_id") or "knowledge-base").strip() or "knowledge-base"
         project_id = str(base.get("project_id") or normalized_source_type or "general").strip() or "general"

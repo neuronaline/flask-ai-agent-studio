@@ -1,4 +1,4 @@
-// Settings context — context strategy, entropy, pruning settings
+// Settings context — context strategy, entropy settings
 (function () {
   "use strict";
 
@@ -13,12 +13,6 @@
   const entropyProtectCodeBlocksEl = document.getElementById("entropy-protect-code-blocks-toggle");
   const entropyProtectToolResultsEl = document.getElementById("entropy-protect-tool-results-toggle");
   const entropyReferenceBoostEl = document.getElementById("entropy-reference-boost-toggle");
-  const pruningEnabledEl = document.getElementById("pruning-enabled-toggle");
-  const pruningControlsFieldsetEl = document.getElementById("pruning-controls-fieldset");
-  const pruningTokenThresholdEl = document.getElementById("pruning-token-threshold-input");
-  const pruningBatchSizeEl = document.getElementById("pruning-batch-size-input");
-  const pruningTargetReductionRatioEl = document.getElementById("pruning-target-reduction-ratio-input");
-  const pruningMinTargetTokensEl = document.getElementById("pruning-min-target-tokens-input");
 
   // ─── Conditional section helper ─────────────────────────────────────────────
   function applyConditionalSectionState(element, { disabled = false, hidden = null } = {}) {
@@ -43,11 +37,6 @@
     applyConditionalSectionState(entropyRagBudgetClusterEl, { disabled: !hybridEnabled, hidden: !hybridEnabled });
   }
 
-  // ─── Pruning sync ────────────────────────────────────────────────────────────
-  function syncPruningSettingsAvailability() {
-    applyConditionalSectionState(pruningControlsFieldsetEl, { disabled: !Boolean(pruningEnabledEl?.checked) });
-  }
-
   // ─── Context settings apply ───────────────────────────────────────────────────
   function syncContextSettingsToForm(appSettings) {
     if (contextCompactionThresholdEl) contextCompactionThresholdEl.value = String(appSettings.context_compaction_threshold ?? 0.85);
@@ -58,11 +47,6 @@
     if (entropyProtectCodeBlocksEl) entropyProtectCodeBlocksEl.checked = Boolean(appSettings.entropy_protect_code_blocks ?? true);
     if (entropyProtectToolResultsEl) entropyProtectToolResultsEl.checked = Boolean(appSettings.entropy_protect_tool_results ?? true);
     if (entropyReferenceBoostEl) entropyReferenceBoostEl.checked = Boolean(appSettings.entropy_reference_boost ?? true);
-    if (pruningEnabledEl) pruningEnabledEl.checked = Boolean(appSettings.pruning_enabled);
-    if (pruningTokenThresholdEl) pruningTokenThresholdEl.value = String(appSettings.pruning_token_threshold || 80000);
-    if (pruningBatchSizeEl) pruningBatchSizeEl.value = String(appSettings.pruning_batch_size || 10);
-    if (pruningTargetReductionRatioEl) pruningTargetReductionRatioEl.value = String(appSettings.pruning_target_reduction_ratio ?? 0.65);
-    if (pruningMinTargetTokensEl) pruningMinTargetTokensEl.value = String(appSettings.pruning_min_target_tokens ?? 160);
   }
 
   // ─── Context payload helpers ──────────────────────────────────────────────────
@@ -76,18 +60,12 @@
       entropy_protect_code_blocks: Boolean(entropyProtectCodeBlocksEl?.checked),
       entropy_protect_tool_results: Boolean(entropyProtectToolResultsEl?.checked),
       entropy_reference_boost: Boolean(entropyReferenceBoostEl?.checked),
-      pruning_enabled: Boolean(pruningEnabledEl?.checked),
-      pruning_token_threshold: window.__settingsCore.readNumericSetting(pruningTokenThresholdEl, 80000, { allowZero: false }),
-      pruning_batch_size: window.__settingsCore.readNumericSetting(pruningBatchSizeEl, 10, { allowZero: false }),
-      pruning_target_reduction_ratio: window.__settingsCore.readFloatSetting(pruningTargetReductionRatioEl, 0.65, { min: 0.1, max: 0.9 }),
-      pruning_min_target_tokens: window.__settingsCore.readNumericSetting(pruningMinTargetTokensEl, 160, { allowZero: false, min: 50, max: 5000 }),
     };
   }
 
   // ─── Export ──────────────────────────────────────────────────────────────────
   window.__settingsContext = {
     syncContextStrategyAvailability,
-    syncPruningSettingsAvailability,
     syncContextSettingsToForm,
     readContextSettingsPayload,
   };

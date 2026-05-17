@@ -14,7 +14,7 @@ Unlike basic prompt/response wrappers, this app persists deep conversation state
 *   **Persistent Memory & RAG:** Conversation-scoped memory, persona-scoped memory, persistent scratchpads, and a local ChromaDB-backed RAG system for document and chat history retrieval.
 *   **Multimodal & Attachments:** Document extraction (PDF, DOCX, CSV, Code) and Image processing via local OCR (PaddleOCR), Vision LLMs, or direct multimodal injection.
 *   **Canvas & Workspace:** An interactive UI panel for the model to create, edit, search, and manage markdown or code documents. Includes project-mode for local file sandbox execution.
-*   **Advanced Chat Controls:** Slash commands (`/check`), message editing/branching, history pruning, automatic summarization, and entropy-aware context selection.
+*   **Advanced Chat Controls:** Slash commands (`/check`), message editing/branching, automatic summarization, and entropy-aware context selection.
 *   **Observability:** Detailed usage panels, provider vs. local token estimates, caching diagnostics, and rotating agent trace logs.
 
 ## 📸 Screenshots
