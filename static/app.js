@@ -191,10 +191,6 @@ const SUMMARY_DETAIL_OPTIONS = [
   },
 ];
 
-const SUMMARY_DETAIL_LABELS = Object.fromEntries(
-  SUMMARY_DETAIL_OPTIONS.map((option) => [option.value, option.label])
-);
-
 const SUMMARY_MODE_LABELS = {
   auto: "Auto",
   conservative: "Conservative",
@@ -273,11 +269,6 @@ function renderSummaryDetailOptions() {
 
 function syncSummaryToggleButton() {
   summaryToggleBtn?.setAttribute("aria-expanded", String(isSummaryPanelOpen()));
-}
-
-function getSummaryDetailLabel(value) {
-  const normalizedValue = String(value || "balanced").trim() || "balanced";
-  return SUMMARY_DETAIL_LABELS[normalizedValue] || SUMMARY_DETAIL_LABELS.balanced;
 }
 
 function clearSummaryProgressTimer() {
@@ -439,9 +430,132 @@ function renderSummaryFocusPresets() {
 renderSummaryFocusPresets();
 renderSummaryDetailOptions();
 
-let history = [];
+// ============================================================================
+// PHASE 2: Grouped State Objects
+// Replaces 60+ scattered global let variables with logical groupings.
+// TODO: Migrate all references from individual vars to state.group.property
+// ============================================================================
+
+const chatState = {
+  isStreaming: false,
+  isFixing: false,
+  activeAbortController: null,
+  activeChatRunId: null,
+  activeUserCancelRequested: false,
+  activeChatCancellationFallbackTimer: null,
+  activeAssistantStreamingBubble: null,
+  activeAssistantStreamingHasVisibleAnswer: false,
+  history: [],
+  currentConvId: null,
+  currentConvTitle: "New Chat",
+  currentConversationPersonaId: null,
+  currentConversationPersonaName: "",
+  currentConversationTitleSource: "system",
+  currentConversationTitleOverridden: false,
+  conversationMemoryEntries: [],
+  conversationMemoryEnabled: false,
+  currentConversationToolOverrides: null,
+  currentConversationParameterOverrides: null,
+};
+
+const canvasState = {
+  activeCanvasDocumentId: null,
+  streamingCanvasDocuments: [],
+  isCanvasEditing: false,
+  editingCanvasDocumentId: null,
+  canvasPageByDocumentId: new Map(),
+  pendingCanvasPageSyncFrame: 0,
+  canvasHasUnreadUpdates: false,
+  lastCanvasTriggerEl: null,
+  lastCanvasConfirmTriggerEl: null,
+  pendingCanvasMutation: "",
+  // Canvas render state (formerly CanvasRenderState class - Step 2.5)
+  deferredPanelRender: false,
+  deferredPreviewRender: false,
+  pendingFlushTimer: 0,
+  lastPreviewRenderAt: 0,
+  pendingPreviewTimer: 0,
+  pendingEditorPreviewTimer: 0,
+  streamingPreviews: new Map(),
+  structureSignature: '',
+  docListSignature: '',
+  // Methods formerly from CanvasRenderState class
+  resetDeferred() {
+    this.deferredPanelRender = false;
+    this.deferredPreviewRender = false;
+  },
+  clear() {
+    this.pendingFlushTimer = 0;
+    this.pendingPreviewTimer = 0;
+    this.pendingEditorPreviewTimer = 0;
+    this.deferredPanelRender = false;
+    this.deferredPreviewRender = false;
+    this.lastPreviewRenderAt = 0;
+    this.streamingPreviews.clear();
+  },
+};
+
+const summaryState = {
+  isSummaryOperationInFlight: false,
+  summaryProgressTimer: 0,
+  summaryProgressCurrentValue: 0,
+  summaryPreviewConversationId: null,
+  latestSummaryStatus: null,
+};
+
+const uiState = {
+  messageSelectionMode: null,
+  selectedSummaryMessageIds: new Set(),
+  conversationRefreshGeneration: 0,
+  pendingConversationRefreshTimers: new Set(),
+  lastConversationSignature: "",
+  lastConversationMemorySignature: "",
+  userScrolledUp: false,
+  pendingCanvasConfirmAction: null,
+  slashCommandMenuOpen: false,
+  slashCommandMenuQuery: "",
+  slashCommandSuggestions: [],
+  slashCommandSelectedIndex: 0,
+  isCanvasFullscreen: false,
+  isCanvasMobileTreeOpen: false,
+  canvasZoomLevelIndex: 0,
+};
+
+const attachmentState = {
+  selectedImageFiles: [],
+  selectedDocumentFiles: [],
+  selectedDocumentSubmissionModes: new Map(),
+  selectedYouTubeUrl: "",
+  pendingDocumentCanvasOpen: null,
+  nextAttachmentFileKeyId: 1,
+};
+
+const messageEditState = {
+  editingMessageId: null,
+  inlineEditingMessageId: null,
+  inlineEditingDraft: "",
+  savingEditedMessageId: null,
+  pendingDeleteMessageId: null,
+  deletingMessageId: null,
+  activeDeleteMessageAbortController: null,
+};
+
+const lastTriggerState = {
+  lastExportTriggerEl: null,
+  lastSummaryTriggerEl: null,
+};
+
+// Backward-compatibility references (deprecated - use chatState.*, canvasState.*, etc.)
+// These will be removed in a future update after all references are migrated
 let isStreaming = false;
 let isFixing = false;
+let activeAbortController = null;
+let activeChatRunId = null;
+let activeUserCancelRequested = false;
+let activeChatCancellationFallbackTimer = null;
+let activeAssistantStreamingBubble = null;
+let activeAssistantStreamingHasVisibleAnswer = false;
+let history = [];
 let currentConvId = null;
 let currentConvTitle = "New Chat";
 let currentConversationPersonaId = null;
@@ -452,26 +566,6 @@ let conversationMemoryEntries = [];
 let conversationMemoryEnabled = false;
 let currentConversationToolOverrides = null;
 let currentConversationParameterOverrides = null;
-let activeAbortController = null;
-let activeChatRunId = null;
-let activeUserCancelRequested = false;
-let activeChatCancellationFallbackTimer = null;
-let activeAssistantStreamingBubble = null;
-let activeAssistantStreamingHasVisibleAnswer = false;
-let selectedImageFiles = [];
-let selectedDocumentFiles = [];
-let selectedDocumentSubmissionModes = new Map();
-const attachmentFileKeyByObject = new WeakMap();
-let nextAttachmentFileKeyId = 1;
-let selectedYouTubeUrl = "";
-let pendingDocumentCanvasOpen = null;
-let editingMessageId = null;
-let inlineEditingMessageId = null;
-let inlineEditingDraft = "";
-let savingEditedMessageId = null;
-let pendingDeleteMessageId = null;
-let deletingMessageId = null;
-let activeDeleteMessageAbortController = null;
 let activeCanvasDocumentId = null;
 let streamingCanvasDocuments = [];
 let isCanvasEditing = false;
@@ -481,21 +575,12 @@ let pendingCanvasPageSyncFrame = 0;
 let canvasHasUnreadUpdates = false;
 let lastCanvasTriggerEl = null;
 let lastCanvasConfirmTriggerEl = null;
-let lastExportTriggerEl = null;
-let lastSummaryTriggerEl = null;
-
-let streamingCanvasPreviews = new Map();
-let pendingCanvasPreviewTimer = 0;
-let pendingCanvasEditorPreviewTimer = 0;
-let lastCanvasStructureSignature = "";
-let lastCanvasDocListSignature = "";
-let activeAnswerRenderPending = false;
-let latestSummaryStatus = null;
+let pendingCanvasMutation = "";
 let isSummaryOperationInFlight = false;
-
 let summaryProgressTimer = 0;
 let summaryProgressCurrentValue = 0;
 let summaryPreviewConversationId = null;
+let latestSummaryStatus = null;
 let messageSelectionMode = null;
 let selectedSummaryMessageIds = new Set();
 let conversationRefreshGeneration = 0;
@@ -504,11 +589,24 @@ let lastConversationSignature = "";
 let lastConversationMemorySignature = "";
 let userScrolledUp = false;
 let pendingCanvasConfirmAction = null;
-let pendingCanvasMutation = "";
 let slashCommandMenuOpen = false;
 let slashCommandMenuQuery = "";
 let slashCommandSuggestions = [];
 let slashCommandSelectedIndex = 0;
+let selectedImageFiles = [];
+let selectedDocumentFiles = [];
+let selectedYouTubeUrl = "";
+let pendingDocumentCanvasOpen = null;
+let nextAttachmentFileKeyId = 1;
+let editingMessageId = null;
+let inlineEditingMessageId = null;
+let inlineEditingDraft = "";
+let savingEditedMessageId = null;
+let pendingDeleteMessageId = null;
+let deletingMessageId = null;
+let activeDeleteMessageAbortController = null;
+let lastExportTriggerEl = null;
+let lastSummaryTriggerEl = null;
 
 const CANVAS_EMPTY_STATES = Object.freeze({
   no_documents: Object.freeze({
@@ -633,79 +731,6 @@ const CANVAS_CODE_FILE_EXTENSIONS = new Set([
   ".yml",
   ".zsh",
 ]);
-
-/**
- * CanvasRenderState - Abstracts 10+ scattered canvas state variables
- * Phase 2 refactor - internal flags are now private
- */
-class CanvasRenderState {
-  constructor() {
-    // Private state flags
-    this._deferredPanelRender = false;
-    this._deferredPreviewRender = false;
-    this._pendingFlushTimer = 0;
-    this._lastPreviewRenderAt = 0;
-    this._pendingPreviewTimer = 0;
-    this._pendingEditorPreviewTimer = 0;
-    this._streamingPreviews = new Map();
-    this._structureSignature = '';
-    this._docListSignature = '';
-  }
-
-  // Panel render deferred flag
-  get deferredPanelRender() { return this._deferredPanelRender; }
-  set deferredPanelRender(v) { this._deferredPanelRender = Boolean(v); }
-
-  // Preview render deferred flag
-  get deferredPreviewRender() { return this._deferredPreviewRender; }
-  set deferredPreviewRender(v) { this._deferredPreviewRender = Boolean(v); }
-
-  // Pending flush timer
-  get pendingFlushTimer() { return this._pendingFlushTimer; }
-  set pendingFlushTimer(v) { this._pendingFlushTimer = v; }
-
-  // Last preview render timestamp
-  get lastPreviewRenderAt() { return this._lastPreviewRenderAt; }
-  set lastPreviewRenderAt(v) { this._lastPreviewRenderAt = Number(v) || 0; }
-
-  // Pending preview RAF timer
-  get pendingPreviewTimer() { return this._pendingPreviewTimer; }
-  set pendingPreviewTimer(v) { this._pendingPreviewTimer = v; }
-
-  // Pending editor preview RAF timer
-  get pendingEditorPreviewTimer() { return this._pendingEditorPreviewTimer; }
-  set pendingEditorPreviewTimer(v) { this._pendingEditorPreviewTimer = v; }
-
-  // Streaming canvas previews map
-  get streamingPreviews() { return this._streamingPreviews; }
-
-  // Canvas structure signature
-  get structureSignature() { return this._structureSignature; }
-  set structureSignature(v) { this._structureSignature = String(v || ''); }
-
-  // Canvas doc list signature
-  get docListSignature() { return this._docListSignature; }
-  set docListSignature(v) { this._docListSignature = String(v || ''); }
-
-  // Reset all deferred flags
-  resetDeferred() {
-    this._deferredPanelRender = false;
-    this._deferredPreviewRender = false;
-  }
-
-  // Clear all timers and flags
-  clear() {
-    this._pendingFlushTimer = 0;
-    this._pendingPreviewTimer = 0;
-    this._pendingEditorPreviewTimer = 0;
-    this._deferredPanelRender = false;
-    this._deferredPreviewRender = false;
-    this._lastPreviewRenderAt = 0;
-    this._streamingPreviews.clear();
-  }
-}
-
-const canvasRenderState = new CanvasRenderState();
 
 function isDocumentFile(file) {
   if (ALLOWED_DOCUMENT_TYPES.has(file.type)) return true;
@@ -1808,12 +1833,8 @@ function getCanvasDocumentLabel(document) {
   return String(document.path || document.title || "").trim();
 }
 
-function getCanvasDocumentReference(document) {
-  return getCanvasDocumentLabel(document);
-}
-
 function getCanvasDocumentDisplayName(document) {
-  return getCanvasDocumentReference(document) || String(document?.title || "Canvas").trim() || "Canvas";
+  return getCanvasDocumentLabel(document) || String(document?.title || "Canvas").trim() || "Canvas";
 }
 
 function getCanvasFileName(document) {
@@ -3642,12 +3663,12 @@ function buildCanvasRenderState(documents = getCanvasRenderableDocuments()) {
 }
 
 function clearDeferredCanvasRenderFlushTimer() {
-  if (!canvasRenderState.pendingFlushTimer) {
+  if (!canvasState.pendingFlushTimer) {
     return;
   }
 
-  globalThis.clearTimeout(canvasRenderState.pendingFlushTimer);
-  canvasRenderState.pendingFlushTimer = 0;
+  globalThis.clearTimeout(canvasState.pendingFlushTimer);
+  canvasState.pendingFlushTimer = 0;
 }
 
 function shouldDeferCanvasRenderForStreaming() {
@@ -3659,13 +3680,13 @@ function shouldDeferCanvasRenderForStreaming() {
 }
 
 function scheduleDeferredCanvasRenderFlush(delay = CANVAS_STREAMING_RENDER_DEFER_INTERVAL_MS) {
-  if (canvasRenderState.pendingFlushTimer) {
+  if (canvasState.pendingFlushTimer) {
     return;
   }
 
   const nextDelay = Math.max(CANVAS_STREAMING_RENDER_DEFER_INTERVAL_MS, Number(delay) || 0);
-  canvasRenderState.pendingFlushTimer = globalThis.setTimeout(() => {
-    canvasRenderState.pendingFlushTimer = 0;
+  canvasState.pendingFlushTimer = globalThis.setTimeout(() => {
+    canvasState.pendingFlushTimer = 0;
     flushDeferredCanvasRenderWork();
   }, nextDelay);
 }
@@ -3676,8 +3697,8 @@ function flushDeferredCanvasRenderWork() {
     return;
   }
 
-  if (canvasRenderState.deferredPanelRender) {
-    canvasRenderState.resetDeferred();
+  if (canvasState.deferredPanelRender) {
+    canvasState.resetDeferred();
     renderCanvasPanel();
     if (streamingCanvasPreviews.size) {
       scheduleCanvasPreviewRender({ allowWhileAnswerPending: true });
@@ -3685,8 +3706,8 @@ function flushDeferredCanvasRenderWork() {
     return;
   }
 
-  if (canvasRenderState.deferredPreviewRender) {
-    canvasRenderState.deferredPreviewRender = false;
+  if (canvasState.deferredPreviewRender) {
+    canvasState.deferredPreviewRender = false;
     scheduleCanvasPreviewRender({ allowWhileAnswerPending: true });
   }
 }
@@ -3694,12 +3715,12 @@ function flushDeferredCanvasRenderWork() {
 function requestCanvasPanelRender({ deferForStreaming = false } = {}) {
   const shouldDelayPanelRender = deferForStreaming && isStreaming && (activeAnswerRenderPending || activeAssistantStreamingHasVisibleAnswer);
   if (shouldDelayPanelRender) {
-    canvasRenderState.deferredPanelRender = true;
+    canvasState.deferredPanelRender = true;
     scheduleDeferredCanvasRenderFlush();
     return false;
   }
 
-  canvasRenderState.resetDeferred();
+  canvasState.resetDeferred();
   renderCanvasPanel();
   return true;
 }
@@ -3707,25 +3728,25 @@ function requestCanvasPanelRender({ deferForStreaming = false } = {}) {
 function scheduleCanvasPreviewRender(options = {}) {
   const allowWhileAnswerPending = options.allowWhileAnswerPending === true;
   if (!allowWhileAnswerPending && shouldDeferCanvasRenderForStreaming()) {
-    canvasRenderState.deferredPreviewRender = true;
+    canvasState.deferredPreviewRender = true;
     scheduleDeferredCanvasRenderFlush();
     return;
   }
 
-  if (isStreaming && activeAssistantStreamingHasVisibleAnswer && canvasRenderState.lastPreviewRenderAt > 0) {
-    const elapsedMs = Date.now() - canvasRenderState.lastPreviewRenderAt;
+  if (isStreaming && activeAssistantStreamingHasVisibleAnswer && canvasState.lastPreviewRenderAt > 0) {
+    const elapsedMs = Date.now() - canvasState.lastPreviewRenderAt;
     if (elapsedMs < CANVAS_STREAMING_PREVIEW_THROTTLE_MS) {
-      canvasRenderState.deferredPreviewRender = true;
+      canvasState.deferredPreviewRender = true;
       scheduleDeferredCanvasRenderFlush(CANVAS_STREAMING_PREVIEW_THROTTLE_MS - elapsedMs);
       return;
     }
   }
 
-  canvasRenderState.deferredPreviewRender = false;
+  canvasState.deferredPreviewRender = false;
   scheduleCanvasRenderJob("preview", () => {
-    canvasRenderState.lastPreviewRenderAt = Date.now();
+    canvasState.lastPreviewRenderAt = Date.now();
     renderCanvasPreviewFrame();
-    if (canvasRenderState.deferredPanelRender || canvasRenderState.deferredPreviewRender) {
+    if (canvasState.deferredPanelRender || canvasState.deferredPreviewRender) {
       scheduleDeferredCanvasRenderFlush();
     }
   });
@@ -4070,7 +4091,7 @@ function renderCanvasUnavailableState({
 }
 
 function clearCanvasRenderJob(jobType) {
-  const timer = jobType === "editing-preview" ? canvasRenderState.pendingEditorPreviewTimer : canvasRenderState.pendingPreviewTimer;
+  const timer = jobType === "editing-preview" ? canvasState.pendingEditorPreviewTimer : canvasState.pendingPreviewTimer;
   if (!timer) {
     return;
   }
@@ -4080,23 +4101,23 @@ function clearCanvasRenderJob(jobType) {
     globalThis.clearTimeout(timer);
   }
   if (jobType === "editing-preview") {
-    canvasRenderState.pendingEditorPreviewTimer = 0;
+    canvasState.pendingEditorPreviewTimer = 0;
     return;
   }
-  canvasRenderState.pendingPreviewTimer = 0;
+  canvasState.pendingPreviewTimer = 0;
 }
 
 function scheduleCanvasRenderJob(jobType, callback) {
   const isEditingPreviewJob = jobType === "editing-preview";
-  if (isEditingPreviewJob ? canvasRenderState.pendingEditorPreviewTimer : canvasRenderState.pendingPreviewTimer) {
+  if (isEditingPreviewJob ? canvasState.pendingEditorPreviewTimer : canvasState.pendingPreviewTimer) {
     return;
   }
 
   const flushRenderJob = () => {
     if (isEditingPreviewJob) {
-      canvasRenderState.pendingEditorPreviewTimer = 0;
+      canvasState.pendingEditorPreviewTimer = 0;
     } else {
-      canvasRenderState.pendingPreviewTimer = 0;
+      canvasState.pendingPreviewTimer = 0;
     }
     callback();
   };
@@ -4106,10 +4127,10 @@ function scheduleCanvasRenderJob(jobType, callback) {
     : globalThis.setTimeout(flushRenderJob, CANVAS_PREVIEW_RENDER_INTERVAL_MS);
 
   if (isEditingPreviewJob) {
-    canvasRenderState.pendingEditorPreviewTimer = timer;
+    canvasState.pendingEditorPreviewTimer = timer;
     return;
   }
-  canvasRenderState.pendingPreviewTimer = timer;
+  canvasState.pendingPreviewTimer = timer;
 }
 
 function clearCanvasEditingPreviewRender() {
@@ -4218,7 +4239,7 @@ function renderCanvasMetaBar(renderState) {
     chips.push({ label: activeDocument.language, className: "canvas-meta-chip" });
   }
 
-  const reference = getCanvasDocumentReference(activeDocument);
+  const reference = getCanvasDocumentLabel(activeDocument);
   if (reference) {
     chips.push({
       label: reference,
@@ -4312,8 +4333,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
   const pageLabel = Number(displayDocument.page_count) > 1 ? ` · ${displayDocument.page_count} pages` : "";
   const roleLabel = displayDocument.role ? ` · ${displayDocument.role}` : "";
   const languageLabel = displayDocument.language ? ` · ${displayDocument.language}` : "";
-  const visualLabel = "";
-  canvasSubtitle.textContent = `${modeLabel} · ${visibleDocuments.length}/${documents.length} files · ${detailLabel} · ${displayDocument.line_count} lines${pageLabel}${roleLabel}${languageLabel}${visualLabel}`;
+  canvasSubtitle.textContent = `${modeLabel} · ${visibleDocuments.length}/${documents.length} files · ${detailLabel} · ${displayDocument.line_count} lines${pageLabel}${roleLabel}${languageLabel}`;
   renderCanvasMetaBar(renderState);
   const promptLineLimit = Number(appSettings.canvas_prompt_max_lines || 250);
   if (isStreamingPreviewActive) {
@@ -5237,7 +5257,7 @@ function openSummaryPanel(triggerEl = null) {
     resetSummaryProgress({ hide: true });
   }
   if (summaryPreviewConversationId !== currentConvId) {
-    resetSummaryPreview({ hide: true });
+    resetSummaryPreview();
   }
   setSummaryBusyState(isSummaryOperationInFlight);
   syncMessageSelectionMode({ render: true });
@@ -5290,7 +5310,7 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
         rebuildTokenStatsFromHistory();
         renderConversationHistory();
       }
-      resetSummaryPreview({ hide: true });
+      resetSummaryPreview();
       const coveredCount = Number(data.covered_message_count || 0);
       finishSummaryProgress(
         coveredCount > 0
@@ -8136,7 +8156,7 @@ async function undoConversationSummary(summaryId, { triggerButton = null } = {})
       rebuildTokenStatsFromHistory();
       renderConversationHistory();
     }
-    resetSummaryPreview({ hide: true });
+    resetSummaryPreview();
 
     latestSummaryStatus = {
       applied: false,
@@ -8614,7 +8634,7 @@ if (canvasCopyBtn) {
 if (canvasCopyRefBtn) {
   canvasCopyRefBtn.addEventListener("click", async () => {
     const document = getCanvasDocumentById(getCanvasRenderableDocuments(), activeCanvasDocumentId) || getActiveCanvasDocument();
-    const reference = getCanvasDocumentReference(document);
+    const reference = getCanvasDocumentLabel(document);
     if (!reference) {
       setCanvasStatus("Reference copy is not available.", "warning");
       return;
@@ -9865,8 +9885,8 @@ function setStreaming(active) {
   if (!active) {
     userScrolledUp = false;
     activeAnswerRenderPending = false;
-    canvasRenderState.lastPreviewRenderAt = 0;
-    canvasRenderState.resetDeferred();
+    canvasState.lastPreviewRenderAt = 0;
+    canvasState.resetDeferred();
     clearDeferredCanvasRenderFlushTimer();
     flushDeferredCanvasRenderWork();
   }

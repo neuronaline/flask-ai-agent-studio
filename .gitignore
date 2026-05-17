@@ -47,13 +47,11 @@ sample/
 backup/
 memory/
 list_python_files_markdown.py
-docs
+docs/
 python_files_dump.md
 REFACTOR
 TEST_GOVERNANCE.md
 .kilo/
-scripts/
 logs/
-scripts
 list_files.py
 project_files.md
