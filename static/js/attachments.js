@@ -342,3 +342,309 @@ function buildPendingAttachmentMetadata(imageFiles, documentFiles, youtubeUrl = 
       }
     : null;
 }
+
+// YouTube URL helpers
+function extractYouTubeVideoIdFromUrl(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    const host = url.hostname.toLowerCase();
+    if (host === "youtu.be" || host === "www.youtu.be") {
+      const candidate = url.pathname.replace(/^\//, "").split("/", 1)[0];
+      return /^[A-Za-z0-9_-]{11}$/.test(candidate) ? candidate : "";
+    }
+    if (!["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"].includes(host)) {
+      return "";
+    }
+    if (url.pathname === "/watch") {
+      const candidate = url.searchParams.get("v") || "";
+      return /^[A-Za-z0-9_-]{11}$/.test(candidate) ? candidate : "";
+    }
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts.length >= 2 && ["shorts", "embed", "live"].includes(parts[0])) {
+      return /^[A-Za-z0-9_-]{11}$/.test(parts[1]) ? parts[1] : "";
+    }
+  } catch (_error) {
+    return "";
+  }
+  return "";
+}
+
+function normalizeYouTubeUrlInput(value) {
+  const videoId = extractYouTubeVideoIdFromUrl(value);
+  return videoId ? `https://www.youtube.com/watch?v=${videoId}` : "";
+}
+
+function promptForYouTubeUrl() {
+  const initialValue = attachmentState.selectedYouTubeUrl || "https://www.youtube.com/watch?v=";
+  const nextValue = window.prompt("Paste a YouTube video URL", initialValue);
+  if (nextValue === null) {
+    return;
+  }
+  const normalizedUrl = normalizeYouTubeUrlInput(nextValue);
+  if (!normalizedUrl) {
+    showError("Enter a valid YouTube URL.");
+    return;
+  }
+  attachmentState.selectedYouTubeUrl = normalizedUrl;
+  renderAttachmentPreview();
+}
+
+// Attachment management — selection, preview, badge, vision details
+function clearSelectedImage() {
+  attachmentState.selectedImageFiles = [];
+  imageInputEl.value = "";
+  renderAttachmentPreview();
+}
+
+function clearSelectedDocument() {
+  attachmentState.selectedDocumentFiles = [];
+  selectedDocumentSubmissionModes = new Map();
+  docInputEl.value = "";
+  renderAttachmentPreview();
+}
+
+function removeSelectedAttachment(kind, fileKey) {
+  if (kind === "image") {
+    attachmentState.selectedImageFiles = attachmentState.selectedImageFiles.filter((file) => getAttachmentFileKey(file) !== fileKey);
+  } else if (kind === "document") {
+    attachmentState.selectedDocumentFiles = attachmentState.selectedDocumentFiles.filter((file) => getAttachmentFileKey(file) !== fileKey);
+    selectedDocumentSubmissionModes.delete(String(fileKey || ""));
+  } else if (kind === "video") {
+    attachmentState.selectedYouTubeUrl = "";
+  }
+  syncSelectedDocumentSubmissionModes();
+  renderAttachmentPreview();
+}
+
+function clearAllAttachments() {
+  attachmentState.selectedImageFiles = [];
+  attachmentState.selectedDocumentFiles = [];
+  selectedDocumentSubmissionModes = new Map();
+  attachmentState.selectedYouTubeUrl = "";
+  imageInputEl.value = "";
+  docInputEl.value = "";
+  renderAttachmentPreview();
+}
+
+function describePreferredImageAnalysisMethod() {
+  switch (String(appSettings.image_processing_method || "multimodal").trim().toLowerCase()) {
+    case "multimodal":
+      return "Multimodal (vision-capable models)";
+    case "local_ocr":
+      return "Local OCR (text extraction only)";
+    default:
+      return "Multimodal";
+  }
+}
+
+function renderAttachmentPreview() {
+  const attachments = [
+    ...attachmentState.selectedImageFiles.map((file) => ({ kind: "image", file })),
+    ...attachmentState.selectedDocumentFiles.map((file) => ({ kind: "document", file })),
+    ...(attachmentState.selectedYouTubeUrl ? [{ kind: "video", url: attachmentState.selectedYouTubeUrl }] : []),
+  ];
+
+  if (!attachments.length) {
+    attachmentPreviewEl.hidden = true;
+    attachmentPreviewEl.innerHTML = "";
+    return;
+  }
+
+  attachmentPreviewEl.hidden = false;
+
+  attachmentPreviewEl.innerHTML = attachments.map(({ kind, file, url }) => {
+    const fileKey = kind === "video" ? String(url || "") : getAttachmentFileKey(file);
+    const icon = kind === "image" ? "🖼️" : kind === "video" ? "▶️" : "📄";
+    const preferredImageAnalysis = describePreferredImageAnalysisMethod();
+    const documentSubmissionMode = kind === "document" ? getDocumentSubmissionMode(file) : null;
+    const documentProcessingDescription = documentSubmissionMode === "visual"
+      ? `first ${VISUAL_PDF_PAGE_LIMIT} pages as images`
+      : "text extraction";
+    const description = kind === "image"
+      ? `${preferredImageAnalysis} · ${formatFileSize(file.size)}`
+      : kind === "video"
+        ? "YouTube transcript will be generated locally"
+        : `${((file.name || "").split(".").pop() || "FILE").toUpperCase()} document · ${documentSubmissionMode === "visual" ? "visual analysis" : "text extraction"} · ${documentProcessingDescription} · ${formatFileSize(file.size)}`;
+    const name = kind === "video" ? String(url || "YouTube video") : file.name;
+    const removeLabel = kind === "image" ? "Remove image" : kind === "video" ? "Remove video" : "Remove document";
+    return (
+      `<div class="attachment-chip">` +
+        `<span class="attachment-chip__icon">${icon}</span>` +
+        `<span class="attachment-chip__meta">` +
+          `<strong>${escHtml(name)}</strong>` +
+          `<small>${escHtml(description)}</small>` +
+        `</span>` +
+        `<button type="button" class="attachment-chip__remove" data-kind="${escHtml(kind)}" data-file-key="${escHtml(fileKey)}" title="${removeLabel}">×</button>` +
+      `</div>`
+    );
+  }).join("");
+
+  attachmentPreviewEl.querySelectorAll(".attachment-chip__remove").forEach((button) => {
+    button.addEventListener("click", () => {
+      removeSelectedAttachment(button.dataset.kind, button.dataset.fileKey);
+    });
+  });
+}
+
+function appendAttachmentBadge(group, metadata) {
+  const attachments = getMessageAttachments(metadata);
+  if (!attachments.length) {
+    return;
+  }
+
+  group.querySelectorAll(".message-attachment").forEach((node) => node.remove());
+
+  attachments.forEach((attachment) => {
+    const badge = document.createElement("div");
+    badge.className = "message-attachment";
+    if (attachment.kind === "document") {
+      const fileId = attachment.file_id ? String(attachment.file_id).trim() : "";
+      const fileName = String(attachment.file_name || "Document").trim() || "Document";
+      const submissionMode = String(attachment.submission_mode || "text").trim().toLowerCase();
+      const modeLabel = submissionMode === "visual" ? "visual" : "text";
+      const baseLabel = fileId ? `${fileName} · ${fileId}` : fileName;
+      const label = `${baseLabel} · ${modeLabel}`;
+      badge.innerHTML =
+        `<span class="message-attachment__icon">📄</span>` +
+        `<span class="message-attachment__name">${escHtml(label)}</span>` +
+        `<span class="message-attachment__state">Document uploaded · Canvas</span>`;
+      group.appendChild(badge);
+      return;
+    }
+
+    if (attachment.kind === "video") {
+      const videoTitle = String(attachment.video_title || "YouTube video").trim() || "YouTube video";
+      const transcriptReady = Boolean(String(attachment.transcript_context_block || "").trim());
+      const stateLabel = transcriptReady ? "Transcript ready" : "Video linked";
+      badge.innerHTML =
+        `<span class="message-attachment__icon">▶️</span>` +
+        `<span class="message-attachment__name">${escHtml(videoTitle)}</span>` +
+        `<span class="message-attachment__state">${escHtml(stateLabel)}</span>`;
+      group.appendChild(badge);
+      return;
+    }
+
+    const imageName = String(attachment.image_name || "Image").trim() || "Image";
+    const summary = String(attachment.vision_summary || "").trim();
+    const ocrText = String(attachment.ocr_text || "").trim();
+    const keyPoints = Array.isArray(attachment.key_points) ? attachment.key_points.filter(Boolean) : [];
+    const hasVisualRead = Boolean((summary && summary !== "Readable text was detected in the image and added to the context.") || keyPoints.length);
+    const stateLabel = hasVisualRead ? "Visual context ready" : (ocrText ? "Text extracted" : "Image attached");
+    badge.innerHTML =
+      `<span class="message-attachment__icon">🖼️</span>` +
+      `<span class="message-attachment__name">${escHtml(imageName)}</span>` +
+      `<span class="message-attachment__state">${escHtml(stateLabel)}</span>`;
+    group.appendChild(badge);
+  });
+}
+
+function updateAttachmentBadge(group, metadata) {
+  appendAttachmentBadge(group, metadata);
+}
+
+function isGenericOcrVisionSummary(summary) {
+  return String(summary || "").trim() === "Readable text was detected in the image and added to the context.";
+}
+
+function formatImageAnalysisMethod(method) {
+  switch (String(method || "").trim().toLowerCase()) {
+    case "multimodal":
+      return "Multimodal";
+    case "local_ocr":
+      return "OCR";
+    default:
+      return "";
+  }
+}
+
+function buildVisionNoteHtml(metadata) {
+  const imageAttachments = getMessageAttachments(metadata).filter((attachment) => attachment.kind === "image");
+  if (!imageAttachments.length) {
+    return "";
+  }
+
+  const hasVisionContent = imageAttachments.some((attachment) => {
+    const summary = String(attachment.vision_summary || "").trim();
+    const ocrText = String(attachment.ocr_text || "").trim();
+    const keyPoints = Array.isArray(attachment.key_points) ? attachment.key_points.filter(Boolean) : [];
+    return Boolean(summary || ocrText || keyPoints.length);
+  });
+  if (!hasVisionContent) {
+    return "";
+  }
+
+  return imageAttachments.map((attachment, index) => {
+    const summary = String(attachment.vision_summary || "").trim();
+    const visibleSummary = isGenericOcrVisionSummary(summary) ? "" : summary;
+    const keyPoints = Array.isArray(attachment.key_points) ? attachment.key_points.filter(Boolean) : [];
+    const ocrText = String(attachment.ocr_text || "").trim();
+    const imageName = String(attachment.image_name || `Image ${index + 1}`).trim() || `Image ${index + 1}`;
+    const methodLabel = formatImageAnalysisMethod(attachment.analysis_method);
+    const eyebrow = visibleSummary || keyPoints.length ? "Visual read" : "Text read";
+    const parts = [];
+
+    parts.push(
+      `<div class="message-vision-note__header">` +
+        `<div class="message-vision-note__heading">` +
+          `<span class="message-vision-note__eyebrow">${escHtml(eyebrow)}</span>` +
+          `<strong class="message-vision-note__title">${escHtml(imageName)}</strong>` +
+        `</div>` +
+        (methodLabel ? `<span class="message-vision-note__method">${escHtml(methodLabel)}</span>` : "") +
+      `</div>`
+    );
+    if (visibleSummary) {
+      parts.push(`<p class="message-vision-note__summary">${escHtml(visibleSummary)}</p>`);
+    }
+    if (keyPoints.length) {
+      parts.push(
+        `<div class="message-vision-note__section">` +
+          `<span class="message-vision-note__label">Highlights</span>` +
+          `<ul class="message-vision-note__list">` +
+            keyPoints.slice(0, 5).map((point) => `<li>${escHtml(String(point))}</li>`).join("") +
+          `</ul>` +
+        `</div>`
+      );
+    }
+    if (ocrText) {
+      parts.push(
+        `<div class="message-vision-note__section">` +
+          `<span class="message-vision-note__label">Detected text</span>` +
+          `<div class="message-vision-note__ocr">${escHtml(ocrText.slice(0, 320))}${ocrText.length > 320 ? "…" : ""}</div>` +
+        `</div>`
+      );
+    }
+
+    return `<section class="message-vision-note__item" data-index="${index}">${parts.join("")}</section>`;
+  }).join("");
+}
+
+function appendVisionDetails(group, metadata) {
+  const noteHtml = buildVisionNoteHtml(metadata);
+  if (!noteHtml) {
+    return;
+  }
+
+  const note = document.createElement("div");
+  note.className = "message-vision-note";
+  note.innerHTML = noteHtml;
+  group.appendChild(note);
+}
+
+function updateVisionDetails(group, metadata) {
+  const existing = group.querySelector(".message-vision-note");
+  const noteHtml = buildVisionNoteHtml(metadata);
+
+  if (!noteHtml) {
+    if (existing) {
+      existing.remove();
+    }
+    return;
+  }
+
+  if (existing) {
+    existing.innerHTML = noteHtml;
+    return;
+  }
+
+  appendVisionDetails(group, metadata);
+}

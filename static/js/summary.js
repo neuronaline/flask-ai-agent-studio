@@ -241,3 +241,182 @@ function applyConversationMemoryState(data) {
 function applyConversationParameterOverridesState(data) {
   chatState.currentConversationParameterOverrides = data?.conversation?.parameter_overrides || null;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Summary helpers (extracted from app.js)                             */
+/* ------------------------------------------------------------------ */
+
+function shouldGenerateConversationTitle() {
+  const visibleEntries = getVisibleHistoryEntries();
+  return Boolean(
+    chatState.currentConvId &&
+    visibleEntries.length === 2 &&
+    visibleEntries[0]?.role === "user" &&
+    visibleEntries[1]?.role === "assistant" &&
+    !getPendingClarification(visibleEntries[1]?.metadata),
+  );
+}
+
+function getSummarySkipLastValue() {
+  const rawValue = Number.parseInt(String(appSettings.summary_skip_last || "0"), 10);
+  return Number.isFinite(rawValue) ? Math.max(0, rawValue) : 0;
+}
+
+function getSummaryTriggerValue() {
+  const rawValue = parseInt(appSettings.chat_summary_trigger_token_count || 80000, 10);
+  return Number.isFinite(rawValue) ? rawValue : 80000;
+}
+
+function getEffectiveSummaryTriggerValue() {
+  const baseTrigger = getSummaryTriggerValue();
+  const mode = getSummaryModeValue();
+  if (mode === "aggressive") {
+    return Math.max(1000, Math.floor(baseTrigger / 2));
+  }
+  if (mode === "conservative") {
+    return Math.min(200000, Math.max(1000, Math.ceil(baseTrigger * 1.5)));
+  }
+  return baseTrigger;
+}
+
+function estimateSummaryTriggerTokens(entries = chatState.history) {
+  return (entries || []).reduce((total, entry) => {
+    const role = String(entry?.role || "").trim();
+    if (!role) {
+      return total;
+    }
+    const metadata = entry?.metadata && typeof entry.metadata === "object" ? entry.metadata : null;
+    if (role === "assistant" && Array.isArray(entry?.tool_calls) && entry.tool_calls.length > 0) {
+      return total;
+    }
+    if (!["user", "assistant", "tool", "summary"].includes(role)) {
+      return total;
+    }
+    return total + estimateLocalTokens(entry.content);
+  }, 0);
+}
+
+function formatSummaryTimestamp(value) {
+  const timestamp = String(value || "").trim();
+  if (!timestamp) {
+    return "—";
+  }
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return timestamp;
+  }
+  return date.toLocaleString();
+}
+
+function describeSummaryFailure(status) {
+  const reason = String(status?.reason || "").trim();
+  const stage = String(status?.failure_stage || "").trim();
+  const detail = String(status?.failure_detail || "").trim();
+
+  if (reason === "mode_never") {
+    return "Auto summary is disabled by settings.";
+  }
+  if (reason === "below_threshold") {
+    const tokenGap = Number(status?.token_gap || 0);
+    return tokenGap > 0
+      ? `Below threshold by ${fmt(tokenGap)} counted tokens.`
+      : "Still below the summary trigger threshold.";
+  }
+  if (reason === "no_source_messages") {
+    return "There are no older unsummarized user or assistant messages left to compress.";
+  }
+  if (reason === "no_prompt_messages") {
+    return "Candidate messages existed, but all of them were empty or invalid after prompt sanitization.";
+  }
+  if (reason === "locked") {
+    return "Another summary pass was already running, so this turn skipped a duplicate summary attempt.";
+  }
+  if (reason !== "summary_generation_failed") {
+    return detail || "Waiting for the next completed assistant turn to evaluate summary conditions.";
+  }
+
+  if (stage === "context_too_large") {
+    return "The provider rejected the summary request because the summary prompt itself exceeded the model context limit.";
+  }
+  if (stage === "invalid_message_sequence") {
+    return "The provider rejected the summary prompt because the message sequence was invalid.";
+  }
+  if (stage === "tool_call_unexpected") {
+    return "The model attempted a tool-style response during summary generation, so the result was rejected for safety.";
+  }
+  if (stage === "empty_output") {
+    return "The provider returned no assistant summary content.";
+  }
+  if (stage === "too_short") {
+    return "The provider returned a summary that was too short to keep as reliable compressed context.";
+  }
+  if (stage === "provider_error") {
+    return "The provider returned an error while generating the summary.";
+  }
+  return detail || "The summary attempt failed validation, so no messages were compressed.";
+}
+
+/* ------------------------------------------------------------------ */
+/*  undoConversationSummary — extracted from app.js                    */
+/* ------------------------------------------------------------------ */
+
+async function undoConversationSummary(summaryId, { triggerButton = null } = {}) {
+  const normalizedSummaryId = Number(summaryId || 0);
+  if (!chatState.currentConvId || !normalizedSummaryId) {
+    showToast("No summary is available to undo.", "warning");
+    return;
+  }
+
+  const originalButtonText = triggerButton ? triggerButton.textContent : "";
+  setSummaryBusyState(true);
+  startSummaryProgress("Restoring summary…");
+  if (triggerButton) {
+    triggerButton.disabled = true;
+    triggerButton.textContent = "Restoring…";
+  }
+
+  try {
+    const response = await fetch(`/api/conversations/${chatState.currentConvId}/summaries/${normalizedSummaryId}/undo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to undo summary.");
+    }
+
+    if (Array.isArray(data.messages)) {
+      chatState.history = data.messages.map(normalizeHistoryEntry);
+      rebuildTokenStatsFromHistory();
+      renderConversationHistory();
+    }
+    resetSummaryPreview();
+
+    summaryState.latestSummaryStatus = {
+      applied: false,
+      reason: "summary_undone",
+      failure_stage: null,
+      failure_detail: "The selected summary was reverted and the covered messages were restored.",
+    };
+    const restoredCount = Number(data.restored_message_count || 0);
+    finishSummaryProgress(
+      restoredCount > 0
+        ? `${restoredCount} message${restoredCount === 1 ? " was" : "s were"} restored.`
+        : "Summary was undone."
+    );
+    showToast(
+      restoredCount > 0
+        ? `${restoredCount} message${restoredCount === 1 ? " was" : "s were"} restored.`
+        : "Summary was undone.",
+      "success"
+    );
+  } catch (error) {
+    failSummaryProgress(error.message || "Failed to undo summary.");
+    showToast(error.message || "Failed to undo summary.", "error");
+  } finally {
+    setSummaryBusyState(false);
+    if (triggerButton) {
+      triggerButton.textContent = originalButtonText || "Undo";
+    }
+  }
+}
