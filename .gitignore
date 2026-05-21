@@ -55,3 +55,4 @@ TEST_GOVERNANCE.md
 logs/
 list_files.py
 project_files.md
+.cache/

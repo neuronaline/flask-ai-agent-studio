@@ -136,8 +136,9 @@ from utils.token_utils import estimate_text_tokens
 from web.web_tools import (
     fetch_url_tool,
     grep_fetched_content_tool,
-    search_news_ddgs_tool,
+    search_news_tool,
     search_news_google_tool,
+    search_scholar_tool,
     search_web_tool,
     scroll_fetched_content_tool,
 )
@@ -201,8 +202,9 @@ _VALID_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 TOOL_ARGUMENT_LANGUAGE_LABELS = {"json", "javascript", "js", "python", "py"}
 SEARCH_QUERY_BATCHED_TOOL_NAMES = {
     "search_web",
-    "search_news_ddgs",
+    "search_news",
     "search_news_google",
+    "search_scholar",
 }
 SEARCH_QUERY_ARGUMENT_ALIASES = (
     "queries",
@@ -812,7 +814,7 @@ def _build_recovery_hint_for_tool(tool_name: str, tool_args: dict | None = None)
                 "grep_fetched_content."
             )
         return "Need more than the summary? Call fetch_url, then use scroll_fetched_content or grep_fetched_content."
-    if normalized_tool_name in {"search_web", "search_news_ddgs", "search_news_google"}:
+    if normalized_tool_name in {"search_web", "search_news", "search_news_google", "search_scholar"}:
         return "If exact wording is needed, fetch a specific returned URL or rerun the search with a narrower query."
     if normalized_tool_name == "search_knowledge_base":
         return "Repeat search_knowledge_base with the same query if you need the exact retrieved excerpts again."
@@ -1092,7 +1094,7 @@ def _extract_compaction_tool_call_preview(tool_call: dict) -> str:
     parsed_arguments = _parse_json_like_value(raw_arguments)
     arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
 
-    if tool_name in {"search_web", "search_news_ddgs", "search_news_google"}:
+    if tool_name in {"search_web", "search_news", "search_news_google"}:
         queries = _get_search_tool_queries(arguments)
         if isinstance(queries, list):
             preview = ", ".join(str(item).strip() for item in queries if str(item).strip())
@@ -3870,15 +3872,15 @@ def _run_search_web(tool_args: dict, runtime_state: dict):
     return result, f"{ok_count} web results found"
 
 
-def _run_search_news_ddgs(tool_args: dict, runtime_state: dict):
+def _run_search_news(tool_args: dict, runtime_state: dict):
     del runtime_state
     query_limit = get_search_tool_query_limit(get_app_settings())
     query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args), batch_size=query_limit))
     if not query_batches:
-        return [], "search_news_ddgs skipped: no queries provided"
+        return [], "search_news skipped: no queries provided"
     result = _merge_batched_search_results(
         [
-            search_news_ddgs_tool(
+            search_news_tool(
                 batch,
                 lang=tool_args.get("lang", "tr"),
                 when=tool_args.get("when"),
@@ -3908,6 +3910,28 @@ def _run_search_news_google(tool_args: dict, runtime_state: dict):
     )
     ok_count = sum(1 for row in result if "error" not in row)
     return result, f"{ok_count} news articles found"
+
+
+def _run_search_scholar(tool_args: dict, runtime_state: dict):
+    del runtime_state
+    query_limit = get_search_tool_query_limit(get_app_settings())
+    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args), batch_size=query_limit))
+    if not query_batches:
+        return [], "search_scholar skipped: no queries provided"
+    result = _merge_batched_search_results(
+        [
+            search_scholar_tool(
+                batch,
+                lang=tool_args.get("lang", "en"),
+                year_from=tool_args.get("year_from"),
+                year_to=tool_args.get("year_to"),
+                sort_by=tool_args.get("sort_by", "relevance"),
+            )
+            for batch in query_batches
+        ]
+    )
+    ok_count = sum(1 for row in result if "error" not in row)
+    return result, f"{ok_count} scholar results found"
 
 
 def _run_fetch_url(tool_args: dict, runtime_state: dict):
@@ -4239,8 +4263,9 @@ _TOOL_EXECUTORS = {
     "search_knowledge_base": _run_search_knowledge_base,
     "expand_truncated_tool_result": _run_expand_truncated_tool_result,
     "search_web": _run_search_web,
-    "search_news_ddgs": _run_search_news_ddgs,
+    "search_news": _run_search_news,
     "search_news_google": _run_search_news_google,
+    "search_scholar": _run_search_scholar,
     "fetch_url": _run_fetch_url,
     "fetch_url_summarized": _run_fetch_url_summarized,
     "scroll_fetched_content": _run_scroll_fetched_content,
@@ -4618,7 +4643,7 @@ def collect_agent_response(
 def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
     tool_name = _normalize_tool_name(tool_name)
     tool_args = tool_args if isinstance(tool_args, dict) else {}
-    if tool_name in {"search_web", "search_news_ddgs", "search_news_google"}:
+    if tool_name in {"search_web", "search_news", "search_news_google", "search_scholar"}:
         values = _get_search_tool_queries(tool_args)
         if isinstance(values, list):
             return ", ".join(str(value).strip() for value in values if str(value).strip())[:300]
@@ -4795,8 +4820,10 @@ def _build_tool_result_storage_entry(
         text = "\n\n".join(parts)
     elif tool_name == "search_web" and isinstance(result, list):
         text = _format_list_tool_result(result, "Web results", link_key="url")
-    elif tool_name in {"search_news_ddgs", "search_news_google"} and isinstance(result, list):
+    elif tool_name in {"search_news", "search_news_google"} and isinstance(result, list):
         text = _format_list_tool_result(result, "News results", link_key="link", extra_keys=("time", "source"))
+    elif tool_name == "search_scholar" and isinstance(result, list):
+        text = _format_list_tool_result(result, "Scholar results", link_key="url", extra_keys=("authors", "year", "venue", "citations"))
 
     text = _clean_tool_text(text, limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
     if not text:

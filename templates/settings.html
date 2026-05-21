@@ -928,7 +928,7 @@
                   <input type="number" class="settings-number" id="max-parallel-tools-input" min="1" max="12" value="4" />
                   <label class="settings-label" for="search-tool-query-limit-input">Search queries per call (1-20)</label>
                   <input type="number" class="settings-number" id="search-tool-query-limit-input" min="1" max="20" value="5" />
-                  <p class="settings-copy">Applies to <code>search_web</code>, <code>search_news_ddgs</code>, and <code>search_news_google</code>. The assistant sees this cap in its tool guidance and splits broader search plans automatically.</p>
+                  <p class="settings-copy">Applies to <code>search_web</code>, <code>search_news_ddgs</code>, <code>search_news_google</code>, and <code>search_scholar</code>. The assistant sees this cap in its tool guidance and splits broader search plans automatically.</p>
                 </section>
 
                 <section class="settings-subsection">
@@ -974,15 +974,6 @@
                         <h4 class="settings-subsection__title">How much page text reaches the summary model</h4>
                       </div>
                       <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
-                        <div>
-                          <label class="settings-label" for="fetch-html-converter-mode-select">HTML converter mode</label>
-                          <select id="fetch-html-converter-mode-select" class="settings-select">
-                            <option value="hybrid">Hybrid (external + fallback)</option>
-                            <option value="external">External preferred</option>
-                            <option value="internal">Internal only</option>
-                          </select>
-                          <p class="settings-copy">Hybrid mode first tries the external HTML-to-Markdown converter and automatically falls back to the built-in renderer when needed.</p>
-                        </div>
                         <div>
                           <label class="settings-label" for="fetch-summarize-max-input-chars-input">Summary source max chars (4000-100000)</label>
                           <input type="number" class="settings-number" id="fetch-summarize-max-input-chars-input" min="4000" max="100000" value="80000" />

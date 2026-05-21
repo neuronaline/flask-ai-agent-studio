@@ -28,7 +28,17 @@ from core.config import (
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
     SCRATCHPAD_SECTION_SETTING_KEYS,
-WEB_CACHE_TTL_HOURS_MIN,
+    SUB_AGENT_MAX_STEPS_MAX,
+    SUB_AGENT_MAX_STEPS_MIN,
+    SUB_AGENT_MAX_PARALLEL_TOOLS_MAX,
+    SUB_AGENT_MAX_PARALLEL_TOOLS_MIN,
+    SUB_AGENT_RETRY_ATTEMPTS_MAX,
+    SUB_AGENT_RETRY_ATTEMPTS_MIN,
+    SUB_AGENT_RETRY_DELAY_SECONDS_MAX,
+    SUB_AGENT_RETRY_DELAY_SECONDS_MIN,
+    SUB_AGENT_TIMEOUT_SECONDS_MAX,
+    SUB_AGENT_TIMEOUT_SECONDS_MIN,
+    WEB_CACHE_TTL_HOURS_MIN,
     get_feature_flags,
 )
 from routes.auth import is_login_pin_enabled
@@ -111,6 +121,14 @@ from core.db import (
     get_persona,
     get_web_cache_ttl_hours,
     get_youtube_transcripts_enabled,
+    get_sub_agent_max_steps,
+    get_sub_agent_timeout_seconds,
+    get_sub_agent_retry_attempts,
+    get_sub_agent_retry_delay_seconds,
+    get_sub_agent_max_parallel_tools,
+    get_sub_agent_canvas_auto_save,
+    get_sub_agent_canvas_auto_open,
+    get_sub_agent_allowed_tool_names,
     list_personas,
     normalize_active_tool_names,
     normalize_rag_source_types,
@@ -167,8 +185,9 @@ TOOL_PERMISSION_LABELS = {
     "fetch_url_summarized": "Summarize URL",
     "scroll_fetched_content": "Scroll fetched page content",
     "grep_fetched_content": "Search fetched page content",
-    "search_news_ddgs": "News search — DDGS",
+    "search_news": "News search",
     "search_news_google": "News search — Google",
+    "search_scholar": "Academic search — Google Scholar",
     "create_canvas_document": "Create canvas document",
     "search_canvas_document": "Search canvas document",
     "batch_canvas_edits": "Batch canvas edits",
@@ -192,8 +211,9 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "fetch_url_summarized": "Fetch a page and return only a focused AI summary.",
     "scroll_fetched_content": "Read another window from a previously fetched page without importing it into Canvas.",
     "grep_fetched_content": "Search for a keyword or pattern inside a previously fetched page.",
-    "search_news_ddgs": "Search recent news articles via DuckDuckGo News.",
+    "search_news": "Search recent news articles via Google News.",
     "search_news_google": "Search recent news articles via Google News RSS.",
+    "search_scholar": "Search academic papers via Google Scholar with citation counts and metadata.",
     "create_canvas_document": "Create a new editable canvas document or code artifact.",
     "search_canvas_document": "Search for text or patterns inside canvas documents.",
     "batch_canvas_edits": "Apply several non-overlapping line edits to a canvas document in one call.",
@@ -271,8 +291,9 @@ def _get_tool_permission_section_key(name: str) -> str:
         "fetch_url_summarized",
         "scroll_fetched_content",
         "grep_fetched_content",
-        "search_news_ddgs",
+        "search_news",
         "search_news_google",
+        "search_scholar",
     }:
         return "research"
     if name in {
@@ -530,6 +551,20 @@ def _build_fetch_section(raw: dict) -> dict:
     }
 
 
+def _build_sub_agent_section(raw: dict) -> dict:
+    """Build sub-agent-related fields for settings payload."""
+    return {
+        "sub_agent_max_steps": get_sub_agent_max_steps(raw),
+        "sub_agent_timeout_seconds": get_sub_agent_timeout_seconds(raw),
+        "sub_agent_retry_attempts": get_sub_agent_retry_attempts(raw),
+        "sub_agent_retry_delay_seconds": get_sub_agent_retry_delay_seconds(raw),
+        "sub_agent_max_parallel_tools": get_sub_agent_max_parallel_tools(raw),
+        "sub_agent_canvas_auto_save": get_sub_agent_canvas_auto_save(raw),
+        "sub_agent_canvas_auto_open": get_sub_agent_canvas_auto_open(raw),
+        "sub_agent_allowed_tool_names": get_sub_agent_allowed_tool_names(raw),
+    }
+
+
 def build_settings_payload() -> dict:
     raw = get_app_settings()
     return {
@@ -541,6 +576,7 @@ def build_settings_payload() -> dict:
         **_build_auth_section(raw),
         **_build_conversation_section(raw),
         **_build_fetch_section(raw),
+        **_build_sub_agent_section(raw),
         "features": get_feature_flags(raw),
         "tool_catalog": build_tool_catalog(),
         "activity_enabled": _coerce_bool_setting(raw.get("activity_enabled"), default=True),
@@ -605,6 +641,7 @@ def register_page_routes(app) -> None:
             "settings.html",
             settings=settings,
             tool_sections=build_tool_permission_sections(),
+            sub_agent_tool_sections=build_tool_permission_sections(),
             auth_enabled=is_login_pin_enabled(),
             page_lang=_resolve_page_lang(),
             settings_js_version=_static_asset_version(app, "settings.js"),
@@ -800,6 +837,14 @@ def register_page_routes(app) -> None:
         fetch_summary_max_chars_raw = data.get("fetch_summary_max_chars")
         scratchpad = data.get("scratchpad")
         scratchpad_sections_raw = data.get("scratchpad_sections")
+        sub_agent_max_steps_raw = data.get("sub_agent_max_steps")
+        sub_agent_timeout_seconds_raw = data.get("sub_agent_timeout_seconds")
+        sub_agent_retry_attempts_raw = data.get("sub_agent_retry_attempts")
+        sub_agent_retry_delay_seconds_raw = data.get("sub_agent_retry_delay_seconds")
+        sub_agent_max_parallel_tools_raw = data.get("sub_agent_max_parallel_tools")
+        sub_agent_canvas_auto_save_raw = data.get("sub_agent_canvas_auto_save")
+        sub_agent_canvas_auto_open_raw = data.get("sub_agent_canvas_auto_open")
+        sub_agent_allowed_tool_names_raw = data.get("sub_agent_allowed_tool_names")
 
         provided_setting_values = (
             user_preferences,
@@ -884,6 +929,14 @@ def register_page_routes(app) -> None:
             rag_query_expansion_max_variants_raw,
             fetch_raw_max_text_chars_raw,
             fetch_summary_max_chars_raw,
+            sub_agent_max_steps_raw,
+            sub_agent_timeout_seconds_raw,
+            sub_agent_retry_attempts_raw,
+            sub_agent_retry_delay_seconds_raw,
+            sub_agent_max_parallel_tools_raw,
+            sub_agent_canvas_auto_save_raw,
+            sub_agent_canvas_auto_open_raw,
+            sub_agent_allowed_tool_names_raw,
         )
 
         if not any(value is not None for value in provided_setting_values):
@@ -1725,6 +1778,81 @@ def register_page_routes(app) -> None:
             if normalized_ttl not in {"5m", "1h"}:
                 return jsonify({"error": "openrouter_anthropic_cache_ttl must be '5m' or '1h'."}), 400
             settings["openrouter_anthropic_cache_ttl"] = normalized_ttl
+
+        if sub_agent_max_steps_raw is not None:
+            try:
+                sub_agent_max_steps = int(sub_agent_max_steps_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_max_steps must be an integer."}), 400
+            if not (SUB_AGENT_MAX_STEPS_MIN <= sub_agent_max_steps <= SUB_AGENT_MAX_STEPS_MAX):
+                return jsonify(
+                    {"error": f"sub_agent_max_steps must be between {SUB_AGENT_MAX_STEPS_MIN} and {SUB_AGENT_MAX_STEPS_MAX}."}
+                ), 400
+            settings["sub_agent_max_steps"] = str(sub_agent_max_steps)
+
+        if sub_agent_timeout_seconds_raw is not None:
+            try:
+                sub_agent_timeout_seconds = int(sub_agent_timeout_seconds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_timeout_seconds must be an integer."}), 400
+            if not (SUB_AGENT_TIMEOUT_SECONDS_MIN <= sub_agent_timeout_seconds <= SUB_AGENT_TIMEOUT_SECONDS_MAX):
+                return jsonify(
+                    {"error": f"sub_agent_timeout_seconds must be between {SUB_AGENT_TIMEOUT_SECONDS_MIN} and {SUB_AGENT_TIMEOUT_SECONDS_MAX}."}
+                ), 400
+            settings["sub_agent_timeout_seconds"] = str(sub_agent_timeout_seconds)
+
+        if sub_agent_retry_attempts_raw is not None:
+            try:
+                sub_agent_retry_attempts = int(sub_agent_retry_attempts_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_retry_attempts must be an integer."}), 400
+            if not (SUB_AGENT_RETRY_ATTEMPTS_MIN <= sub_agent_retry_attempts <= SUB_AGENT_RETRY_ATTEMPTS_MAX):
+                return jsonify(
+                    {"error": f"sub_agent_retry_attempts must be between {SUB_AGENT_RETRY_ATTEMPTS_MIN} and {SUB_AGENT_RETRY_ATTEMPTS_MAX}."}
+                ), 400
+            settings["sub_agent_retry_attempts"] = str(sub_agent_retry_attempts)
+
+        if sub_agent_retry_delay_seconds_raw is not None:
+            try:
+                sub_agent_retry_delay_seconds = int(sub_agent_retry_delay_seconds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_retry_delay_seconds must be an integer."}), 400
+            if not (SUB_AGENT_RETRY_DELAY_SECONDS_MIN <= sub_agent_retry_delay_seconds <= SUB_AGENT_RETRY_DELAY_SECONDS_MAX):
+                return jsonify(
+                    {"error": f"sub_agent_retry_delay_seconds must be between {SUB_AGENT_RETRY_DELAY_SECONDS_MIN} and {SUB_AGENT_RETRY_DELAY_SECONDS_MAX}."}
+                ), 400
+            settings["sub_agent_retry_delay_seconds"] = str(sub_agent_retry_delay_seconds)
+
+        if sub_agent_max_parallel_tools_raw is not None:
+            try:
+                sub_agent_max_parallel_tools = int(sub_agent_max_parallel_tools_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_max_parallel_tools must be an integer."}), 400
+            if not (SUB_AGENT_MAX_PARALLEL_TOOLS_MIN <= sub_agent_max_parallel_tools <= SUB_AGENT_MAX_PARALLEL_TOOLS_MAX):
+                return jsonify(
+                    {"error": f"sub_agent_max_parallel_tools must be between {SUB_AGENT_MAX_PARALLEL_TOOLS_MIN} and {SUB_AGENT_MAX_PARALLEL_TOOLS_MAX}."}
+                ), 400
+            settings["sub_agent_max_parallel_tools"] = str(sub_agent_max_parallel_tools)
+
+        if sub_agent_canvas_auto_save_raw is not None:
+            if isinstance(sub_agent_canvas_auto_save_raw, bool):
+                settings["sub_agent_canvas_auto_save"] = "true" if sub_agent_canvas_auto_save_raw else "false"
+            else:
+                normalized_val = str(sub_agent_canvas_auto_save_raw).strip().lower()
+                settings["sub_agent_canvas_auto_save"] = "true" if normalized_val in {"1", "true", "yes", "on"} else "false"
+
+        if sub_agent_canvas_auto_open_raw is not None:
+            if isinstance(sub_agent_canvas_auto_open_raw, bool):
+                settings["sub_agent_canvas_auto_open"] = "true" if sub_agent_canvas_auto_open_raw else "false"
+            else:
+                normalized_val = str(sub_agent_canvas_auto_open_raw).strip().lower()
+                settings["sub_agent_canvas_auto_open"] = "true" if normalized_val in {"1", "true", "yes", "on"} else "false"
+
+        if sub_agent_allowed_tool_names_raw is not None:
+            if not isinstance(sub_agent_allowed_tool_names_raw, list):
+                return jsonify({"error": "sub_agent_allowed_tool_names must be an array."}), 400
+            normalized_tool_names = normalize_active_tool_names(sub_agent_allowed_tool_names_raw)
+            settings["sub_agent_allowed_tool_names"] = json.dumps(normalized_tool_names, ensure_ascii=False)
 
         save_app_settings(settings)
         return jsonify(build_settings_payload())

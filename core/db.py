@@ -97,6 +97,21 @@ from core.config import (
     SUMMARY_SOURCE_TARGET_TOKENS,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
+    DEFAULT_SUB_AGENT_MAX_STEPS,
+    DEFAULT_SUB_AGENT_TIMEOUT_SECONDS,
+    DEFAULT_SUB_AGENT_RETRY_ATTEMPTS,
+    DEFAULT_SUB_AGENT_RETRY_DELAY_SECONDS,
+    DEFAULT_SUB_AGENT_MAX_PARALLEL_TOOLS,
+    SUB_AGENT_MAX_STEPS_MIN,
+    SUB_AGENT_MAX_STEPS_MAX,
+    SUB_AGENT_TIMEOUT_SECONDS_MIN,
+    SUB_AGENT_TIMEOUT_SECONDS_MAX,
+    SUB_AGENT_RETRY_ATTEMPTS_MIN,
+    SUB_AGENT_RETRY_ATTEMPTS_MAX,
+    SUB_AGENT_RETRY_DELAY_SECONDS_MIN,
+    SUB_AGENT_RETRY_DELAY_SECONDS_MAX,
+    SUB_AGENT_MAX_PARALLEL_TOOLS_MIN,
+    SUB_AGENT_MAX_PARALLEL_TOOLS_MAX,
     IMAGE_UPLOADS_ENABLED,
     WEB_CACHE_TTL_HOURS_MAX,
     WEB_CACHE_TTL_HOURS_MIN,
@@ -5296,6 +5311,85 @@ def get_max_parallel_tools(settings: dict | None = None) -> int:
     except (TypeError, ValueError):
         value = DEFAULT_MAX_PARALLEL_TOOLS
     return max(MAX_PARALLEL_TOOLS_MIN, min(MAX_PARALLEL_TOOLS_MAX, value))
+
+
+def get_sub_agent_max_steps(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("sub_agent_max_steps", DEFAULT_SETTINGS["sub_agent_max_steps"])
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = DEFAULT_SUB_AGENT_MAX_STEPS
+    return max(SUB_AGENT_MAX_STEPS_MIN, min(SUB_AGENT_MAX_STEPS_MAX, value))
+
+
+def get_sub_agent_timeout_seconds(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("sub_agent_timeout_seconds", DEFAULT_SETTINGS["sub_agent_timeout_seconds"])
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = DEFAULT_SUB_AGENT_TIMEOUT_SECONDS
+    return max(SUB_AGENT_TIMEOUT_SECONDS_MIN, min(SUB_AGENT_TIMEOUT_SECONDS_MAX, value))
+
+
+def get_sub_agent_retry_attempts(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("sub_agent_retry_attempts", DEFAULT_SETTINGS["sub_agent_retry_attempts"])
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = DEFAULT_SUB_AGENT_RETRY_ATTEMPTS
+    return max(SUB_AGENT_RETRY_ATTEMPTS_MIN, min(SUB_AGENT_RETRY_ATTEMPTS_MAX, value))
+
+
+def get_sub_agent_retry_delay_seconds(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("sub_agent_retry_delay_seconds", DEFAULT_SETTINGS["sub_agent_retry_delay_seconds"])
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = DEFAULT_SUB_AGENT_RETRY_DELAY_SECONDS
+    return max(SUB_AGENT_RETRY_DELAY_SECONDS_MIN, min(SUB_AGENT_RETRY_DELAY_SECONDS_MAX, value))
+
+
+def get_sub_agent_max_parallel_tools(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("sub_agent_max_parallel_tools", DEFAULT_SETTINGS["sub_agent_max_parallel_tools"])
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = DEFAULT_SUB_AGENT_MAX_PARALLEL_TOOLS
+    return max(SUB_AGENT_MAX_PARALLEL_TOOLS_MIN, min(SUB_AGENT_MAX_PARALLEL_TOOLS_MAX, value))
+
+
+def get_sub_agent_canvas_auto_save(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("sub_agent_canvas_auto_save", DEFAULT_SETTINGS["sub_agent_canvas_auto_save"])
+    if isinstance(raw_value, bool):
+        return raw_value
+    return str(raw_value).strip().lower() not in {"false", "0", "off", "no"}
+
+
+def get_sub_agent_canvas_auto_open(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("sub_agent_canvas_auto_open", DEFAULT_SETTINGS["sub_agent_canvas_auto_open"])
+    if isinstance(raw_value, bool):
+        return raw_value
+    return str(raw_value).strip().lower() not in {"false", "0", "off", "no"}
+
+
+def get_sub_agent_allowed_tool_names(settings: dict | None = None) -> list[str]:
+    source = settings if settings is not None else get_app_settings()
+    raw_value = source.get("sub_agent_allowed_tool_names", DEFAULT_SETTINGS["sub_agent_allowed_tool_names"])
+    if isinstance(raw_value, list):
+        return raw_value
+    if isinstance(raw_value, str):
+        try:
+            return json.loads(raw_value)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []
 
 
 def _get_int_setting_value(

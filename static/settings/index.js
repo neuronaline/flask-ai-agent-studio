@@ -334,7 +334,6 @@
     appSettings.reasoning_auto_collapse = Boolean(data.reasoning_auto_collapse);
     appSettings.fetch_url_token_threshold = data.fetch_url_token_threshold || 3500;
     appSettings.fetch_url_clip_aggressiveness = data.fetch_url_clip_aggressiveness ?? 50;
-    appSettings.fetch_html_converter_mode = data.fetch_html_converter_mode || "hybrid";
     appSettings.fetch_url_summarized_max_input_chars = data.fetch_url_summarized_max_input_chars || 80000;
     appSettings.fetch_url_summarized_max_output_tokens = data.fetch_url_summarized_max_output_tokens || 2400;
     appSettings.canvas_prompt_max_lines = data.canvas_prompt_max_lines || 250;

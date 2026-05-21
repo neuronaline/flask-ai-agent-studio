@@ -182,6 +182,24 @@ OCR_SUPPORTED_PROVIDERS = ["paddleocr"]
 MAX_PARALLEL_TOOLS_MIN = 1
 MAX_PARALLEL_TOOLS_MAX = 12
 DEFAULT_MAX_PARALLEL_TOOLS = 4
+
+# Sub-agent settings
+SUB_AGENT_MAX_STEPS_MIN = 1
+SUB_AGENT_MAX_STEPS_MAX = 12
+DEFAULT_SUB_AGENT_MAX_STEPS = 6
+SUB_AGENT_TIMEOUT_SECONDS_MIN = 5
+SUB_AGENT_TIMEOUT_SECONDS_MAX = 900
+DEFAULT_SUB_AGENT_TIMEOUT_SECONDS = 240
+SUB_AGENT_RETRY_ATTEMPTS_MIN = 0
+SUB_AGENT_RETRY_ATTEMPTS_MAX = 5
+DEFAULT_SUB_AGENT_RETRY_ATTEMPTS = 2
+SUB_AGENT_RETRY_DELAY_SECONDS_MIN = 0
+SUB_AGENT_RETRY_DELAY_SECONDS_MAX = 60
+DEFAULT_SUB_AGENT_RETRY_DELAY_SECONDS = 5
+SUB_AGENT_MAX_PARALLEL_TOOLS_MIN = 1
+SUB_AGENT_MAX_PARALLEL_TOOLS_MAX = 12
+DEFAULT_SUB_AGENT_MAX_PARALLEL_TOOLS = 2
+
 CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL = "balanced"
 CHAT_SUMMARY_DETAIL_LEVELS = {"very_concise", "concise", "balanced", "detailed", "comprehensive"}
 CONTEXT_SELECTION_ALLOWED_STRATEGIES = {"classic", "entropy", "entropy_rag_hybrid"}
@@ -291,8 +309,9 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "fetch_url_summarized",
     "scroll_fetched_content",
     "grep_fetched_content",
-    "search_news_ddgs",
+    "search_news",
     "search_news_google",
+    "search_scholar",
     "create_canvas_document",
     "batch_read_canvas_documents",
     "search_canvas_document",
@@ -555,6 +574,15 @@ DEFAULT_SETTINGS = {
     "entropy_protect_tool_results": "true",
     "entropy_reference_boost": "true",
     "reasoning_auto_collapse": "false",
+    # Sub-agent settings
+    "sub_agent_max_steps": str(DEFAULT_SUB_AGENT_MAX_STEPS),
+    "sub_agent_timeout_seconds": str(DEFAULT_SUB_AGENT_TIMEOUT_SECONDS),
+    "sub_agent_retry_attempts": str(DEFAULT_SUB_AGENT_RETRY_ATTEMPTS),
+    "sub_agent_retry_delay_seconds": str(DEFAULT_SUB_AGENT_RETRY_DELAY_SECONDS),
+    "sub_agent_max_parallel_tools": str(DEFAULT_SUB_AGENT_MAX_PARALLEL_TOOLS),
+    "sub_agent_canvas_auto_save": "true",
+    "sub_agent_canvas_auto_open": "false",
+    "sub_agent_allowed_tool_names": "[]",
 }
 
 

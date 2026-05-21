@@ -2321,8 +2321,9 @@ def build_tool_call_contract(
 
     web_research_tool_names = {
         "search_web",
-        "search_news_ddgs",
+        "search_news",
         "search_news_google",
+        "search_scholar",
         "fetch_url",
         "fetch_url_summarized",
         "grep_fetched_content",
@@ -2333,7 +2334,7 @@ def build_tool_call_contract(
         )
 
     normalized_search_tool_query_limit = _normalize_search_tool_query_limit(search_tool_query_limit)
-    if any(name in normalized_tool_names for name in {"search_web", "search_news_ddgs", "search_news_google"}):
+    if any(name in normalized_tool_names for name in {"search_web", "search_news", "search_news_google", "search_scholar"}):
         rules.append(
             f"Each search_web/search_news call may include between 1 and {normalized_search_tool_query_limit} queries in its queries array. If you need more queries, split them across multiple calls."
         )

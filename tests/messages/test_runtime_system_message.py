@@ -932,7 +932,7 @@ class TestRuntimeSystemMessage:
     def test_tool_specs_include_guidance_for_news_tools(self):
         for tool_name in [
             "search_web",
-            "search_news_ddgs",
+            "search_news",
             "search_news_google",
         ]:
             prompt = TOOL_SPEC_BY_NAME[tool_name]["prompt"]
@@ -945,7 +945,7 @@ class TestRuntimeSystemMessage:
         )
         assert not TOOL_SPEC_BY_NAME["search_web"]["parameters"].get("additionalProperties", True)
         assert "Do not pass max_results" in TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"]
-        assert "current news coverage" in TOOL_SPEC_BY_NAME["search_news_ddgs"]["description"]
+        assert "current news coverage" in TOOL_SPEC_BY_NAME["search_news"]["description"]
         assert "current news verification" in TOOL_SPEC_BY_NAME["search_news_google"]["description"]
         assert TOOL_SPEC_BY_NAME["read_scratchpad"]["parameters"]["required"] == []
 

@@ -152,33 +152,6 @@ class ImmediateExecutor:
         return future
 
 
-class ProxyAwareDDGSStub:
-    attempts: list[Any] = []
-    fail_on_proxy: bool = True
-    text_results: list[dict[str, Any]] = []
-    news_results: list[dict[str, Any]] = []
-
-    def __init__(self, proxy=None):
-        self.proxy = proxy
-
-    def __enter__(self):
-        type(self).attempts.append(self.proxy)
-        if self.proxy and type(self).fail_on_proxy:
-            raise RuntimeError("proxy failed")
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def text(self, query, max_results=5):
-        del query, max_results
-        return list(type(self).text_results)
-
-    def news(self, query, region=None, safesearch=None, timelimit=None, max_results=5):
-        del query, region, safesearch, timelimit, max_results
-        return list(type(self).news_results)
-
-
 class SimpleRequestsResponse:
     def __init__(
         self,

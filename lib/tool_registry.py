@@ -531,9 +531,9 @@ TOOL_SPECS = [
         },
     },
     {
-        "name": "search_news_ddgs",
+        "name": "search_news",
         "description": (
-            "Search recent news articles using DuckDuckGo News. Returns title, link, publication time and source for each article. "
+            "Search recent news articles via Google News. Returns title, link, publication time and source for each article. "
             "Use this only when the request needs current news coverage, external verification, or broad news discovery. "
             "Optionally filter by time range and language. If you need the full article text, follow up with fetch_url on the returned links."
         ),
@@ -561,7 +561,7 @@ TOOL_SPECS = [
             "required": ["queries"],
         },
         "prompt": {
-            "purpose": "Searches news headlines/links/dates/sources with DuckDuckGo News.",
+            "purpose": "Searches news headlines/links/dates/sources via Google News.",
             "inputs": {
                 "queries": f"1-{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} news queries",
                 "lang": "tr|en",
@@ -569,7 +569,7 @@ TOOL_SPECS = [
             },
             "guidance": (
                 "Use this for broad recent-news discovery when you actually need headlines, sources, and timestamps before reading full articles. "
-                "Prefer this over search_news_google for generic international topics or the first pass on a topic. "
+                "Prefer search_news_google for Turkish financial news, local outlets, or when Google News coverage is specifically preferred. "
                 f"Never pass more than {DEFAULT_SEARCH_TOOL_QUERY_LIMIT} queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly. "
                 "If the answer is already known or does not require current news verification, do not search."
             ),
@@ -615,6 +615,62 @@ TOOL_SPECS = [
             "guidance": (
                 "Use this when Google News coverage is likely stronger than DuckDuckGo News for the topic or locale and the request genuinely needs current news verification. "
                 f"Never pass more than {DEFAULT_SEARCH_TOOL_QUERY_LIMIT} queries in one call. After scanning the feed, fetch only the few links that are actually needed."
+            ),
+        },
+    },
+    {
+        "name": "search_scholar",
+        "description": (
+            "Search academic papers via Google Scholar. Returns title, URL, snippet/abstract, authors, "
+            "publication year, venue, and citation count for each result. "
+            "Use this for academic research, literature reviews, finding papers, or verifying scholarly sources. "
+            "The tool uses browser automation for accurate results."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "queries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": f"List of academic search queries (1–{DEFAULT_SEARCH_TOOL_QUERY_LIMIT}).",
+                    "minItems": 1,
+                    "maxItems": DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
+                },
+                "lang": {
+                    "type": "string",
+                    "enum": ["en", "tr"],
+                    "description": "Search language. 'en' for English (default), 'tr' for Turkish.",
+                },
+                "year_from": {
+                    "type": "integer",
+                    "description": "Optional start year for publication range filter.",
+                },
+                "year_to": {
+                    "type": "integer",
+                    "description": "Optional end year for publication range filter.",
+                },
+                "sort_by": {
+                    "type": "string",
+                    "enum": ["relevance", "date"],
+                    "description": "Sort order: 'relevance' (default) or 'date'.",
+                },
+            },
+            "required": ["queries"],
+        },
+        "prompt": {
+            "purpose": "Searches academic papers via Google Scholar with metadata.",
+            "inputs": {
+                "queries": f"1-{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} scholar queries",
+                "lang": "en|tr",
+                "year_from": "optional start year",
+                "year_to": "optional end year",
+                "sort_by": "relevance|date",
+            },
+            "guidance": (
+                "Use search_scholar for academic/literature research. "
+                f"Never pass more than {DEFAULT_SEARCH_TOOL_QUERY_LIMIT} queries in one call. "
+                "If you need the full paper text, follow up with fetch_url on the returned links. "
+                "Results include citation counts and publication years for evaluation."
             ),
         },
     },
@@ -1029,7 +1085,7 @@ TOOL_SPECS = [
 ]
 
 TOOL_SPEC_BY_NAME = {tool["name"]: tool for tool in TOOL_SPECS}
-SEARCH_QUERY_LIMITED_TOOL_NAMES = {"search_web", "search_news_ddgs", "search_news_google"}
+SEARCH_QUERY_LIMITED_TOOL_NAMES = {"search_web", "search_news", "search_news_google", "search_scholar"}
 
 _TOOL_RUNTIME_DEFAULTS = {
     "read_only": False,
@@ -1105,13 +1161,19 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "session_cacheable": True,
         "state_domains": ("web",),
     },
-    "search_news_ddgs": {
+    "search_news": {
         "read_only": True,
         "parallel_safe": True,
         "session_cacheable": True,
         "state_domains": ("web",),
     },
     "search_news_google": {
+        "read_only": True,
+        "parallel_safe": True,
+        "session_cacheable": True,
+        "state_domains": ("web",),
+    },
+    "search_scholar": {
         "read_only": True,
         "parallel_safe": True,
         "session_cacheable": True,
@@ -1331,7 +1393,7 @@ def _build_search_query_limit_spec(tool: dict, search_tool_query_limit: int | No
     prompt_inputs = prompt.get("inputs") if isinstance(prompt.get("inputs"), dict) else {}
     if tool_name == "search_web":
         prompt_inputs["queries"] = f"{limit_range} search queries"
-    elif tool_name in {"search_news_ddgs", "search_news_google"}:
+    elif tool_name in {"search_news", "search_news_google"}:
         prompt_inputs["queries"] = f"{limit_range} news queries"
     prompt["inputs"] = prompt_inputs
 
@@ -1341,13 +1403,17 @@ def _build_search_query_limit_spec(tool: dict, search_tool_query_limit: int | No
             "Never pass more than 5 queries in a single call. If you need more search terms, split them across multiple search_web calls. ",
             f"Never pass more than {limit} queries in a single call. If you need more search terms, split them across multiple search_web calls. ",
         ),
-        "search_news_ddgs": (
+        "search_news": (
             "Never pass more than 5 queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly. ",
             f"Never pass more than {limit} queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly. ",
         ),
         "search_news_google": (
             "Never pass more than 5 queries in one call. After scanning the feed, fetch only the few links that are actually needed.",
             f"Never pass more than {limit} queries in one call. After scanning the feed, fetch only the few links that are actually needed.",
+        ),
+        "search_scholar": (
+            "Never pass more than 5 queries in one call. If you need the full paper text, follow up with fetch_url on the returned links. Results include citation counts and publication years for evaluation.",
+            f"Never pass more than {limit} queries in one call. If you need the full paper text, follow up with fetch_url on the returned links. Results include citation counts and publication years for evaluation.",
         ),
     }
     old_text, new_text = replacements.get(tool_name, ("", ""))
