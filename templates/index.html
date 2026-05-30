@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="{{ page_lang }}">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChatBot</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked-katex-extension/lib/index.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+</head>
+<body data-page="chat">
+
+<header>
+  <div class="header-left">
+    <button class="btn-sidebar-toggle" id="sidebar-toggle-btn" type="button" aria-controls="sidebar" aria-expanded="true" title="Hide conversations">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="3" y1="6" x2="21" y2="6"/>
+        <line x1="3" y1="12" x2="21" y2="12"/>
+        <line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+    <div class="header-brand">
+      <div class="header-logo">✦</div>
+      <h1>ChatBot</h1>
+    </div>
+  </div>
+  <div class="header-controls">
+    <div class="model-select-wrapper">
+      <select id="model-select" title="Select model">
+        {% for m in models %}
+        <option value="{{ m.id }}">{{ m.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="model-select-wrapper">
+      <select id="persona-select" title="Select persona">
+        <option value="">Default persona</option>
+      </select>
+    </div>
+    <button class="btn-ghost btn-canvas-toggle" id="canvas-toggle-btn" type="button" aria-controls="canvas-panel" aria-expanded="false" title="Open Canvas panel">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+      Canvas
+    </button>
+    <button class="btn-ghost mobile-tools-toggle" id="mobile-tools-btn" type="button" aria-controls="mobile-tools-panel" aria-expanded="false" aria-haspopup="menu" aria-label="Open panels and tools" title="Open panels and tools">
+      <span aria-hidden="true">⋯</span>
+    </button>
+  </div>
+</header>
+
+<div id="mobile-tools-panel" class="mobile-tools-panel" aria-hidden="true">
+  <div class="mobile-tools-panel__header">
+    <span>Panels &amp; tools</span>
+    <button id="mobile-tools-close" type="button" title="Close">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="mobile-tools-panel__section mobile-tools-panel__section--model">
+    <div class="settings-label">Model</div>
+    <div class="model-select-wrapper model-select-wrapper--mobile">
+      <select id="mobile-model-select" title="Select model">
+        {% for m in models %}
+        <option value="{{ m.id }}">{{ m.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+  <div class="mobile-tools-panel__section mobile-tools-panel__section--model">
+    <div class="settings-label">Persona</div>
+    <div class="model-select-wrapper model-select-wrapper--mobile">
+      <select id="mobile-persona-select" title="Select persona">
+        <option value="">Default persona</option>
+      </select>
+    </div>
+  </div>
+  <div class="mobile-tools-panel__section mobile-tools-panel__section--actions">
+    <button class="mobile-tools-action" id="mobile-summary-btn" type="button">Summary panel</button>
+    <button class="mobile-tools-action" id="mobile-canvas-btn" type="button">Canvas panel</button>
+    <button class="mobile-tools-action" id="mobile-export-btn" type="button">Export chat</button>
+    <a class="mobile-tools-action" id="mobile-settings-btn" href="/settings">Settings</a>
+    {% if auth_enabled %}
+    <form action="/logout" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <button class="mobile-tools-action mobile-tools-action--danger" id="mobile-logout-btn" type="submit">Sign out</button>
+    </form>
+    {% endif %}
+    <button class="mobile-tools-action mobile-tools-action--stats" id="mobile-tokens-btn" type="button">
+      <span>Token usage</span>
+      <span class="mobile-tools-action__badge" id="tokens-badge">0</span>
+    </button>
+  </div>
+</div>
+<div id="mobile-tools-overlay" class="mobile-tools-overlay"></div>
+
+<div id="summary-panel" class="summary-panel" aria-hidden="true" aria-labelledby="summary-panel-title">
+  <div class="summary-panel__header">
+    <div>
+      <span id="summary-panel-title">Summarize Conversation</span>
+      <p class="summary-panel__subtitle">Set focus and detail level, then compress older messages.</p>
+    </div>
+    <button id="summary-close" title="Close" type="button">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="summary-panel__body">
+    <section class="summary-card">
+      <div class="summary-card__header">
+        <div>
+          <span>Focus</span>
+          <p>Pick a starting point or write your own emphasis.</p>
+        </div>
+      </div>
+      <div id="summary-focus-presets" class="summary-preset-grid" aria-label="Focus presets"></div>
+      <label class="summary-field">
+        <span>Custom focus</span>
+        <textarea id="summary-focus-input" rows="3" placeholder="Example: action items, decisions, and unresolved questions"></textarea>
+      </label>
+    </section>
+    <section class="summary-card">
+      <div class="summary-card__header">
+        <div>
+          <span>Detail level</span>
+          <p>Choose how much context to keep.</p>
+        </div>
+      </div>
+      <div id="summary-detail-options" class="summary-option-grid" role="radiogroup" aria-label="Summary detail level"></div>
+      <select id="summary-detail-select" class="summary-detail-select" aria-hidden="true" tabindex="-1"></select>
+    </section>
+
+    <section id="summary-progress" class="summary-card summary-progress" hidden>
+      <div class="summary-progress__header">
+        <span id="summary-progress-label">Preparing summary…</span>
+        <span id="summary-progress-value">0%</span>
+      </div>
+      <div class="summary-progress__track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="summary-progress-label">
+        <span id="summary-progress-bar" class="summary-progress__fill"></span>
+      </div>
+    </section>
+  </div>
+  <div class="summary-panel__actions">
+    <button class="btn-primary" id="summary-submit-btn" type="button">Apply Summary</button>
+  </div>
+</div>
+<div id="summary-overlay" class="summary-overlay"></div>
+
+<div id="export-panel" class="export-panel" aria-hidden="true" aria-labelledby="export-panel-title">
+  <div class="export-panel-header">
+    <div>
+      <span id="export-panel-title">Export chat</span>
+      <p id="export-subtitle" class="export-panel-subtitle">Select a format for the current conversation, including raw JSON snapshots for newly captured model calls.</p>
+    </div>
+    <button id="export-close" title="Close" type="button">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="export-panel-actions">
+    <button class="btn-ghost" id="conversation-export-md-btn" type="button">Download .md</button>
+    <button class="btn-ghost" id="conversation-export-json-btn" type="button">Download raw .json</button>
+    <button class="btn-ghost" id="conversation-export-docx-btn" type="button">Download .docx</button>
+    <button class="btn-primary" id="conversation-export-pdf-btn" type="button">Download .pdf</button>
+  </div>
+  <div id="export-status" class="export-status">Export idle</div>
+</div>
+<div id="export-overlay" class="export-overlay"></div>
+
+<div id="stats-panel" class="stats-panel" aria-hidden="true">
+  <div class="stats-panel-header">
+    <span>Token Usage</span>
+    <button id="stats-close" title="Close">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="stats-section">
+    <div class="stats-section-title">Session totals</div>
+    <div class="stats-section-card">
+    <div class="stats-row">
+      <span class="stats-label">
+        <span class="stats-dot dot-user"></span>Input
+      </span>
+      <span class="stats-value" id="stat-user">0</span>
+    </div>
+    <div class="stats-row">
+      <span class="stats-label">
+        <span class="stats-dot dot-asst"></span>Output
+      </span>
+      <span class="stats-value" id="stat-asst">0</span>
+    </div>
+    <div class="stats-row stats-row-total">
+      <span class="stats-label">Total</span>
+      <span class="stats-value" id="stat-total">0</span>
+    </div>
+    </div>
+  </div>
+
+  <div class="stats-section" id="turns-section">
+    <div class="stats-section-title">Turns</div>
+    <div id="turns-list" class="stats-turns-list"></div>
+  </div>
+</div>
+<div id="stats-overlay" class="stats-overlay"></div>
+
+<div id="canvas-panel" class="canvas-panel" aria-hidden="true" aria-labelledby="canvas-subtitle">
+  <div id="canvas-resize-handle" class="canvas-resize-handle" aria-hidden="true"></div>
+  <div class="canvas-panel-header">
+    <div>
+      <span>Canvas</span>
+      <p id="canvas-subtitle" class="canvas-panel-subtitle">No canvas document yet.</p>
+    </div>
+    <div class="canvas-panel-header__actions">
+      <button id="canvas-tree-toggle" class="canvas-tree-toggle" type="button" aria-controls="canvas-tree-panel" aria-expanded="false" hidden>Files</button>
+      <button id="canvas-close" title="Close" type="button">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+  <div class="canvas-panel-actions">
+    <div id="canvas-actions-edit" class="canvas-action-group" role="group" aria-label="Canvas editing actions">
+      <span class="canvas-action-group__label">Edit</span>
+      <button class="btn-ghost canvas-action-button" id="canvas-edit-btn" type="button" data-icon="✎" title="Edit current document" aria-label="Edit current document">Edit</button>
+      <button class="btn-ghost canvas-action-button" id="canvas-new-btn" type="button" data-icon="+" title="Create new file" aria-label="Create new file">New file</button>
+      <button class="btn-ghost canvas-action-button" id="canvas-upload-btn" type="button" data-icon="↑" title="Upload file into Canvas" aria-label="Upload file into Canvas">Upload file</button>
+      <button class="btn-ghost canvas-action-button" id="canvas-import-github-btn" type="button" data-icon="⌘" title="Import GitHub repository into Canvas" aria-label="Import GitHub repository into Canvas">Import repo</button>
+      <button class="btn-primary canvas-action-button" id="canvas-save-btn" type="button" data-icon="✓" title="Save changes" aria-label="Save changes" hidden>Save</button>
+      <button class="btn-ghost canvas-action-button" id="canvas-cancel-btn" type="button" data-icon="×" title="Cancel editing" aria-label="Cancel editing" hidden>Cancel</button>
+      <button class="btn-ghost canvas-action-button" id="canvas-copy-btn" type="button" data-icon="⧉" title="Copy current document" aria-label="Copy current document" hidden>Copy</button>
+    </div>
+    <div id="canvas-actions-viewport" class="canvas-action-group" role="group" aria-label="Canvas viewport controls" hidden>
+      <button class="btn-ghost canvas-action-button canvas-viewport-toggle" id="canvas-zoom-out-btn" type="button" data-icon="A−" title="Zoom out" aria-label="Zoom out canvas document" hidden>Zoom out</button>
+      <button class="btn-ghost canvas-action-button canvas-viewport-toggle" id="canvas-zoom-in-btn" type="button" data-icon="A+" title="Zoom in" aria-label="Zoom in canvas document" hidden>Zoom in</button>
+      <button class="btn-ghost canvas-action-button canvas-viewport-toggle" id="canvas-fullscreen-toggle" type="button" data-icon="⤢" aria-pressed="false" title="Full screen" aria-label="Toggle full screen canvas" hidden>Full screen</button>
+    </div>
+    <div class="canvas-actions-overflow">
+      <button class="btn-ghost canvas-actions-overflow__toggle" id="canvas-more-btn" type="button" data-icon="⋯" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false" aria-controls="canvas-overflow-menu">
+        More
+      </button>
+      <div id="canvas-overflow-menu" class="canvas-overflow-menu" role="menu" aria-label="Canvas more actions" hidden>
+        <div id="canvas-actions-manage" class="canvas-action-group canvas-action-group--menu" role="group" aria-label="Canvas management actions">
+          <span class="canvas-action-group__label">Manage</span>
+          <button class="btn-ghost" id="canvas-rename-btn" type="button" role="menuitem">Rename</button>
+          <button class="btn-ghost btn-ghost--danger" id="canvas-delete-btn" type="button" role="menuitem">Delete current</button>
+          <button class="btn-ghost btn-ghost--danger" id="canvas-clear-btn" type="button" role="menuitem">Clear all</button>
+        </div>
+        <div id="canvas-actions-export" class="canvas-action-group canvas-action-group--menu" role="group" aria-label="Canvas export actions">
+          <span class="canvas-action-group__label">Export</span>
+          <button class="btn-ghost" id="canvas-download-html-btn" type="button" role="menuitem">Download .html</button>
+          <button class="btn-ghost" id="canvas-download-md-btn" type="button" role="menuitem">Download .md</button>
+          <button class="btn-primary" id="canvas-download-pdf-btn" type="button" role="menuitem">Download .pdf</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <input id="canvas-upload-input" type="file" accept=".docx,.pdf,.txt,.csv,.md,.markdown,.mdx,.rst,.adoc,.org,.py,.pyw,.js,.mjs,.cjs,.ts,.mts,.tsx,.jsx,.json,.jsonc,.yaml,.yml,.html,.htm,.css,.sh,.bash,.zsh,.sql,.xml,.toml,.ini,.cfg,.c,.h,.cpp,.cc,.cxx,.hpp,.hh,.go,.rs,.java,.rb,.php,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf,text/plain,text/csv,text/markdown" hidden />
+  <div id="canvas-document-tabs" class="canvas-document-tabs" hidden></div>
+  <div id="canvas-meta-bar" class="canvas-meta-bar" hidden>
+    <div id="canvas-meta-chips" class="canvas-meta-chips"></div>
+    <div class="canvas-meta-actions">
+      <button class="btn-ghost" id="canvas-copy-ref-btn" type="button">Copy reference</button>
+      <button class="btn-ghost" id="canvas-reset-filters-btn" type="button">Reset filters</button>
+    </div>
+  </div>
+  <div class="canvas-search-row">
+    <label class="sr-only" for="canvas-search-input">Search canvas</label>
+    <input id="canvas-search-input" class="canvas-search-input" type="search" placeholder="Search in canvas" autocomplete="off" spellcheck="false" />
+    <label class="sr-only" for="canvas-format-select">Canvas format</label>
+    <select id="canvas-format-select" class="canvas-format-select" aria-label="Canvas format">
+      <option value="markdown">Markdown</option>
+      <option value="code">Code</option>
+    </select>
+  </div>
+  <div id="canvas-search-status" class="canvas-search-status" role="status" aria-live="polite" hidden></div>
+  <div id="canvas-status" class="canvas-status" role="status" aria-live="polite">Canvas idle</div>
+  <div id="canvas-hint" class="canvas-hint" hidden></div>
+    <div class="canvas-workspace-shell">
+      <aside id="canvas-tree-panel" class="canvas-tree-panel" hidden>
+        <div class="canvas-tree-panel__header">
+          <span>Project files</span>
+          <span id="canvas-tree-count" class="canvas-tree-count">0 shown</span>
+        </div>
+        <div class="canvas-filter-row">
+          <label class="sr-only" for="canvas-role-filter">Filter by role</label>
+          <select id="canvas-role-filter" class="canvas-filter-select" aria-label="Filter canvas by role">
+            <option value="">All roles</option>
+          </select>
+          <label class="sr-only" for="canvas-path-filter">Filter by path</label>
+          <select id="canvas-path-filter" class="canvas-filter-select" aria-label="Filter canvas by path">
+            <option value="">All paths</option>
+          </select>
+        </div>
+        <div id="canvas-tree" class="canvas-tree" role="tree" aria-label="Canvas project tree"></div>
+      </aside>
+      <div class="canvas-workspace-main">
+        <div id="canvas-empty-state" class="canvas-empty-state">
+          <h3>No canvas document yet</h3>
+          <p>Ask the assistant to draft something substantial, then continue refining it with line-based edits.</p>
+        </div>
+        <textarea id="canvas-editor" class="canvas-editor" hidden spellcheck="false" aria-label="Canvas editor"></textarea>
+        <article id="canvas-document" class="canvas-document" role="document" aria-label="Canvas document" hidden></article>
+      </div>
+    </div>
+</div>
+<div id="canvas-overlay" class="canvas-overlay"></div>
+<div id="canvas-confirm-overlay" class="canvas-confirm-overlay"></div>
+<div id="canvas-confirm-modal" class="canvas-confirm-modal" aria-hidden="true" aria-labelledby="canvas-confirm-title" aria-describedby="canvas-confirm-message">
+  <div class="canvas-confirm-modal__header">
+    <div>
+      <span class="canvas-confirm-modal__eyebrow">Canvas ready</span>
+      <h2 id="canvas-confirm-title">Open document in Canvas?</h2>
+    </div>
+    <button id="canvas-confirm-close" title="Close" type="button">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <p id="canvas-confirm-message" class="canvas-confirm-modal__message">Your uploaded document is ready in Canvas.</p>
+  <div class="canvas-confirm-modal__actions">
+    <button id="canvas-confirm-later" class="btn-ghost" type="button">Later</button>
+    <button id="canvas-confirm-open" class="btn-primary" type="button">Open Canvas</button>
+  </div>
+</div>
+
+<div class="main-layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <button class="btn-new-chat" id="new-chat-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+        New Chat
+      </button>
+    </div>
+    <nav class="sidebar-list" id="sidebar-list"></nav>
+  </aside>
+
+  <div class="chat-area" id="chat-area">
+    <div id="history-selection-bar" class="history-selection-bar" hidden>
+      <div class="history-selection-bar__copy">
+        <strong id="history-selection-label">Selection mode</strong>
+        <span id="history-selection-detail">Choose messages in the conversation.</span>
+      </div>
+      <div class="history-selection-bar__actions">
+        <button class="btn-ghost" id="history-selection-clear" type="button">Clear</button>
+        <button class="btn-ghost" id="history-selection-cancel" type="button">Close</button>
+      </div>
+    </div>
+    <div id="messages">
+      <div class="empty-state" id="empty-state">
+        <div class="empty-state-icon">✦</div>
+        <h2>How can I help you?</h2>
+        <p>Ask anything — I'll respond instantly using the selected model.</p>
+      </div>
+    </div>
+    <div id="chat-drop-overlay" class="chat-drop-overlay" hidden aria-hidden="true">
+      <div class="chat-drop-overlay__panel">
+        <strong>Drop files to attach</strong>
+        <span>Images and supported documents will be added to the next message.</span>
+      </div>
+    </div>
+
+    <div id="input-area">
+      <div id="edit-banner" class="edit-banner" hidden>
+        <span id="edit-banner-text">Editing an earlier message.</span>
+        <button id="edit-banner-cancel" class="edit-banner__cancel" type="button">Cancel</button>
+      </div>
+      <div id="slash-command-menu" class="slash-command-menu" hidden aria-hidden="true"></div>
+      <div class="input-wrapper">
+        <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,.docx,.pdf,.txt,.csv,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.scss,.sh,.sql,.yaml,.yml,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf,text/plain,text/csv,text/markdown" multiple hidden />
+        <input id="doc-input" type="file" accept=".docx,.pdf,.txt,.csv,.md,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.scss,.sh,.sql,.yaml,.yml,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf,text/plain,text/csv,text/markdown" multiple hidden />
+        <button id="attach-btn" class="btn-attach" title="Add file" type="button">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66L9.41 17.41a2 2 0 1 1-2.83-2.83l8.49-8.48"/>
+          </svg>
+        </button>
+        <button id="youtube-url-btn" class="btn-attach" title="Add YouTube video" type="button">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+        </button>
+        <textarea id="user-input" rows="1" placeholder="Type a message or / for commands…" aria-controls="slash-command-menu" aria-haspopup="listbox" aria-expanded="false" aria-autocomplete="list"></textarea>
+        <button class="btn-fix" id="fix-btn" title="Improve text" aria-label="Improve text" type="button">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12.3 6.3l5.4 5.4"/>
+            <path d="M4 20l3.4-.9L19.1 7.4a2 2 0 0 0 0-2.8l-.7-.7a2 2 0 0 0-2.8 0L3.9 16.5 4 20z"/>
+            <path d="M14.8 3.7l5.5 5.5"/>
+          </svg>
+        </button>
+        <button id="cancel-btn" class="btn-cancel" title="Cancel" hidden>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+        <button id="send-btn" title="Send">
+          <svg width="15" height="15" viewBox="0 0 24 24">
+            <path d="M2 21l21-9L2 3v7l15 2-15 2z"/>
+          </svg>
+        </button>
+      </div>
+      <div id="attachment-preview" class="attachment-preview" hidden></div>
+      <p id="vision-disabled-note" class="input-hint" hidden>Image uploads are disabled in .env. Document uploads (DOCX, PDF, TXT, CSV, MD) are still available.</p>
+      <p class="input-hint">Press <kbd>Enter</kbd> to send &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> for a new line &nbsp;·&nbsp; Type <kbd>/</kbd> for commands</p>
+      <div id="error-area" aria-live="polite" aria-atomic="false"></div>
+    </div>
+  </div>
+</div>
+
+  <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
+<script id="app-bootstrap" type="application/json">{{ {"settings": settings, "features": settings.features, "csrf_token": csrf_token}|tojson }}</script>
+<script src="/static/shared/csrf-utils.js?v={{ app_js_version }}"></script>
+<script src="/static/js/state.js?v={{ app_js_version }}"></script>
+<script src="/static/js/constants.js?v={{ app_js_version }}"></script>
+<script src="/static/js/utils.js?v={{ app_js_version }}"></script>
+<script src="/static/js/render.js?v={{ app_js_version }}"></script>
+<script src="/static/js/tokens.js?v={{ app_js_version }}"></script>
+<script src="/static/js/summary.js?v={{ app_js_version }}"></script>
+<script src="/static/js/attachments.js?v={{ app_js_version }}"></script>
+<script src="/static/js/slash.js?v={{ app_js_version }}"></script>
+<script src="/static/js/preferences.js?v={{ app_js_version }}"></script>
+<script src="/static/js/step-ui.js?v={{ app_js_version }}"></script>
+<script src="/static/js/sidebar.js?v={{ app_js_version }}"></script>
+<script src="/static/js/clarification.js?v={{ app_js_version }}"></script>
+<script src="/static/js/traces.js?v={{ app_js_version }}"></script>
+<script src="/static/js/message.js?v={{ app_js_version }}"></script>
+<script src="/static/js/export.js?v={{ app_js_version }}"></script>
+<script src="/static/js/notifications.js?v={{ app_js_version }}"></script>
+<script src="/static/js/canvas.js?v={{ app_js_version }}"></script>
+<script src="/static/js/chat.js?v={{ app_js_version }}"></script>
+<script src="/static/app.js?v={{ app_js_version }}"></script>
+<script src="/static/js/events.js?v={{ app_js_version }}"></script>
+</body>
+</html>

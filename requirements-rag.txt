@@ -1,0 +1,4 @@
+# Optional RAG stack
+chromadb>=0.5
+sentence-transformers>=3.0
+torch>=2.3

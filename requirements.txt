@@ -1,0 +1,21 @@
+# Core runtime dependencies
+flask>=3.0
+openai>=1.54.0
+anthropic>=0.18.0
+httpx>=0.27
+python-dotenv>=1.0
+beautifulsoup4>=4.12
+html-to-markdown>=3.1.0
+pypdf>=5.0
+Pillow>=10.0
+reportlab>=4.0
+Markdown>=3.6
+python-docx>=1.1
+pdfplumber>=0.11
+tiktoken>=0.9
+defusedxml>=0.7
+redis>=5.0
+ijson>=3.2
+jsonschema>=4.0
+PyYAML>=6.0
+serp-scraper>=2.0.9

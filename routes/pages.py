@@ -1,0 +1,1858 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from flask import jsonify, render_template, request
+
+from core.config import (
+    CHAT_SUMMARY_ALLOWED_MODES,
+    CLARIFICATION_QUESTION_LIMIT_MAX,
+    CLARIFICATION_QUESTION_LIMIT_MIN,
+    CONTENT_MAX_CHARS,
+    CONTEXT_SELECTION_ALLOWED_STRATEGIES,
+    DEFAULT_WEB_CACHE_TTL_HOURS,
+    DEFAULT_SETTINGS,
+    ENTROPY_PROFILE_PRESETS,
+    FETCH_HTML_CONVERTER_MODES,
+    MAX_PARALLEL_TOOLS_MAX,
+    MAX_PARALLEL_TOOLS_MIN,
+    OCR_SUPPORTED_PROVIDERS,
+    OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
+    OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT,
+    RAG_CONTEXT_SIZE_PRESETS,
+    RAG_SENSITIVITY_PRESETS,
+    SEARCH_TOOL_QUERY_LIMIT_MAX,
+    SEARCH_TOOL_QUERY_LIMIT_MIN,
+    SCRATCHPAD_DEFAULT_SECTION,
+    SCRATCHPAD_SECTION_METADATA,
+    SCRATCHPAD_SECTION_ORDER,
+    SCRATCHPAD_SECTION_SETTING_KEYS,
+    SUB_AGENT_MAX_STEPS_MAX,
+    SUB_AGENT_MAX_STEPS_MIN,
+    SUB_AGENT_MAX_PARALLEL_TOOLS_MAX,
+    SUB_AGENT_MAX_PARALLEL_TOOLS_MIN,
+    SUB_AGENT_RETRY_ATTEMPTS_MAX,
+    SUB_AGENT_RETRY_ATTEMPTS_MIN,
+    SUB_AGENT_RETRY_DELAY_SECONDS_MAX,
+    SUB_AGENT_RETRY_DELAY_SECONDS_MIN,
+    SUB_AGENT_TIMEOUT_SECONDS_MAX,
+    SUB_AGENT_TIMEOUT_SECONDS_MIN,
+    WEB_CACHE_TTL_HOURS_MIN,
+    get_feature_flags,
+)
+from routes.auth import is_login_pin_enabled
+from core.db import (
+    build_persona_preferences,
+    build_effective_user_preferences,
+    count_scratchpad_notes,
+    get_active_tool_names,
+    get_ai_personality,
+    get_all_scratchpad_sections,
+    get_app_settings,
+    get_canvas_expand_max_lines,
+    get_canvas_prompt_code_line_max_chars,
+    get_canvas_prompt_max_chars,
+    get_canvas_prompt_max_lines,
+    get_canvas_prompt_max_tokens,
+    get_canvas_prompt_text_line_max_chars,
+    get_canvas_scroll_window_lines,
+    get_chat_summary_model,
+    get_chat_summary_mode,
+    get_chat_summary_detail_level,
+    get_chat_summary_trigger_token_count,
+    get_clarification_max_questions,
+    get_conversation_memory_enabled,
+    get_context_compaction_keep_recent_rounds,
+    get_context_compaction_threshold,
+    get_context_selection_strategy,
+    get_default_persona,
+    get_default_persona_id,
+    get_entropy_profile,
+    get_entropy_protect_code_blocks_enabled,
+    get_entropy_protect_tool_results_enabled,
+    get_entropy_rag_budget_ratio,
+    get_entropy_reference_boost_enabled,
+    get_fetch_raw_max_text_chars,
+    get_fetch_html_converter_mode,
+    get_fetch_summary_max_chars,
+    get_fetch_url_clip_aggressiveness,
+    get_fetch_url_summarized_max_input_chars,
+    get_fetch_url_summarized_max_output_tokens,
+    get_fetch_url_token_threshold,
+    get_login_lockout_seconds,
+    get_login_max_failed_attempts,
+    get_login_remember_session_days,
+    get_login_session_timeout_minutes,
+    get_max_parallel_tools,
+    get_model_temperature,
+    get_ocr_enabled,
+    get_openrouter_app_title,
+    get_openrouter_http_referer,
+    get_openrouter_prompt_cache_enabled,
+    get_openrouter_anthropic_cache_ttl,
+    get_prompt_max_input_tokens,
+    get_prompt_preflight_summary_token_count,
+    get_prompt_rag_max_tokens,
+    get_prompt_recent_history_max_tokens,
+    get_prompt_response_token_reserve,
+    get_search_tool_query_limit,
+    get_prompt_summary_max_tokens,
+    get_prompt_tool_trace_max_tokens,
+    get_reasoning_auto_collapse,
+    get_rag_auto_inject_enabled,
+    get_rag_auto_inject_source_types,
+    get_rag_chunk_overlap,
+    get_rag_chunk_size,
+    get_rag_context_size,
+    get_rag_enabled,
+    get_rag_max_chunks_per_source,
+    get_rag_query_expansion_enabled,
+    get_rag_query_expansion_max_variants,
+    get_rag_search_min_similarity,
+    get_rag_search_top_k,
+    get_rag_source_types,
+    get_rag_sensitivity,
+    get_summary_retry_min_source_tokens,
+    get_summary_source_target_tokens,
+    get_summary_skip_first,
+    get_summary_skip_last,
+    get_general_instructions,
+    get_persona,
+    get_web_cache_ttl_hours,
+    get_youtube_transcripts_enabled,
+    get_sub_agent_max_steps,
+    get_sub_agent_timeout_seconds,
+    get_sub_agent_retry_attempts,
+    get_sub_agent_retry_delay_seconds,
+    get_sub_agent_max_parallel_tools,
+    get_sub_agent_canvas_auto_save,
+    get_sub_agent_canvas_auto_open,
+    get_sub_agent_allowed_tool_names,
+    list_personas,
+    normalize_active_tool_names,
+    normalize_rag_source_types,
+    normalize_scratchpad_text,
+    save_app_settings,
+    upsert_default_persona,
+)
+from lib.model_registry import (
+    IMAGE_PROCESSING_METHODS,
+    MODEL_OPERATION_KEYS,
+    canonicalize_model_id,
+    get_all_models,
+    get_chat_capable_models,
+    get_custom_model_contract,
+    get_default_chat_model_id,
+    get_model_record,
+    get_operation_model_fallback_preferences,
+    get_operation_model_preferences,
+    get_visible_chat_models,
+    normalize_custom_model_definition,
+    normalize_custom_models,
+    normalize_image_processing_method,
+    normalize_openrouter_provider_slug,
+    normalize_operation_model_fallback_preferences,
+    normalize_operation_model_preferences,
+    normalize_visible_model_order,
+)
+from lib.tool_registry import TOOL_SPEC_BY_NAME, get_tool_runtime_metadata
+
+SETTINGS_VISIBLE_OPERATION_MODEL_KEYS = tuple(
+    key for key in MODEL_OPERATION_KEYS if key not in {"generate_title"}
+)
+
+
+def _filter_visible_operation_model_preferences(preferences: dict | None) -> dict:
+    source = preferences if isinstance(preferences, dict) else {}
+    return {key: source.get(key, "") for key in SETTINGS_VISIBLE_OPERATION_MODEL_KEYS}
+
+
+def _filter_visible_operation_model_fallback_preferences(preferences: dict | None) -> dict:
+    source = preferences if isinstance(preferences, dict) else {}
+    return {key: list(source.get(key) or []) for key in SETTINGS_VISIBLE_OPERATION_MODEL_KEYS}
+
+
+TOOL_PERMISSION_LABELS = {
+    "append_scratchpad": "Append persistent scratchpad",
+    "replace_scratchpad": "Rewrite persistent scratchpad section",
+    "read_scratchpad": "Read persistent scratchpad",
+    "ask_clarifying_question": "Ask interactive clarification questions",
+    "transcribe_youtube_video": "Transcribe YouTube video",
+    "search_knowledge_base": "Knowledge base search",
+    "search_web": "Web search",
+    "fetch_url": "Read URL content",
+    "fetch_url_summarized": "Summarize URL",
+    "scroll_fetched_content": "Scroll fetched page content",
+    "grep_fetched_content": "Search fetched page content",
+    "search_news": "News search",
+    "search_news_google": "News search — Google",
+    "search_scholar": "Academic search — Google Scholar",
+    "create_canvas_document": "Create canvas document",
+    "search_canvas_document": "Search canvas document",
+    "batch_canvas_edits": "Batch canvas edits",
+    "batch_read_canvas_documents": "Read multiple canvas documents",
+    "set_canvas_viewport": "Set canvas viewport",
+    "clear_canvas_viewport": "Clear canvas viewport",
+    "delete_canvas_document": "Delete canvas document",
+    "expand_truncated_tool_result": "Expand truncated tool result",
+    "delete_tool_result": "Delete tool result",
+}
+
+TOOL_PERMISSION_DESCRIPTIONS = {
+    "append_scratchpad": "Append durable facts to a named persistent memory section.",
+    "replace_scratchpad": "Fully rewrite one persistent memory section.",
+    "read_scratchpad": "Read the current persistent memory before editing.",
+    "ask_clarifying_question": "Pause and ask the user structured questions before answering.",
+    "transcribe_youtube_video": "Validate a YouTube URL and generate a local speech transcript with a prompt-ready context block.",
+    "search_knowledge_base": "Semantic search over synced chats and uploaded documents.",
+    "search_web": "Live web search via DuckDuckGo for current facts.",
+    "fetch_url": "Read and extract cleaned text from a specific web page.",
+    "fetch_url_summarized": "Fetch a page and return only a focused AI summary.",
+    "scroll_fetched_content": "Read another window from a previously fetched page without importing it into Canvas.",
+    "grep_fetched_content": "Search for a keyword or pattern inside a previously fetched page.",
+    "search_news": "Search recent news articles via Google News.",
+    "search_news_google": "Search recent news articles via Google News RSS.",
+    "search_scholar": "Search academic papers via Google Scholar with citation counts and metadata.",
+    "create_canvas_document": "Create a new editable canvas document or code artifact.",
+    "search_canvas_document": "Search for text or patterns inside canvas documents.",
+    "batch_canvas_edits": "Apply several non-overlapping line edits to a canvas document in one call.",
+    "batch_read_canvas_documents": "Read multiple canvas documents or ranges in one call.",
+    "set_canvas_viewport": "Pin a line range as the active viewport for a canvas document.",
+    "clear_canvas_viewport": "Remove the pinned viewport so the full canvas is shown.",
+    "delete_canvas_document": "Permanently remove a canvas document from the conversation.",
+    "expand_truncated_tool_result": "Retrieve the full uncropped content of a previously executed tool call that was truncated in the conversation history.",
+    "delete_tool_result": "Delete a tool result from the current context and store a preview in tool memory for future reference.",
+}
+
+
+def validate_tool_catalog_sync() -> tuple[list[str], list[str], list[str]]:
+    """Check synchronization between TOOL_SPEC_BY_NAME and UI tool catalog.
+
+    Returns:
+        Tuple of (missing_in_labels, missing_in_descriptions, missing_in_specs)
+        - missing_in_labels: visible tools in TOOL_SPEC_BY_NAME but not in TOOL_PERMISSION_LABELS
+        - missing_in_descriptions: visible tools in TOOL_SPEC_BY_NAME but not in TOOL_PERMISSION_DESCRIPTIONS
+        - missing_in_specs: tools in TOOL_PERMISSION_LABELS but not in TOOL_SPEC_BY_NAME
+
+    Note: Tools marked as ui_hidden=True in TOOL_RUNTIME_METADATA are excluded from the check
+    since they are intentionally not shown in the UI for user configuration.
+    """
+    # Get tools that are intentionally hidden from UI configuration
+    hidden_tool_names = {
+        tool_name for tool_name in TOOL_SPEC_BY_NAME
+        if get_tool_runtime_metadata(tool_name).get("ui_hidden") is True
+    }
+
+    spec_tool_names = set(TOOL_SPEC_BY_NAME.keys()) - hidden_tool_names
+    label_tool_names = set(TOOL_PERMISSION_LABELS.keys())
+    desc_tool_names = set(TOOL_PERMISSION_DESCRIPTIONS.keys())
+
+    missing_in_labels = sorted(spec_tool_names - label_tool_names)
+    missing_in_descriptions = sorted(spec_tool_names - desc_tool_names)
+    missing_in_specs = sorted(label_tool_names - spec_tool_names)
+
+    return missing_in_labels, missing_in_descriptions, missing_in_specs
+
+
+TOOL_PERMISSION_SECTION_ORDER = ["assistant", "research", "canvas"]
+TOOL_PERMISSION_SECTION_METADATA = {
+    "assistant": {
+        "title": "Assistant & Memory",
+        "description": "Memory, clarifications, and sub-agent behavior that stays closest to the chat loop.",
+        "note": "These tools affect how the assistant reasons and remembers, not the filesystem sandbox.",
+    },
+    "research": {
+        "title": "Web Research",
+        "description": "Search and fetch public web content when the request calls for outside information.",
+        "note": "When enabled, these tools stay available at runtime, but the prompt still tells the assistant to avoid unnecessary external lookups.",
+    },
+    "canvas": {
+        "title": "Draft Files (Canvas)",
+        "description": "Conversation-attached draft documents, canvas search, and line-level changes inside Canvas.",
+        "note": "Enable inspection helpers such as expand and scroll separately when you want read-only canvas navigation.",
+    },
+}
+
+
+def _get_tool_permission_section_key(name: str) -> str:
+    if name in {
+        "append_scratchpad",
+        "replace_scratchpad",
+        "read_scratchpad",
+        "ask_clarifying_question",
+        "transcribe_youtube_video",
+        "search_knowledge_base",
+    }:
+        return "assistant"
+    if name in {
+        "search_web",
+        "fetch_url",
+        "fetch_url_summarized",
+        "scroll_fetched_content",
+        "grep_fetched_content",
+        "search_news",
+        "search_news_google",
+        "search_scholar",
+    }:
+        return "research"
+    if name in {
+        "create_canvas_document",
+        "search_canvas_document",
+        "batch_canvas_edits",
+        "batch_read_canvas_documents",
+        "set_canvas_viewport",
+        "clear_canvas_viewport",
+        "delete_canvas_document",
+    }:
+        return "canvas"
+    return "canvas"
+
+
+def build_tool_permission_options() -> list[dict[str, str]]:
+    options: list[dict[str, str]] = []
+    for name in TOOL_SPEC_BY_NAME:
+        options.append(
+            {
+                "name": name,
+                "label": TOOL_PERMISSION_LABELS.get(name, name.replace("_", " ").title()),
+                "description": TOOL_PERMISSION_DESCRIPTIONS.get(name, ""),
+            }
+        )
+    return options
+
+
+def build_tool_permission_sections() -> list[dict[str, object]]:
+    grouped_tools: dict[str, list[dict[str, str]]] = {key: [] for key in TOOL_PERMISSION_SECTION_ORDER}
+    for tool in build_tool_permission_options():
+        section_key = _get_tool_permission_section_key(tool["name"])
+        grouped_tools.setdefault(section_key, []).append(tool)
+
+    sections: list[dict[str, object]] = []
+    for section_key in TOOL_PERMISSION_SECTION_ORDER:
+        tools = grouped_tools.get(section_key) or []
+        if not tools:
+            continue
+        metadata = TOOL_PERMISSION_SECTION_METADATA[section_key]
+        sections.append(
+            {
+                "key": section_key,
+                "title": metadata["title"],
+                "description": metadata["description"],
+                "note": metadata["note"],
+                "tools": tools,
+            }
+        )
+    return sections
+
+
+def build_tool_catalog() -> list[dict[str, str]]:
+    """Build a flat list of all tools with their metadata for API/UI consumption."""
+    catalog: list[dict[str, str]] = []
+    for section in build_tool_permission_sections():
+        section_key = section.get("key", "")
+        for tool in section.get("tools", []):
+            catalog.append(
+                {
+                    "name": tool.get("name", ""),
+                    "group": section_key,
+                    "label": tool.get("label", ""),
+                    "description": tool.get("description", ""),
+                }
+            )
+    return catalog
+
+
+def _normalize_bool_setting_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return "true" if str(value or "").strip().lower() in {"1", "true", "yes", "on"} else "false"
+
+
+def _normalize_custom_model_client_uid(
+    value,
+    *,
+    existing_custom_model_ids: set[str] | None = None,
+) -> str:
+    raw_value = str(value or "").strip()
+    if not raw_value or len(raw_value) > 200:
+        return ""
+
+    client_uid_prefix = str(get_custom_model_contract().get("client_uid_prefix") or "").strip()
+    if client_uid_prefix and raw_value.startswith(client_uid_prefix):
+        return raw_value
+    if raw_value in (existing_custom_model_ids or set()):
+        return raw_value
+    return ""
+
+
+def _resolve_model_reference_id(value, custom_model_reference_ids: dict[str, str] | None = None) -> str:
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return ""
+    if isinstance(custom_model_reference_ids, dict):
+        mapped_value = custom_model_reference_ids.get(raw_value)
+        if mapped_value:
+            return mapped_value
+    return canonicalize_model_id(raw_value)
+
+
+def _build_persona_section(raw: dict) -> dict:
+    """Build persona-related fields for settings payload."""
+    default_persona = get_default_persona(raw)
+    general_instructions = (
+        default_persona.get("general_instructions", "")
+        if isinstance(default_persona, dict)
+        else get_general_instructions(raw)
+    )
+    ai_personality = (
+        default_persona.get("ai_personality", "") if isinstance(default_persona, dict) else get_ai_personality(raw)
+    )
+    return {
+        "general_instructions": general_instructions,
+        "ai_personality": ai_personality,
+        "effective_user_preferences": (
+            build_persona_preferences(default_persona)
+            if isinstance(default_persona, dict)
+            else build_effective_user_preferences(raw)
+        ),
+        "default_persona_id": get_default_persona_id(raw),
+        "personas": list_personas(),
+        "scratchpad": raw.get("scratchpad", ""),
+        "scratchpad_sections": build_scratchpad_sections_payload(raw),
+    }
+
+
+def _build_model_section(raw: dict) -> dict:
+    """Build model-related fields for settings payload."""
+    available_models = get_all_models(raw)
+    visible_chat_models = get_visible_chat_models(raw)
+    configured_active_tools = normalize_active_tool_names(raw.get("active_tools"))
+    if raw.get("active_tools") is None:
+        configured_active_tools = get_active_tool_names(raw)
+    return {
+        "max_steps": int(raw.get("max_steps", DEFAULT_SETTINGS["max_steps"])),
+        "max_parallel_tools": get_max_parallel_tools(raw),
+        "temperature": get_model_temperature(raw),
+        "clarification_max_questions": get_clarification_max_questions(raw),
+        "search_tool_query_limit": get_search_tool_query_limit(raw),
+        "available_models": available_models,
+        "custom_model_contract": get_custom_model_contract(),
+        "custom_models": normalize_custom_models(raw.get("custom_models")),
+        "visible_model_order": [model["id"] for model in visible_chat_models],
+        "default_chat_model": get_default_chat_model_id(raw),
+        "operation_model_preferences": _filter_visible_operation_model_preferences(
+            get_operation_model_preferences(raw)
+        ),
+        "operation_model_fallback_preferences": _filter_visible_operation_model_fallback_preferences(
+            get_operation_model_fallback_preferences(raw)
+        ),
+        "image_processing_method": normalize_image_processing_method(raw.get("image_processing_method")),
+        "active_tools": configured_active_tools,
+    }
+
+
+def _build_rag_section(raw: dict) -> dict:
+    """Build RAG-related fields for settings payload."""
+    return {
+        "rag_auto_inject": get_rag_auto_inject_enabled(raw),
+        "rag_sensitivity": get_rag_sensitivity(raw),
+        "rag_context_size": get_rag_context_size(raw),
+        "rag_source_types": get_rag_source_types(raw),
+        "rag_auto_inject_source_types": get_rag_auto_inject_source_types(raw),
+        "rag_enabled": get_rag_enabled(raw),
+        "rag_chunk_size": get_rag_chunk_size(raw),
+        "rag_chunk_overlap": get_rag_chunk_overlap(raw),
+        "rag_max_chunks_per_source": get_rag_max_chunks_per_source(raw),
+        "rag_search_top_k": get_rag_search_top_k(raw),
+        "rag_search_min_similarity": get_rag_search_min_similarity(raw),
+        "rag_query_expansion_enabled": get_rag_query_expansion_enabled(raw),
+        "rag_query_expansion_max_variants": get_rag_query_expansion_max_variants(raw),
+    }
+
+
+def _build_canvas_section(raw: dict) -> dict:
+    """Build canvas-related fields for settings payload."""
+    return {
+        "canvas_prompt_max_lines": get_canvas_prompt_max_lines(raw),
+        "canvas_prompt_max_tokens": get_canvas_prompt_max_tokens(raw),
+        "canvas_prompt_max_chars": get_canvas_prompt_max_chars(raw),
+        "canvas_prompt_code_line_max_chars": get_canvas_prompt_code_line_max_chars(raw),
+        "canvas_prompt_text_line_max_chars": get_canvas_prompt_text_line_max_chars(raw),
+        "canvas_expand_max_lines": get_canvas_expand_max_lines(raw),
+        "canvas_scroll_window_lines": get_canvas_scroll_window_lines(raw),
+    }
+
+
+def _build_web_section(raw: dict) -> dict:
+    """Build web/openrouter-related fields for settings payload."""
+    return {
+        "web_cache_ttl_hours": get_web_cache_ttl_hours(raw),
+        "openrouter_prompt_cache_enabled": get_openrouter_prompt_cache_enabled(raw),
+        "openrouter_anthropic_cache_ttl": get_openrouter_anthropic_cache_ttl(raw),
+        "openrouter_http_referer": get_openrouter_http_referer(raw),
+        "openrouter_app_title": get_openrouter_app_title(raw),
+    }
+
+
+def _build_auth_section(raw: dict) -> dict:
+    """Build login/auth-related fields for settings payload."""
+    return {
+        "login_session_timeout_minutes": get_login_session_timeout_minutes(raw),
+        "login_max_failed_attempts": get_login_max_failed_attempts(raw),
+        "login_lockout_seconds": get_login_lockout_seconds(raw),
+        "login_remember_session_days": get_login_remember_session_days(raw),
+    }
+
+
+def _build_conversation_section(raw: dict) -> dict:
+    """Build conversation/memory-related fields for settings payload."""
+    return {
+        "conversation_memory_enabled": get_conversation_memory_enabled(raw),
+        "ocr_enabled": get_ocr_enabled(raw),
+        "youtube_transcripts_enabled": get_youtube_transcripts_enabled(raw),
+        "chat_summary_model": get_chat_summary_model(raw),
+        "chat_summary_detail_level": get_chat_summary_detail_level(raw),
+        "chat_summary_mode": get_chat_summary_mode(raw),
+        "chat_summary_trigger_token_count": get_chat_summary_trigger_token_count(raw),
+        "summary_skip_first": get_summary_skip_first(raw),
+        "summary_skip_last": get_summary_skip_last(raw),
+        "prompt_max_input_tokens": get_prompt_max_input_tokens(raw),
+        "prompt_response_token_reserve": get_prompt_response_token_reserve(raw),
+        "prompt_recent_history_max_tokens": get_prompt_recent_history_max_tokens(raw),
+        "prompt_summary_max_tokens": get_prompt_summary_max_tokens(raw),
+        "prompt_preflight_summary_token_count": get_prompt_preflight_summary_token_count(raw),
+        "prompt_rag_max_tokens": get_prompt_rag_max_tokens(raw),
+        "prompt_tool_trace_max_tokens": get_prompt_tool_trace_max_tokens(raw),
+        "summary_source_target_tokens": get_summary_source_target_tokens(raw),
+        "summary_retry_min_source_tokens": get_summary_retry_min_source_tokens(raw),
+        "context_compaction_threshold": get_context_compaction_threshold(raw),
+        "context_compaction_keep_recent_rounds": get_context_compaction_keep_recent_rounds(raw),
+        "context_selection_strategy": get_context_selection_strategy(raw),
+        "entropy_profile": get_entropy_profile(raw),
+        "entropy_rag_budget_ratio": get_entropy_rag_budget_ratio(raw),
+        "entropy_protect_code_blocks": get_entropy_protect_code_blocks_enabled(raw),
+        "entropy_protect_tool_results": get_entropy_protect_tool_results_enabled(raw),
+        "entropy_reference_boost": get_entropy_reference_boost_enabled(raw),
+        "reasoning_auto_collapse": get_reasoning_auto_collapse(raw),
+    }
+
+
+def _build_fetch_section(raw: dict) -> dict:
+    """Build web-fetching-related fields for settings payload."""
+    return {
+        "fetch_url_token_threshold": get_fetch_url_token_threshold(raw),
+        "fetch_url_clip_aggressiveness": get_fetch_url_clip_aggressiveness(raw),
+        "fetch_html_converter_mode": get_fetch_html_converter_mode(raw),
+        "fetch_url_summarized_max_input_chars": get_fetch_url_summarized_max_input_chars(raw),
+        "fetch_url_summarized_max_output_tokens": get_fetch_url_summarized_max_output_tokens(raw),
+        "fetch_raw_max_text_chars": get_fetch_raw_max_text_chars(raw),
+        "fetch_summary_max_chars": get_fetch_summary_max_chars(raw),
+    }
+
+
+def _build_sub_agent_section(raw: dict) -> dict:
+    """Build sub-agent-related fields for settings payload."""
+    return {
+        "sub_agent_max_steps": get_sub_agent_max_steps(raw),
+        "sub_agent_timeout_seconds": get_sub_agent_timeout_seconds(raw),
+        "sub_agent_retry_attempts": get_sub_agent_retry_attempts(raw),
+        "sub_agent_retry_delay_seconds": get_sub_agent_retry_delay_seconds(raw),
+        "sub_agent_max_parallel_tools": get_sub_agent_max_parallel_tools(raw),
+        "sub_agent_canvas_auto_save": get_sub_agent_canvas_auto_save(raw),
+        "sub_agent_canvas_auto_open": get_sub_agent_canvas_auto_open(raw),
+        "sub_agent_allowed_tool_names": get_sub_agent_allowed_tool_names(raw),
+    }
+
+
+def build_settings_payload() -> dict:
+    raw = get_app_settings()
+    return {
+        **_build_persona_section(raw),
+        **_build_model_section(raw),
+        **_build_rag_section(raw),
+        **_build_canvas_section(raw),
+        **_build_web_section(raw),
+        **_build_auth_section(raw),
+        **_build_conversation_section(raw),
+        **_build_fetch_section(raw),
+        **_build_sub_agent_section(raw),
+        "features": get_feature_flags(raw),
+        "tool_catalog": build_tool_catalog(),
+        "activity_enabled": _coerce_bool_setting(raw.get("activity_enabled"), default=True),
+        "activity_retention_days": max(1, int(raw.get("activity_retention_days") or 30)),
+    }
+
+
+def _coerce_bool_setting(value, *, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"false", "0", "off", "no"}
+
+
+def build_scratchpad_sections_payload(settings: dict) -> dict:
+    scratchpad_sections = get_all_scratchpad_sections(settings)
+    return {
+        section_id: {
+            "id": section_id,
+            "title": SCRATCHPAD_SECTION_METADATA[section_id]["title"],
+            "description": SCRATCHPAD_SECTION_METADATA[section_id]["description"],
+            "content": scratchpad_sections.get(section_id, ""),
+            "note_count": count_scratchpad_notes(scratchpad_sections.get(section_id, "")),
+        }
+        for section_id in SCRATCHPAD_SECTION_ORDER
+    }
+
+
+def _static_asset_version(app, filename: str) -> str:
+    static_folder = getattr(app, "static_folder", None)
+    if not static_folder:
+        return "1"
+    asset_path = Path(static_folder) / filename
+    try:
+        return str(int(asset_path.stat().st_mtime))
+    except OSError:
+        return "1"
+
+
+def _resolve_page_lang() -> str:
+    return request.accept_languages.best_match(["tr", "en"]) or "en"
+
+
+def register_page_routes(app) -> None:
+    @app.route("/")
+    def index():
+        settings = build_settings_payload()
+        return render_template(
+            "index.html",
+            models=get_visible_chat_models(get_app_settings()),
+            settings=settings,
+            auth_enabled=is_login_pin_enabled(),
+            page_lang=_resolve_page_lang(),
+            app_js_version=_static_asset_version(app, "app.js"),
+        )
+
+    @app.route("/settings")
+    def settings_page():
+        settings = build_settings_payload()
+        return render_template(
+            "settings.html",
+            settings=settings,
+            tool_sections=build_tool_permission_sections(),
+            sub_agent_tool_sections=build_tool_permission_sections(),
+            auth_enabled=is_login_pin_enabled(),
+            page_lang=_resolve_page_lang(),
+            settings_js_version=_static_asset_version(app, "settings.js"),
+        )
+
+    @app.route("/api/settings", methods=["GET"])
+    def get_settings():
+        return jsonify(build_settings_payload())
+
+    def _apply_persona_settings(
+        data: dict,
+        settings: dict,
+        default_persona,
+    ) -> tuple[None, None] | tuple[dict, int]:
+        """Apply persona-related settings. Returns ((None, None) on success, (error_response, status_code) on error)."""
+        user_preferences = data.get("user_preferences")
+        general_instructions = data.get("general_instructions")
+        ai_personality = data.get("ai_personality")
+        default_persona_id_raw = data.get("default_persona_id")
+
+        if general_instructions is None and user_preferences is not None:
+            general_instructions = user_preferences
+            settings["user_preferences"] = user_preferences
+
+        if general_instructions is not None and not isinstance(general_instructions, str):
+            return jsonify({"error": "Invalid general instructions."}), 400
+
+        if ai_personality is not None and not isinstance(ai_personality, str):
+            return jsonify({"error": "Invalid AI personality."}), 400
+
+        if general_instructions is not None or ai_personality is not None:
+            normalized_general_instructions = (
+                (general_instructions or "").strip()
+                if general_instructions is not None
+                else (
+                    str(default_persona.get("general_instructions") or "")
+                    if isinstance(default_persona, dict)
+                    else get_general_instructions(settings)
+                )
+            )
+            normalized_ai_personality = (
+                (ai_personality or "").strip()
+                if ai_personality is not None
+                else (
+                    str(default_persona.get("ai_personality") or "")
+                    if isinstance(default_persona, dict)
+                    else get_ai_personality(settings)
+                )
+            )
+
+            if normalized_general_instructions or normalized_ai_personality or isinstance(default_persona, dict):
+                persona = upsert_default_persona(
+                    normalized_general_instructions,
+                    normalized_ai_personality,
+                )
+                settings["default_persona_id"] = str(persona["id"])
+
+        if default_persona_id_raw is not None:
+            if default_persona_id_raw in (None, ""):
+                settings["default_persona_id"] = ""
+            else:
+                try:
+                    default_persona_id = int(default_persona_id_raw)
+                except (TypeError, ValueError):
+                    return jsonify({"error": "default_persona_id must be an integer or empty."}), 400
+                if default_persona_id <= 0:
+                    return jsonify({"error": "default_persona_id must be a positive integer."}), 400
+                if get_persona(default_persona_id) is None:
+                    return jsonify({"error": "default_persona_id must reference an existing persona."}), 400
+                settings["default_persona_id"] = str(default_persona_id)
+
+        return None, None
+
+    def _apply_scratchpad_settings(
+        data: dict,
+        settings: dict,
+    ) -> tuple[None, None] | tuple[dict, int]:
+        """Apply scratchpad-related settings. Returns ((None, None) on success, (error_response, status_code) on error)."""
+        scratchpad = data.get("scratchpad")
+        scratchpad_sections_raw = data.get("scratchpad_sections")
+
+        if scratchpad is not None:
+            if not isinstance(scratchpad, str):
+                return jsonify({"error": "Invalid scratchpad."}), 400
+            settings[SCRATCHPAD_SECTION_SETTING_KEYS[SCRATCHPAD_DEFAULT_SECTION]] = normalize_scratchpad_text(
+                scratchpad
+            )
+
+        if scratchpad_sections_raw is not None:
+            if not isinstance(scratchpad_sections_raw, dict):
+                return jsonify({"error": "Invalid scratchpad sections."}), 400
+            unexpected_sections = [
+                section_id
+                for section_id in scratchpad_sections_raw
+                if section_id not in SCRATCHPAD_SECTION_SETTING_KEYS
+            ]
+            if unexpected_sections:
+                return jsonify(
+                    {"error": f"Unknown scratchpad sections: {', '.join(sorted(unexpected_sections))}."}
+                ), 400
+            for section_id, content in scratchpad_sections_raw.items():
+                if not isinstance(content, str):
+                    return jsonify({"error": f"Invalid scratchpad section content for {section_id}."}), 400
+                try:
+                    settings[SCRATCHPAD_SECTION_SETTING_KEYS[section_id]] = normalize_scratchpad_text(content)
+                except Exception as e:
+                    return jsonify({"error": f"Invalid scratchpad section content for {section_id}: {str(e)}"}), 400
+
+        return None, None
+
+    @app.route("/api/settings", methods=["PATCH"])
+    def update_settings():
+        data = request.get_json(silent=True) or {}
+        user_preferences = data.get("user_preferences")
+        general_instructions = data.get("general_instructions")
+        ai_personality = data.get("ai_personality")
+        default_persona_id_raw = data.get("default_persona_id")
+        max_steps_raw = data.get("max_steps")
+        max_parallel_tools_raw = data.get("max_parallel_tools")
+        temperature_raw = data.get("temperature")
+        clarification_max_questions_raw = data.get("clarification_max_questions")
+        search_tool_query_limit_raw = data.get("search_tool_query_limit")
+        custom_models_raw = data.get("custom_models")
+        visible_model_order_raw = data.get("visible_model_order")
+        operation_model_preferences_raw = data.get("operation_model_preferences")
+        operation_model_fallback_preferences_raw = data.get("operation_model_fallback_preferences")
+        image_processing_method_raw = data.get("image_processing_method")
+        active_tools_raw = data.get("active_tools")
+        rag_auto_inject = data.get("rag_auto_inject")
+        rag_sensitivity = data.get("rag_sensitivity")
+        rag_context_size = data.get("rag_context_size")
+        rag_source_types = data.get("rag_source_types")
+        rag_auto_inject_source_types = data.get("rag_auto_inject_source_types")
+        chat_summary_mode_raw = data.get("chat_summary_mode")
+        chat_summary_detail_level_raw = data.get("chat_summary_detail_level")
+        chat_summary_trigger_raw = data.get("chat_summary_trigger_token_count")
+        summary_skip_first_raw = data.get("summary_skip_first")
+        summary_skip_last_raw = data.get("summary_skip_last")
+        context_selection_strategy_raw = data.get("context_selection_strategy")
+        entropy_profile_raw = data.get("entropy_profile")
+        entropy_rag_budget_ratio_raw = data.get("entropy_rag_budget_ratio")
+        entropy_protect_code_blocks_raw = data.get("entropy_protect_code_blocks")
+        entropy_protect_tool_results_raw = data.get("entropy_protect_tool_results")
+        entropy_reference_boost_raw = data.get("entropy_reference_boost")
+        prompt_max_input_tokens_raw = data.get("prompt_max_input_tokens")
+        prompt_response_token_reserve_raw = data.get("prompt_response_token_reserve")
+        prompt_recent_history_max_tokens_raw = data.get("prompt_recent_history_max_tokens")
+        prompt_summary_max_tokens_raw = data.get("prompt_summary_max_tokens")
+        prompt_preflight_summary_token_count_raw = data.get("prompt_preflight_summary_token_count")
+        prompt_rag_max_tokens_raw = data.get("prompt_rag_max_tokens")
+        prompt_tool_trace_max_tokens_raw = data.get("prompt_tool_trace_max_tokens")
+        summary_source_target_tokens_raw = data.get("summary_source_target_tokens")
+        summary_retry_min_source_tokens_raw = data.get("summary_retry_min_source_tokens")
+        context_compaction_threshold_raw = data.get("context_compaction_threshold")
+        context_compaction_keep_recent_rounds_raw = data.get("context_compaction_keep_recent_rounds")
+        reasoning_auto_collapse_raw = data.get("reasoning_auto_collapse")
+        fetch_url_token_threshold_raw = data.get("fetch_url_token_threshold")
+        fetch_url_clip_aggressiveness_raw = data.get("fetch_url_clip_aggressiveness")
+        fetch_html_converter_mode_raw = data.get("fetch_html_converter_mode")
+        fetch_url_summarized_max_input_chars_raw = data.get("fetch_url_summarized_max_input_chars")
+        fetch_url_summarized_max_output_tokens_raw = data.get("fetch_url_summarized_max_output_tokens")
+        canvas_prompt_max_lines_raw = data.get("canvas_prompt_max_lines")
+        canvas_prompt_max_tokens_raw = data.get("canvas_prompt_max_tokens")
+        canvas_prompt_max_chars_raw = data.get("canvas_prompt_max_chars")
+        canvas_prompt_code_line_max_chars_raw = data.get("canvas_prompt_code_line_max_chars")
+        canvas_prompt_text_line_max_chars_raw = data.get("canvas_prompt_text_line_max_chars")
+        canvas_expand_max_lines_raw = data.get("canvas_expand_max_lines")
+        canvas_scroll_window_lines_raw = data.get("canvas_scroll_window_lines")
+        web_cache_ttl_hours_raw = data.get("web_cache_ttl_hours")
+        activity_enabled_raw = data.get("activity_enabled")
+        activity_retention_days_raw = data.get("activity_retention_days")
+        openrouter_prompt_cache_enabled_raw = data.get("openrouter_prompt_cache_enabled")
+        openrouter_anthropic_cache_ttl_raw = data.get("openrouter_anthropic_cache_ttl")
+        openrouter_http_referer_raw = data.get("openrouter_http_referer")
+        openrouter_app_title_raw = data.get("openrouter_app_title")
+        login_session_timeout_minutes_raw = data.get("login_session_timeout_minutes")
+        login_max_failed_attempts_raw = data.get("login_max_failed_attempts")
+        login_lockout_seconds_raw = data.get("login_lockout_seconds")
+        login_remember_session_days_raw = data.get("login_remember_session_days")
+        conversation_memory_enabled_raw = data.get("conversation_memory_enabled")
+        ocr_enabled_raw = data.get("ocr_enabled")
+        rag_enabled_raw = data.get("rag_enabled")
+        youtube_transcripts_enabled_raw = data.get("youtube_transcripts_enabled")
+        chat_summary_model_raw = data.get("chat_summary_model")
+        rag_chunk_size_raw = data.get("rag_chunk_size")
+        rag_chunk_overlap_raw = data.get("rag_chunk_overlap")
+        rag_max_chunks_per_source_raw = data.get("rag_max_chunks_per_source")
+        rag_search_top_k_raw = data.get("rag_search_top_k")
+        rag_search_min_similarity_raw = data.get("rag_search_min_similarity")
+        rag_query_expansion_enabled_raw = data.get("rag_query_expansion_enabled")
+        rag_query_expansion_max_variants_raw = data.get("rag_query_expansion_max_variants")
+        fetch_raw_max_text_chars_raw = data.get("fetch_raw_max_text_chars")
+        fetch_summary_max_chars_raw = data.get("fetch_summary_max_chars")
+        scratchpad = data.get("scratchpad")
+        scratchpad_sections_raw = data.get("scratchpad_sections")
+        sub_agent_max_steps_raw = data.get("sub_agent_max_steps")
+        sub_agent_timeout_seconds_raw = data.get("sub_agent_timeout_seconds")
+        sub_agent_retry_attempts_raw = data.get("sub_agent_retry_attempts")
+        sub_agent_retry_delay_seconds_raw = data.get("sub_agent_retry_delay_seconds")
+        sub_agent_max_parallel_tools_raw = data.get("sub_agent_max_parallel_tools")
+        sub_agent_canvas_auto_save_raw = data.get("sub_agent_canvas_auto_save")
+        sub_agent_canvas_auto_open_raw = data.get("sub_agent_canvas_auto_open")
+        sub_agent_allowed_tool_names_raw = data.get("sub_agent_allowed_tool_names")
+
+        provided_setting_values = (
+            user_preferences,
+            general_instructions,
+            ai_personality,
+            default_persona_id_raw,
+            scratchpad,
+            scratchpad_sections_raw,
+            max_steps_raw,
+            max_parallel_tools_raw,
+            temperature_raw,
+            clarification_max_questions_raw,
+            search_tool_query_limit_raw,
+            custom_models_raw,
+            visible_model_order_raw,
+            operation_model_preferences_raw,
+            operation_model_fallback_preferences_raw,
+            image_processing_method_raw,
+            active_tools_raw,
+            rag_auto_inject,
+            rag_sensitivity,
+            rag_context_size,
+            rag_source_types,
+            rag_auto_inject_source_types,
+            chat_summary_mode_raw,
+            chat_summary_detail_level_raw,
+            chat_summary_trigger_raw,
+            summary_skip_first_raw,
+            summary_skip_last_raw,
+            context_selection_strategy_raw,
+            entropy_profile_raw,
+            entropy_rag_budget_ratio_raw,
+            entropy_protect_code_blocks_raw,
+            entropy_protect_tool_results_raw,
+            entropy_reference_boost_raw,
+            prompt_max_input_tokens_raw,
+            prompt_response_token_reserve_raw,
+            prompt_recent_history_max_tokens_raw,
+            prompt_summary_max_tokens_raw,
+            prompt_preflight_summary_token_count_raw,
+            prompt_rag_max_tokens_raw,
+            prompt_tool_trace_max_tokens_raw,
+            summary_source_target_tokens_raw,
+            summary_retry_min_source_tokens_raw,
+            context_compaction_threshold_raw,
+            context_compaction_keep_recent_rounds_raw,
+            reasoning_auto_collapse_raw,
+            fetch_url_token_threshold_raw,
+            fetch_url_clip_aggressiveness_raw,
+            fetch_html_converter_mode_raw,
+            fetch_url_summarized_max_input_chars_raw,
+            fetch_url_summarized_max_output_tokens_raw,
+            canvas_prompt_max_lines_raw,
+            canvas_prompt_max_tokens_raw,
+            canvas_prompt_max_chars_raw,
+            canvas_prompt_code_line_max_chars_raw,
+            canvas_prompt_text_line_max_chars_raw,
+            canvas_expand_max_lines_raw,
+            canvas_scroll_window_lines_raw,
+            web_cache_ttl_hours_raw,
+            activity_enabled_raw,
+            activity_retention_days_raw,
+            openrouter_prompt_cache_enabled_raw,
+            openrouter_anthropic_cache_ttl_raw,
+            openrouter_http_referer_raw,
+            openrouter_app_title_raw,
+            login_session_timeout_minutes_raw,
+            login_max_failed_attempts_raw,
+            login_lockout_seconds_raw,
+            login_remember_session_days_raw,
+            conversation_memory_enabled_raw,
+            ocr_enabled_raw,
+            rag_enabled_raw,
+            youtube_transcripts_enabled_raw,
+            chat_summary_model_raw,
+            rag_chunk_size_raw,
+            rag_chunk_overlap_raw,
+            rag_max_chunks_per_source_raw,
+            rag_search_top_k_raw,
+            rag_search_min_similarity_raw,
+            rag_query_expansion_enabled_raw,
+            rag_query_expansion_max_variants_raw,
+            fetch_raw_max_text_chars_raw,
+            fetch_summary_max_chars_raw,
+            sub_agent_max_steps_raw,
+            sub_agent_timeout_seconds_raw,
+            sub_agent_retry_attempts_raw,
+            sub_agent_retry_delay_seconds_raw,
+            sub_agent_max_parallel_tools_raw,
+            sub_agent_canvas_auto_save_raw,
+            sub_agent_canvas_auto_open_raw,
+            sub_agent_allowed_tool_names_raw,
+        )
+
+        if not any(value is not None for value in provided_setting_values):
+            return jsonify({"error": "No settings provided."}), 400
+
+        settings = get_app_settings()
+        default_persona = get_default_persona(settings)
+        existing_custom_model_ids = {
+            str(model.get("id") or "").strip()
+            for model in normalize_custom_models(settings.get("custom_models"))
+            if str(model.get("id") or "").strip()
+        }
+        custom_model_reference_ids: dict[str, str] = {}
+
+        err = _apply_persona_settings(data, settings, default_persona)
+        if err != (None, None):
+            return err
+
+        err = _apply_scratchpad_settings(data, settings)
+        if err != (None, None):
+            return err
+
+        if max_steps_raw is not None:
+            try:
+                max_steps = int(max_steps_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "max_steps must be an integer."}), 400
+            if not (1 <= max_steps <= 50):
+                return jsonify({"error": "max_steps must be between 1 and 50."}), 400
+            settings["max_steps"] = str(max_steps)
+
+        if max_parallel_tools_raw is not None:
+            try:
+                max_parallel_tools = int(max_parallel_tools_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "max_parallel_tools must be an integer."}), 400
+            if not (MAX_PARALLEL_TOOLS_MIN <= max_parallel_tools <= MAX_PARALLEL_TOOLS_MAX):
+                return jsonify(
+                    {
+                        "error": f"max_parallel_tools must be between {MAX_PARALLEL_TOOLS_MIN} and {MAX_PARALLEL_TOOLS_MAX}."
+                    }
+                ), 400
+            settings["max_parallel_tools"] = str(max_parallel_tools)
+
+        if temperature_raw is not None:
+            try:
+                temperature = float(temperature_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "temperature must be a number."}), 400
+            if not (0.0 <= temperature <= 2.0):
+                return jsonify({"error": "temperature must be between 0 and 2."}), 400
+            settings["temperature"] = str(temperature)
+
+        if clarification_max_questions_raw is not None:
+            try:
+                clarification_max_questions = int(clarification_max_questions_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "clarification_max_questions must be an integer."}), 400
+            if not (
+                CLARIFICATION_QUESTION_LIMIT_MIN <= clarification_max_questions <= CLARIFICATION_QUESTION_LIMIT_MAX
+            ):
+                return jsonify(
+                    {
+                        "error": f"clarification_max_questions must be between {CLARIFICATION_QUESTION_LIMIT_MIN} and {CLARIFICATION_QUESTION_LIMIT_MAX}."
+                    }
+                ), 400
+            settings["clarification_max_questions"] = str(clarification_max_questions)
+
+        if search_tool_query_limit_raw is not None:
+            try:
+                search_tool_query_limit = int(search_tool_query_limit_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "search_tool_query_limit must be an integer."}), 400
+            if not (SEARCH_TOOL_QUERY_LIMIT_MIN <= search_tool_query_limit <= SEARCH_TOOL_QUERY_LIMIT_MAX):
+                return jsonify(
+                    {
+                        "error": f"search_tool_query_limit must be between {SEARCH_TOOL_QUERY_LIMIT_MIN} and {SEARCH_TOOL_QUERY_LIMIT_MAX}."
+                    }
+                ), 400
+            settings["search_tool_query_limit"] = str(search_tool_query_limit)
+
+        if custom_models_raw is not None:
+            if not isinstance(custom_models_raw, list):
+                return jsonify({"error": "custom_models must be an array."}), 400
+
+            normalized_custom_models = []
+            seen_custom_model_ids: set[str] = set()
+            seen_custom_model_client_uids: set[str] = set()
+            for entry in custom_models_raw:
+                if not isinstance(entry, dict):
+                    return jsonify({"error": "Each custom model must be an object."}), 400
+
+                raw_provider_slug = entry.get("provider_slug")
+                if raw_provider_slug is None:
+                    raw_provider_slug = entry.get("openrouter_provider")
+                if str(raw_provider_slug or "").strip() and not normalize_openrouter_provider_slug(raw_provider_slug):
+                    return jsonify(
+                        {
+                            "error": (
+                                "custom_models contains an invalid provider_slug. "
+                                "Use an OpenRouter provider slug such as anthropic or deepinfra/turbo."
+                            )
+                        }
+                    ), 400
+
+                definition = normalize_custom_model_definition(entry)
+                if not definition:
+                    return jsonify({"error": "Each custom model must include a valid OpenRouter model id."}), 400
+                if definition["id"] in seen_custom_model_ids:
+                    return jsonify({"error": "custom_models contains duplicate model ids."}), 400
+
+                client_uid = _normalize_custom_model_client_uid(
+                    entry.get("client_uid"),
+                    existing_custom_model_ids=existing_custom_model_ids,
+                )
+                if str(entry.get("client_uid") or "").strip() and not client_uid:
+                    return jsonify({"error": "custom_models contains an invalid client_uid."}), 400
+                if client_uid:
+                    if client_uid in seen_custom_model_client_uids:
+                        return jsonify({"error": "custom_models contains duplicate client_uids."}), 400
+                    existing_mapping = custom_model_reference_ids.get(client_uid)
+                    if existing_mapping and existing_mapping != definition["id"]:
+                        return jsonify({"error": "custom_models contains conflicting client_uids."}), 400
+                    seen_custom_model_client_uids.add(client_uid)
+
+                seen_custom_model_ids.add(definition["id"])
+                custom_model_reference_ids[definition["id"]] = definition["id"]
+                if client_uid:
+                    custom_model_reference_ids[client_uid] = definition["id"]
+                normalized_custom_models.append(definition)
+
+            settings["custom_models"] = json.dumps(normalized_custom_models, ensure_ascii=False)
+
+        if visible_model_order_raw is not None:
+            if not isinstance(visible_model_order_raw, list):
+                return jsonify({"error": "visible_model_order must be an array."}), 400
+
+            normalized_visible_model_order: list[str] = []
+            for value in visible_model_order_raw:
+                model_id = _resolve_model_reference_id(value, custom_model_reference_ids)
+                record = get_model_record(model_id, settings)
+                if not record or not record.get("supports_tools"):
+                    return jsonify({"error": "visible_model_order contains unsupported chat models."}), 400
+                if record["id"] not in normalized_visible_model_order:
+                    normalized_visible_model_order.append(record["id"])
+
+            normalized_visible_model_order = normalize_visible_model_order(normalized_visible_model_order, settings)
+            if not normalized_visible_model_order:
+                return jsonify({"error": "At least one visible chat model is required."}), 400
+            settings["visible_model_order"] = json.dumps(normalized_visible_model_order, ensure_ascii=False)
+
+        if operation_model_preferences_raw is not None:
+            if not isinstance(operation_model_preferences_raw, dict):
+                return jsonify({"error": "operation_model_preferences must be an object."}), 400
+
+            filtered_operation_preferences = {
+                key: value
+                for key, value in operation_model_preferences_raw.items()
+                if key in SETTINGS_VISIBLE_OPERATION_MODEL_KEYS
+            }
+            resolved_operation_preferences: dict[str, str] = {}
+
+            for operation_key, model_value in filtered_operation_preferences.items():
+                candidate = _resolve_model_reference_id(model_value, custom_model_reference_ids)
+                if candidate and get_model_record(candidate, settings) is None:
+                    return jsonify(
+                        {"error": f"operation_model_preferences.{operation_key} must reference a known model."}
+                    ), 400
+                resolved_operation_preferences[operation_key] = candidate
+
+            normalized_operation_preferences = normalize_operation_model_preferences(
+                resolved_operation_preferences, settings
+            )
+            settings["operation_model_preferences"] = json.dumps(normalized_operation_preferences, ensure_ascii=False)
+
+        if operation_model_fallback_preferences_raw is not None:
+            if not isinstance(operation_model_fallback_preferences_raw, dict):
+                return jsonify({"error": "operation_model_fallback_preferences must be an object."}), 400
+
+            filtered_operation_fallback_preferences = {
+                key: value
+                for key, value in operation_model_fallback_preferences_raw.items()
+                if key in SETTINGS_VISIBLE_OPERATION_MODEL_KEYS
+            }
+            resolved_operation_fallback_preferences: dict[str, list[str] | str] = {}
+
+            for operation_key, model_value in filtered_operation_fallback_preferences.items():
+                if model_value in (None, ""):
+                    resolved_operation_fallback_preferences[operation_key] = []
+                    continue
+
+                if isinstance(model_value, str):
+                    candidate_values = [model_value]
+                elif isinstance(model_value, list):
+                    candidate_values = model_value
+                else:
+                    return jsonify(
+                        {
+                            "error": f"operation_model_fallback_preferences.{operation_key} must be an array of model ids."
+                        }
+                    ), 400
+
+                for candidate_value in candidate_values:
+                    candidate = _resolve_model_reference_id(candidate_value, custom_model_reference_ids)
+                    if candidate and get_model_record(candidate, settings) is None:
+                        return jsonify(
+                            {
+                                "error": f"operation_model_fallback_preferences.{operation_key} must reference known models."
+                            }
+                        ), 400
+                resolved_operation_fallback_preferences[operation_key] = [
+                    _resolve_model_reference_id(candidate_value, custom_model_reference_ids)
+                    for candidate_value in candidate_values
+                ]
+
+            normalized_operation_fallback_preferences = normalize_operation_model_fallback_preferences(
+                resolved_operation_fallback_preferences,
+                settings,
+            )
+            settings["operation_model_fallback_preferences"] = json.dumps(
+                normalized_operation_fallback_preferences,
+                ensure_ascii=False,
+            )
+
+        if image_processing_method_raw is not None:
+            normalized_image_processing_method = normalize_image_processing_method(image_processing_method_raw)
+            if normalized_image_processing_method not in IMAGE_PROCESSING_METHODS:
+                return jsonify(
+                    {"error": "image_processing_method must be one of multimodal or local_ocr."}
+                ), 400
+            settings["image_processing_method"] = normalized_image_processing_method
+
+        if active_tools_raw is not None:
+            if not isinstance(active_tools_raw, list):
+                return jsonify({"error": "Invalid active tools."}), 400
+            settings["active_tools"] = json.dumps(normalize_active_tool_names(active_tools_raw), ensure_ascii=False)
+
+        if openrouter_http_referer_raw is not None:
+            if not isinstance(openrouter_http_referer_raw, str):
+                return jsonify({"error": "openrouter_http_referer must be a string."}), 400
+            settings["openrouter_http_referer"] = openrouter_http_referer_raw.strip()[:500]
+
+        if openrouter_app_title_raw is not None:
+            if not isinstance(openrouter_app_title_raw, str):
+                return jsonify({"error": "openrouter_app_title must be a string."}), 400
+            settings["openrouter_app_title"] = openrouter_app_title_raw.strip()[:120]
+
+        if login_session_timeout_minutes_raw is not None:
+            try:
+                login_session_timeout_minutes = int(login_session_timeout_minutes_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "login_session_timeout_minutes must be an integer."}), 400
+            if not (1 <= login_session_timeout_minutes <= 10_080):
+                return jsonify({"error": "login_session_timeout_minutes must be between 1 and 10080."}), 400
+            settings["login_session_timeout_minutes"] = str(login_session_timeout_minutes)
+
+        if login_max_failed_attempts_raw is not None:
+            try:
+                login_max_failed_attempts = int(login_max_failed_attempts_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "login_max_failed_attempts must be an integer."}), 400
+            if not (1 <= login_max_failed_attempts <= 50):
+                return jsonify({"error": "login_max_failed_attempts must be between 1 and 50."}), 400
+            settings["login_max_failed_attempts"] = str(login_max_failed_attempts)
+
+        if login_lockout_seconds_raw is not None:
+            try:
+                login_lockout_seconds = int(login_lockout_seconds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "login_lockout_seconds must be an integer."}), 400
+            if not (1 <= login_lockout_seconds <= 86_400):
+                return jsonify({"error": "login_lockout_seconds must be between 1 and 86400."}), 400
+            settings["login_lockout_seconds"] = str(login_lockout_seconds)
+
+        if login_remember_session_days_raw is not None:
+            try:
+                login_remember_session_days = int(login_remember_session_days_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "login_remember_session_days must be an integer."}), 400
+            if not (1 <= login_remember_session_days <= 3_650):
+                return jsonify({"error": "login_remember_session_days must be between 1 and 3650."}), 400
+            settings["login_remember_session_days"] = str(login_remember_session_days)
+
+        if conversation_memory_enabled_raw is not None:
+            settings["conversation_memory_enabled"] = _normalize_bool_setting_value(conversation_memory_enabled_raw)
+
+        if ocr_enabled_raw is not None:
+            settings["ocr_enabled"] = _normalize_bool_setting_value(ocr_enabled_raw)
+
+        if rag_enabled_raw is not None:
+            settings["rag_enabled"] = _normalize_bool_setting_value(rag_enabled_raw)
+
+        if youtube_transcripts_enabled_raw is not None:
+            settings["youtube_transcripts_enabled"] = _normalize_bool_setting_value(youtube_transcripts_enabled_raw)
+
+        if chat_summary_model_raw is not None:
+            candidate = _resolve_model_reference_id(chat_summary_model_raw, custom_model_reference_ids)
+            if candidate and get_model_record(candidate, settings) is None:
+                return jsonify({"error": "chat_summary_model must reference a known model."}), 400
+            settings["chat_summary_model"] = candidate
+
+        if rag_chunk_size_raw is not None:
+            try:
+                rag_chunk_size = int(rag_chunk_size_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rag_chunk_size must be an integer."}), 400
+            if not (300 <= rag_chunk_size <= CONTENT_MAX_CHARS):
+                return jsonify({"error": f"rag_chunk_size must be between 300 and {CONTENT_MAX_CHARS}."}), 400
+            settings["rag_chunk_size"] = str(rag_chunk_size)
+
+        if rag_chunk_overlap_raw is not None:
+            try:
+                rag_chunk_overlap = int(rag_chunk_overlap_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rag_chunk_overlap must be an integer."}), 400
+            effective_rag_chunk_size = int(settings.get("rag_chunk_size") or get_rag_chunk_size(settings))
+            if not (0 <= rag_chunk_overlap <= max(0, effective_rag_chunk_size // 2)):
+                return jsonify({"error": "rag_chunk_overlap must be between 0 and half of rag_chunk_size."}), 400
+            settings["rag_chunk_overlap"] = str(rag_chunk_overlap)
+
+        if rag_max_chunks_per_source_raw is not None:
+            try:
+                rag_max_chunks_per_source = int(rag_max_chunks_per_source_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rag_max_chunks_per_source must be an integer."}), 400
+            if not (1 <= rag_max_chunks_per_source <= 20):
+                return jsonify({"error": "rag_max_chunks_per_source must be between 1 and 20."}), 400
+            settings["rag_max_chunks_per_source"] = str(rag_max_chunks_per_source)
+
+        if rag_search_top_k_raw is not None:
+            try:
+                rag_search_top_k = int(rag_search_top_k_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rag_search_top_k must be an integer."}), 400
+            if not (1 <= rag_search_top_k <= 50):
+                return jsonify({"error": "rag_search_top_k must be between 1 and 50."}), 400
+            settings["rag_search_top_k"] = str(rag_search_top_k)
+
+        if rag_search_min_similarity_raw is not None:
+            try:
+                rag_search_min_similarity = float(rag_search_min_similarity_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rag_search_min_similarity must be a number."}), 400
+            if not (0.0 <= rag_search_min_similarity <= 1.0):
+                return jsonify({"error": "rag_search_min_similarity must be between 0.0 and 1.0."}), 400
+            settings["rag_search_min_similarity"] = str(rag_search_min_similarity)
+
+        if rag_query_expansion_enabled_raw is not None:
+            settings["rag_query_expansion_enabled"] = _normalize_bool_setting_value(rag_query_expansion_enabled_raw)
+
+        if rag_query_expansion_max_variants_raw is not None:
+            try:
+                rag_query_expansion_max_variants = int(rag_query_expansion_max_variants_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rag_query_expansion_max_variants must be an integer."}), 400
+            if not (1 <= rag_query_expansion_max_variants <= 10):
+                return jsonify({"error": "rag_query_expansion_max_variants must be between 1 and 10."}), 400
+            settings["rag_query_expansion_max_variants"] = str(rag_query_expansion_max_variants)
+
+        if fetch_raw_max_text_chars_raw is not None:
+            try:
+                fetch_raw_max_text_chars = int(fetch_raw_max_text_chars_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "fetch_raw_max_text_chars must be an integer."}), 400
+            if not (1_000 <= fetch_raw_max_text_chars <= CONTENT_MAX_CHARS):
+                return jsonify(
+                    {"error": f"fetch_raw_max_text_chars must be between 1000 and {CONTENT_MAX_CHARS}."}
+                ), 400
+            settings["fetch_raw_max_text_chars"] = str(fetch_raw_max_text_chars)
+
+        if fetch_summary_max_chars_raw is not None:
+            try:
+                fetch_summary_max_chars = int(fetch_summary_max_chars_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "fetch_summary_max_chars must be an integer."}), 400
+            if not (500 <= fetch_summary_max_chars <= CONTENT_MAX_CHARS):
+                return jsonify({"error": f"fetch_summary_max_chars must be between 500 and {CONTENT_MAX_CHARS}."}), 400
+            settings["fetch_summary_max_chars"] = str(fetch_summary_max_chars)
+
+        effective_rag_enabled = get_rag_enabled(settings)
+
+        normalized_rag_auto_inject_toggle = None
+        if rag_auto_inject is not None and effective_rag_enabled:
+            if isinstance(rag_auto_inject, bool):
+                normalized_rag_auto_inject_toggle = rag_auto_inject
+            else:
+                normalized_rag_auto_inject_toggle = str(rag_auto_inject).strip().lower() in {"1", "true", "yes", "on"}
+
+        if rag_sensitivity is not None:
+            normalized_rag_sensitivity = str(rag_sensitivity or "").strip().lower()
+            if normalized_rag_sensitivity not in RAG_SENSITIVITY_PRESETS:
+                return jsonify({"error": "rag_sensitivity must be one of flexible, normal, or strict."}), 400
+            settings["rag_sensitivity"] = normalized_rag_sensitivity
+
+        if rag_context_size is not None:
+            normalized_rag_context_size = str(rag_context_size or "").strip().lower()
+            if normalized_rag_context_size not in RAG_CONTEXT_SIZE_PRESETS:
+                return jsonify({"error": "rag_context_size must be one of small, medium, or large."}), 400
+            settings["rag_context_size"] = normalized_rag_context_size
+
+        if rag_source_types is not None:
+            if not isinstance(rag_source_types, list):
+                return jsonify({"error": "rag_source_types must be an array."}), 400
+            normalized_rag_source_types = normalize_rag_source_types(rag_source_types)
+            incoming_source_types = [str(value or "").strip().lower() for value in rag_source_types]
+            if any(source_type not in normalized_rag_source_types for source_type in incoming_source_types):
+                return jsonify({"error": "rag_source_types contains unsupported source types."}), 400
+            settings["rag_source_types"] = json.dumps(normalized_rag_source_types, ensure_ascii=False)
+
+        normalized_rag_auto_inject_source_types = None
+        if rag_auto_inject_source_types is not None:
+            if not isinstance(rag_auto_inject_source_types, list):
+                return jsonify({"error": "rag_auto_inject_source_types must be an array."}), 400
+            normalized_rag_auto_inject_source_types = normalize_rag_source_types(rag_auto_inject_source_types)
+            incoming_auto_inject_source_types = [
+                str(value or "").strip().lower() for value in rag_auto_inject_source_types
+            ]
+            if any(
+                source_type not in normalized_rag_auto_inject_source_types
+                for source_type in incoming_auto_inject_source_types
+            ):
+                return jsonify({"error": "rag_auto_inject_source_types contains unsupported source types."}), 400
+
+        current_raw_rag_auto_inject_source_types = normalize_rag_source_types(
+            settings.get("rag_auto_inject_source_types", DEFAULT_SETTINGS["rag_auto_inject_source_types"])
+        )
+        if not effective_rag_enabled:
+            effective_rag_auto_inject_source_types = []
+        elif normalized_rag_auto_inject_source_types is not None:
+            effective_rag_auto_inject_source_types = normalized_rag_auto_inject_source_types
+        elif normalized_rag_auto_inject_toggle is False:
+            effective_rag_auto_inject_source_types = []
+        elif normalized_rag_auto_inject_toggle is True:
+            effective_rag_auto_inject_source_types = current_raw_rag_auto_inject_source_types or get_rag_source_types(
+                settings
+            )
+        else:
+            effective_rag_auto_inject_source_types = get_rag_auto_inject_source_types(settings)
+
+        settings["rag_auto_inject_source_types"] = json.dumps(
+            effective_rag_auto_inject_source_types,
+            ensure_ascii=False,
+        )
+        settings["rag_auto_inject"] = "true" if effective_rag_auto_inject_source_types else "false"
+
+        if chat_summary_mode_raw is not None:
+            normalized_summary_mode = str(chat_summary_mode_raw or "").strip().lower()
+            if normalized_summary_mode not in CHAT_SUMMARY_ALLOWED_MODES:
+                return jsonify(
+                    {"error": "chat_summary_mode must be one of auto, conservative, never, or aggressive."}
+                ), 400
+            settings["chat_summary_mode"] = normalized_summary_mode
+
+        if chat_summary_detail_level_raw is not None:
+            normalized_summary_detail_level = str(chat_summary_detail_level_raw or "").strip().lower()
+            if normalized_summary_detail_level not in {
+                "very_concise",
+                "concise",
+                "balanced",
+                "detailed",
+                "comprehensive",
+            }:
+                return jsonify(
+                    {
+                        "error": "chat_summary_detail_level must be one of very_concise, concise, balanced, detailed, or comprehensive."
+                    }
+                ), 400
+            settings["chat_summary_detail_level"] = normalized_summary_detail_level
+
+        if chat_summary_trigger_raw is not None:
+            try:
+                chat_summary_trigger = int(chat_summary_trigger_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "chat_summary_trigger_token_count must be an integer."}), 400
+            if not (1_000 <= chat_summary_trigger <= 200_000):
+                return jsonify({"error": "chat_summary_trigger_token_count must be between 1000 and 200000."}), 400
+            settings["chat_summary_trigger_token_count"] = str(chat_summary_trigger)
+
+        if summary_skip_first_raw is not None:
+            try:
+                summary_skip_first = int(summary_skip_first_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "summary_skip_first must be an integer."}), 400
+            if not (0 <= summary_skip_first <= 20):
+                return jsonify({"error": "summary_skip_first must be between 0 and 20."}), 400
+            settings["summary_skip_first"] = str(summary_skip_first)
+
+        if summary_skip_last_raw is not None:
+            try:
+                summary_skip_last = int(summary_skip_last_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "summary_skip_last must be an integer."}), 400
+            if not (0 <= summary_skip_last <= 20):
+                return jsonify({"error": "summary_skip_last must be between 0 and 20."}), 400
+            settings["summary_skip_last"] = str(summary_skip_last)
+
+        if prompt_max_input_tokens_raw is not None:
+            try:
+                prompt_max_input_tokens = int(prompt_max_input_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_max_input_tokens must be an integer."}), 400
+            if not (8_000 <= prompt_max_input_tokens <= 120_000):
+                return jsonify({"error": "prompt_max_input_tokens must be between 8000 and 120000."}), 400
+            settings["prompt_max_input_tokens"] = str(prompt_max_input_tokens)
+
+        if prompt_response_token_reserve_raw is not None:
+            try:
+                prompt_response_token_reserve = int(prompt_response_token_reserve_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_response_token_reserve must be an integer."}), 400
+            if not (1_000 <= prompt_response_token_reserve <= 32_000):
+                return jsonify({"error": "prompt_response_token_reserve must be between 1000 and 32000."}), 400
+            settings["prompt_response_token_reserve"] = str(prompt_response_token_reserve)
+
+        if prompt_recent_history_max_tokens_raw is not None:
+            try:
+                prompt_recent_history_max_tokens = int(prompt_recent_history_max_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_recent_history_max_tokens must be an integer."}), 400
+            if not (1_000 <= prompt_recent_history_max_tokens <= 120_000):
+                return jsonify({"error": "prompt_recent_history_max_tokens must be between 1000 and 120000."}), 400
+            settings["prompt_recent_history_max_tokens"] = str(prompt_recent_history_max_tokens)
+
+        if prompt_summary_max_tokens_raw is not None:
+            try:
+                prompt_summary_max_tokens = int(prompt_summary_max_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_summary_max_tokens must be an integer."}), 400
+            if not (500 <= prompt_summary_max_tokens <= 120_000):
+                return jsonify({"error": "prompt_summary_max_tokens must be between 500 and 120000."}), 400
+            settings["prompt_summary_max_tokens"] = str(prompt_summary_max_tokens)
+
+        if prompt_preflight_summary_token_count_raw is not None:
+            try:
+                prompt_preflight_summary_token_count = int(prompt_preflight_summary_token_count_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_preflight_summary_token_count must be an integer."}), 400
+            if not (2_000 <= prompt_preflight_summary_token_count <= 200_000):
+                return jsonify({"error": "prompt_preflight_summary_token_count must be between 2000 and 200000."}), 400
+            settings["prompt_preflight_summary_token_count"] = str(prompt_preflight_summary_token_count)
+
+        if prompt_rag_max_tokens_raw is not None:
+            try:
+                prompt_rag_max_tokens = int(prompt_rag_max_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_rag_max_tokens must be an integer."}), 400
+            if not (0 <= prompt_rag_max_tokens <= 120_000):
+                return jsonify({"error": "prompt_rag_max_tokens must be between 0 and 120000."}), 400
+            settings["prompt_rag_max_tokens"] = str(prompt_rag_max_tokens)
+
+        if prompt_tool_trace_max_tokens_raw is not None:
+            try:
+                prompt_tool_trace_max_tokens = int(prompt_tool_trace_max_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "prompt_tool_trace_max_tokens must be an integer."}), 400
+            if not (0 <= prompt_tool_trace_max_tokens <= 120_000):
+                return jsonify({"error": "prompt_tool_trace_max_tokens must be between 0 and 120000."}), 400
+            settings["prompt_tool_trace_max_tokens"] = str(prompt_tool_trace_max_tokens)
+
+        if summary_source_target_tokens_raw is not None:
+            try:
+                summary_source_target_tokens = int(summary_source_target_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "summary_source_target_tokens must be an integer."}), 400
+            if not (1_000 <= summary_source_target_tokens <= 40_000):
+                return jsonify({"error": "summary_source_target_tokens must be between 1000 and 40000."}), 400
+            settings["summary_source_target_tokens"] = str(summary_source_target_tokens)
+
+        if summary_retry_min_source_tokens_raw is not None:
+            try:
+                summary_retry_min_source_tokens = int(summary_retry_min_source_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "summary_retry_min_source_tokens must be an integer."}), 400
+            if not (500 <= summary_retry_min_source_tokens <= 40_000):
+                return jsonify({"error": "summary_retry_min_source_tokens must be between 500 and 40000."}), 400
+            settings["summary_retry_min_source_tokens"] = str(summary_retry_min_source_tokens)
+
+        if context_compaction_threshold_raw is not None:
+            try:
+                context_compaction_threshold = float(context_compaction_threshold_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "context_compaction_threshold must be a number."}), 400
+            if not (0.5 <= context_compaction_threshold <= 0.98):
+                return jsonify({"error": "context_compaction_threshold must be between 0.5 and 0.98."}), 400
+            settings["context_compaction_threshold"] = str(context_compaction_threshold)
+
+        if context_compaction_keep_recent_rounds_raw is not None:
+            try:
+                context_compaction_keep_recent_rounds = int(context_compaction_keep_recent_rounds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "context_compaction_keep_recent_rounds must be an integer."}), 400
+            if not (0 <= context_compaction_keep_recent_rounds <= 6):
+                return jsonify({"error": "context_compaction_keep_recent_rounds must be between 0 and 6."}), 400
+            settings["context_compaction_keep_recent_rounds"] = str(context_compaction_keep_recent_rounds)
+
+        if context_selection_strategy_raw is not None:
+            normalized_context_selection_strategy = str(context_selection_strategy_raw or "").strip().lower()
+            if normalized_context_selection_strategy not in CONTEXT_SELECTION_ALLOWED_STRATEGIES:
+                return jsonify(
+                    {"error": "context_selection_strategy must be one of classic, entropy, or entropy_rag_hybrid."}
+                ), 400
+            settings["context_selection_strategy"] = normalized_context_selection_strategy
+
+        if entropy_profile_raw is not None:
+            normalized_entropy_profile = str(entropy_profile_raw or "").strip().lower()
+            if normalized_entropy_profile not in ENTROPY_PROFILE_PRESETS:
+                return jsonify({"error": "entropy_profile must be one of conservative, balanced, or aggressive."}), 400
+            settings["entropy_profile"] = normalized_entropy_profile
+
+        if entropy_rag_budget_ratio_raw is not None:
+            try:
+                entropy_rag_budget_ratio = int(entropy_rag_budget_ratio_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "entropy_rag_budget_ratio must be an integer."}), 400
+            if not (0 <= entropy_rag_budget_ratio <= 80):
+                return jsonify({"error": "entropy_rag_budget_ratio must be between 0 and 80."}), 400
+            settings["entropy_rag_budget_ratio"] = str(entropy_rag_budget_ratio)
+
+        if entropy_protect_code_blocks_raw is not None:
+            if isinstance(entropy_protect_code_blocks_raw, bool):
+                settings["entropy_protect_code_blocks"] = "true" if entropy_protect_code_blocks_raw else "false"
+            else:
+                settings["entropy_protect_code_blocks"] = (
+                    "true"
+                    if str(entropy_protect_code_blocks_raw).strip().lower() in {"1", "true", "yes", "on"}
+                    else "false"
+                )
+
+        if entropy_protect_tool_results_raw is not None:
+            if isinstance(entropy_protect_tool_results_raw, bool):
+                settings["entropy_protect_tool_results"] = "true" if entropy_protect_tool_results_raw else "false"
+            else:
+                settings["entropy_protect_tool_results"] = (
+                    "true"
+                    if str(entropy_protect_tool_results_raw).strip().lower() in {"1", "true", "yes", "on"}
+                    else "false"
+                )
+
+        if entropy_reference_boost_raw is not None:
+            if isinstance(entropy_reference_boost_raw, bool):
+                settings["entropy_reference_boost"] = "true" if entropy_reference_boost_raw else "false"
+            else:
+                settings["entropy_reference_boost"] = (
+                    "true"
+                    if str(entropy_reference_boost_raw).strip().lower() in {"1", "true", "yes", "on"}
+                    else "false"
+                )
+
+        if reasoning_auto_collapse_raw is not None:
+            if isinstance(reasoning_auto_collapse_raw, bool):
+                settings["reasoning_auto_collapse"] = "true" if reasoning_auto_collapse_raw else "false"
+            else:
+                settings["reasoning_auto_collapse"] = (
+                    "true"
+                    if str(reasoning_auto_collapse_raw).strip().lower() in {"1", "true", "yes", "on"}
+                    else "false"
+                )
+
+        effective_prompt_max_input_tokens = get_prompt_max_input_tokens(settings)
+        configured_prompt_response_token_reserve = int(
+            settings.get("prompt_response_token_reserve", get_prompt_response_token_reserve(settings))
+        )
+        if configured_prompt_response_token_reserve > effective_prompt_max_input_tokens - 2_000:
+            return jsonify(
+                {
+                    "error": (
+                        "prompt_response_token_reserve must leave at least 2000 tokens for prompt input. "
+                        "Lower the reserve or increase prompt_max_input_tokens."
+                    )
+                }
+            ), 400
+
+        for setting_key, label in (
+            ("prompt_recent_history_max_tokens", "prompt_recent_history_max_tokens"),
+            ("prompt_summary_max_tokens", "prompt_summary_max_tokens"),
+            ("prompt_rag_max_tokens", "prompt_rag_max_tokens"),
+            ("prompt_tool_trace_max_tokens", "prompt_tool_trace_max_tokens"),
+        ):
+            configured_value = int(settings.get(setting_key, effective_prompt_max_input_tokens))
+            if configured_value > effective_prompt_max_input_tokens:
+                return jsonify({"error": f"{label} cannot exceed prompt_max_input_tokens."}), 400
+
+        configured_summary_source_target_tokens = int(
+            settings.get("summary_source_target_tokens", get_summary_source_target_tokens(settings))
+        )
+        configured_summary_retry_min_source_tokens = int(
+            settings.get("summary_retry_min_source_tokens", get_summary_retry_min_source_tokens(settings))
+        )
+        if configured_summary_retry_min_source_tokens > configured_summary_source_target_tokens:
+            return jsonify(
+                {"error": "summary_retry_min_source_tokens cannot exceed summary_source_target_tokens."}
+            ), 400
+
+        if fetch_url_token_threshold_raw is not None:
+            try:
+                fetch_url_token_threshold = int(fetch_url_token_threshold_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "fetch_url_token_threshold must be an integer."}), 400
+            if not (400 <= fetch_url_token_threshold <= 20_000):
+                return jsonify({"error": "fetch_url_token_threshold must be between 400 and 20000."}), 400
+            settings["fetch_url_token_threshold"] = str(fetch_url_token_threshold)
+
+        if fetch_url_clip_aggressiveness_raw is not None:
+            try:
+                fetch_url_clip_aggressiveness = int(fetch_url_clip_aggressiveness_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "fetch_url_clip_aggressiveness must be an integer."}), 400
+            if not (0 <= fetch_url_clip_aggressiveness <= 100):
+                return jsonify({"error": "fetch_url_clip_aggressiveness must be between 0 and 100."}), 400
+            settings["fetch_url_clip_aggressiveness"] = str(fetch_url_clip_aggressiveness)
+
+        if fetch_html_converter_mode_raw is not None:
+            normalized_fetch_html_converter_mode = str(fetch_html_converter_mode_raw or "").strip().lower()
+            if normalized_fetch_html_converter_mode not in FETCH_HTML_CONVERTER_MODES:
+                return jsonify(
+                    {"error": "fetch_html_converter_mode must be one of internal, external, or hybrid."}
+                ), 400
+            settings["fetch_html_converter_mode"] = normalized_fetch_html_converter_mode
+
+        if fetch_url_summarized_max_input_chars_raw is not None:
+            try:
+                fetch_url_summarized_max_input_chars = int(fetch_url_summarized_max_input_chars_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "fetch_url_summarized_max_input_chars must be an integer."}), 400
+            if not (4_000 <= fetch_url_summarized_max_input_chars <= CONTENT_MAX_CHARS):
+                return jsonify(
+                    {"error": f"fetch_url_summarized_max_input_chars must be between 4000 and {CONTENT_MAX_CHARS}."}
+                ), 400
+            settings["fetch_url_summarized_max_input_chars"] = str(fetch_url_summarized_max_input_chars)
+
+        if fetch_url_summarized_max_output_tokens_raw is not None:
+            try:
+                fetch_url_summarized_max_output_tokens = int(fetch_url_summarized_max_output_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "fetch_url_summarized_max_output_tokens must be an integer."}), 400
+            if not (200 <= fetch_url_summarized_max_output_tokens <= 4_000):
+                return jsonify({"error": "fetch_url_summarized_max_output_tokens must be between 200 and 4000."}), 400
+            settings["fetch_url_summarized_max_output_tokens"] = str(fetch_url_summarized_max_output_tokens)
+
+        if canvas_prompt_max_lines_raw is not None:
+            try:
+                canvas_prompt_max_lines = int(canvas_prompt_max_lines_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "canvas_prompt_max_lines must be an integer."}), 400
+            if not (100 <= canvas_prompt_max_lines <= 3_000):
+                return jsonify({"error": "canvas_prompt_max_lines must be between 100 and 3000."}), 400
+            settings["canvas_prompt_max_lines"] = str(canvas_prompt_max_lines)
+
+        if canvas_prompt_max_tokens_raw is not None:
+            try:
+                canvas_prompt_max_tokens = int(canvas_prompt_max_tokens_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "canvas_prompt_max_tokens must be an integer."}), 400
+            if not (500 <= canvas_prompt_max_tokens <= 50_000):
+                return jsonify({"error": "canvas_prompt_max_tokens must be between 500 and 50000."}), 400
+            settings["canvas_prompt_max_tokens"] = str(canvas_prompt_max_tokens)
+
+        if canvas_prompt_max_chars_raw is not None:
+            try:
+                canvas_prompt_max_chars = int(canvas_prompt_max_chars_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "canvas_prompt_max_chars must be an integer."}), 400
+            if not (1_000 <= canvas_prompt_max_chars <= 200_000):
+                return jsonify({"error": "canvas_prompt_max_chars must be between 1000 and 200000."}), 400
+            settings["canvas_prompt_max_chars"] = str(canvas_prompt_max_chars)
+
+        if canvas_prompt_code_line_max_chars_raw is not None:
+            try:
+                canvas_prompt_code_line_max_chars = int(canvas_prompt_code_line_max_chars_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "canvas_prompt_code_line_max_chars must be an integer."}), 400
+            if not (40 <= canvas_prompt_code_line_max_chars <= 1_000):
+                return jsonify({"error": "canvas_prompt_code_line_max_chars must be between 40 and 1000."}), 400
+            settings["canvas_prompt_code_line_max_chars"] = str(canvas_prompt_code_line_max_chars)
+
+        if canvas_prompt_text_line_max_chars_raw is not None:
+            try:
+                canvas_prompt_text_line_max_chars = int(canvas_prompt_text_line_max_chars_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "canvas_prompt_text_line_max_chars must be an integer."}), 400
+            if not (40 <= canvas_prompt_text_line_max_chars <= 1_000):
+                return jsonify({"error": "canvas_prompt_text_line_max_chars must be between 40 and 1000."}), 400
+            settings["canvas_prompt_text_line_max_chars"] = str(canvas_prompt_text_line_max_chars)
+
+        if canvas_expand_max_lines_raw is not None:
+            try:
+                canvas_expand_max_lines = int(canvas_expand_max_lines_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "canvas_expand_max_lines must be an integer."}), 400
+            if not (100 <= canvas_expand_max_lines <= 4_000):
+                return jsonify({"error": "canvas_expand_max_lines must be between 100 and 4000."}), 400
+            settings["canvas_expand_max_lines"] = str(canvas_expand_max_lines)
+
+        if canvas_scroll_window_lines_raw is not None:
+            try:
+                canvas_scroll_window_lines = int(canvas_scroll_window_lines_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "canvas_scroll_window_lines must be an integer."}), 400
+            if not (50 <= canvas_scroll_window_lines <= 800):
+                return jsonify({"error": "canvas_scroll_window_lines must be between 50 and 800."}), 400
+            settings["canvas_scroll_window_lines"] = str(canvas_scroll_window_lines)
+
+        if web_cache_ttl_hours_raw is not None:
+            try:
+                web_cache_ttl_hours = int(web_cache_ttl_hours_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "web_cache_ttl_hours must be an integer."}), 400
+            if not (WEB_CACHE_TTL_HOURS_MIN <= web_cache_ttl_hours <= WEB_CACHE_TTL_HOURS_MAX):
+                return jsonify(
+                    {
+                        "error": f"web_cache_ttl_hours must be between {WEB_CACHE_TTL_HOURS_MIN} and {WEB_CACHE_TTL_HOURS_MAX}."
+                    }
+                ), 400
+            settings["web_cache_ttl_hours"] = str(web_cache_ttl_hours)
+
+        if activity_enabled_raw is not None:
+            settings["activity_enabled"] = _normalize_bool_setting_value(activity_enabled_raw)
+
+        if activity_retention_days_raw is not None:
+            try:
+                activity_retention_days = int(activity_retention_days_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "activity_retention_days must be an integer."}), 400
+            if not (1 <= activity_retention_days <= 3650):
+                return jsonify({"error": "activity_retention_days must be between 1 and 3650."}), 400
+            settings["activity_retention_days"] = str(activity_retention_days)
+
+        if openrouter_prompt_cache_enabled_raw is not None:
+            if isinstance(openrouter_prompt_cache_enabled_raw, bool):
+                settings["openrouter_prompt_cache_enabled"] = "true" if openrouter_prompt_cache_enabled_raw else "false"
+            else:
+                normalized_prompt_cache = str(openrouter_prompt_cache_enabled_raw).strip().lower()
+                settings["openrouter_prompt_cache_enabled"] = (
+                    "true" if normalized_prompt_cache in {"1", "true", "yes", "on"} else "false"
+                )
+
+        if openrouter_anthropic_cache_ttl_raw is not None:
+            normalized_ttl = str(openrouter_anthropic_cache_ttl_raw).strip().lower()
+            if normalized_ttl not in {"5m", "1h"}:
+                return jsonify({"error": "openrouter_anthropic_cache_ttl must be '5m' or '1h'."}), 400
+            settings["openrouter_anthropic_cache_ttl"] = normalized_ttl
+
+        if sub_agent_max_steps_raw is not None:
+            try:
+                sub_agent_max_steps = int(sub_agent_max_steps_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_max_steps must be an integer."}), 400
+            if not (SUB_AGENT_MAX_STEPS_MIN <= sub_agent_max_steps <= SUB_AGENT_MAX_STEPS_MAX):
+                return jsonify(
+                    {"error": f"sub_agent_max_steps must be between {SUB_AGENT_MAX_STEPS_MIN} and {SUB_AGENT_MAX_STEPS_MAX}."}
+                ), 400
+            settings["sub_agent_max_steps"] = str(sub_agent_max_steps)
+
+        if sub_agent_timeout_seconds_raw is not None:
+            try:
+                sub_agent_timeout_seconds = int(sub_agent_timeout_seconds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_timeout_seconds must be an integer."}), 400
+            if not (SUB_AGENT_TIMEOUT_SECONDS_MIN <= sub_agent_timeout_seconds <= SUB_AGENT_TIMEOUT_SECONDS_MAX):
+                return jsonify(
+                    {"error": f"sub_agent_timeout_seconds must be between {SUB_AGENT_TIMEOUT_SECONDS_MIN} and {SUB_AGENT_TIMEOUT_SECONDS_MAX}."}
+                ), 400
+            settings["sub_agent_timeout_seconds"] = str(sub_agent_timeout_seconds)
+
+        if sub_agent_retry_attempts_raw is not None:
+            try:
+                sub_agent_retry_attempts = int(sub_agent_retry_attempts_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_retry_attempts must be an integer."}), 400
+            if not (SUB_AGENT_RETRY_ATTEMPTS_MIN <= sub_agent_retry_attempts <= SUB_AGENT_RETRY_ATTEMPTS_MAX):
+                return jsonify(
+                    {"error": f"sub_agent_retry_attempts must be between {SUB_AGENT_RETRY_ATTEMPTS_MIN} and {SUB_AGENT_RETRY_ATTEMPTS_MAX}."}
+                ), 400
+            settings["sub_agent_retry_attempts"] = str(sub_agent_retry_attempts)
+
+        if sub_agent_retry_delay_seconds_raw is not None:
+            try:
+                sub_agent_retry_delay_seconds = int(sub_agent_retry_delay_seconds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_retry_delay_seconds must be an integer."}), 400
+            if not (SUB_AGENT_RETRY_DELAY_SECONDS_MIN <= sub_agent_retry_delay_seconds <= SUB_AGENT_RETRY_DELAY_SECONDS_MAX):
+                return jsonify(
+                    {"error": f"sub_agent_retry_delay_seconds must be between {SUB_AGENT_RETRY_DELAY_SECONDS_MIN} and {SUB_AGENT_RETRY_DELAY_SECONDS_MAX}."}
+                ), 400
+            settings["sub_agent_retry_delay_seconds"] = str(sub_agent_retry_delay_seconds)
+
+        if sub_agent_max_parallel_tools_raw is not None:
+            try:
+                sub_agent_max_parallel_tools = int(sub_agent_max_parallel_tools_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "sub_agent_max_parallel_tools must be an integer."}), 400
+            if not (SUB_AGENT_MAX_PARALLEL_TOOLS_MIN <= sub_agent_max_parallel_tools <= SUB_AGENT_MAX_PARALLEL_TOOLS_MAX):
+                return jsonify(
+                    {"error": f"sub_agent_max_parallel_tools must be between {SUB_AGENT_MAX_PARALLEL_TOOLS_MIN} and {SUB_AGENT_MAX_PARALLEL_TOOLS_MAX}."}
+                ), 400
+            settings["sub_agent_max_parallel_tools"] = str(sub_agent_max_parallel_tools)
+
+        if sub_agent_canvas_auto_save_raw is not None:
+            if isinstance(sub_agent_canvas_auto_save_raw, bool):
+                settings["sub_agent_canvas_auto_save"] = "true" if sub_agent_canvas_auto_save_raw else "false"
+            else:
+                normalized_val = str(sub_agent_canvas_auto_save_raw).strip().lower()
+                settings["sub_agent_canvas_auto_save"] = "true" if normalized_val in {"1", "true", "yes", "on"} else "false"
+
+        if sub_agent_canvas_auto_open_raw is not None:
+            if isinstance(sub_agent_canvas_auto_open_raw, bool):
+                settings["sub_agent_canvas_auto_open"] = "true" if sub_agent_canvas_auto_open_raw else "false"
+            else:
+                normalized_val = str(sub_agent_canvas_auto_open_raw).strip().lower()
+                settings["sub_agent_canvas_auto_open"] = "true" if normalized_val in {"1", "true", "yes", "on"} else "false"
+
+        if sub_agent_allowed_tool_names_raw is not None:
+            if not isinstance(sub_agent_allowed_tool_names_raw, list):
+                return jsonify({"error": "sub_agent_allowed_tool_names must be an array."}), 400
+            normalized_tool_names = normalize_active_tool_names(sub_agent_allowed_tool_names_raw)
+            settings["sub_agent_allowed_tool_names"] = json.dumps(normalized_tool_names, ensure_ascii=False)
+
+        save_app_settings(settings)
+        return jsonify(build_settings_payload())

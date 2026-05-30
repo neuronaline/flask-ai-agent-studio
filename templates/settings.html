@@ -1,0 +1,1506 @@
+<!DOCTYPE html>
+<html lang="{{ page_lang }}">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Settings | Flask ChatBot</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body data-page="settings" class="settings-page-body">
+  <header>
+    <div class="header-left">
+      <a class="btn-sidebar-toggle settings-back-btn" href="/" aria-label="Back to chat" title="Back to chat">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="19" y1="12" x2="5" y2="12"/>
+          <polyline points="12 19 5 12 12 5"/>
+        </svg>
+      </a>
+      <div class="header-brand">
+        <div class="header-logo">✦</div>
+        <div class="settings-page-title-group">
+          <h1>Settings</h1>
+        </div>
+      </div>
+    </div>
+    <div class="header-controls">
+      <span id="settings-dirty-pill" class="settings-page-pill" data-tone="muted">All changes saved</span>
+      <button class="btn-primary settings-save-trigger" type="button">Save settings</button>
+      <a class="btn-ghost" href="/">Back to chat</a>
+      {% if auth_enabled %}
+      <form action="/logout" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <button class="btn-ghost btn-auth-link" type="submit">Sign out</button>
+      </form>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="settings-page-shell">
+    <aside class="settings-page-sidebar" aria-label="Settings sections">
+      <div class="settings-page-sidebar__intro">
+        <span class="settings-page-sidebar__eyebrow">Workspace settings</span>
+        <h2>Global runtime policy</h2>
+        <p>Essentials stay visible up front; advanced tuning stays tucked away until you actually need it.</p>
+      </div>
+
+      <nav class="settings-tabs" id="settings-tabs" aria-label="Settings tabs">
+        <button class="settings-tab-btn active" id="general-tab" type="button" data-settings-tab="general">General</button>
+        <button class="settings-tab-btn" id="personas-tab" type="button" data-settings-tab="personas">Personas</button>
+        <button class="settings-tab-btn" id="models-tab" type="button" data-settings-tab="models">Models</button>
+        <button class="settings-tab-btn" id="context-tab" type="button" data-settings-tab="context">Context</button>
+        <button class="settings-tab-btn" id="tools-tab" type="button" data-settings-tab="tools">Tools</button>
+        <button class="settings-tab-btn" id="knowledge-tab" type="button" data-settings-tab="knowledge">Knowledge Base</button>
+        <button class="settings-tab-btn" id="activity-tab" type="button" data-settings-tab="activity">Activity</button>
+      </nav>
+
+      <div class="settings-page-stats settings-page-stats--compact" aria-label="Settings overview">
+        <div class="settings-stat-card settings-stat-card--compact">
+          <span>Scratchpad</span>
+          <strong id="settings-stat-scratchpad">0 notes</strong>
+        </div>
+        <div class="settings-stat-card settings-stat-card--compact">
+          <span>Active tools</span>
+          <strong id="settings-stat-tools">0 enabled</strong>
+        </div>
+        <div class="settings-stat-card settings-stat-card--compact">
+          <span>RAG</span>
+          <strong id="settings-stat-rag">Checking</strong>
+        </div>
+      </div>
+    </aside>
+
+    <section class="settings-page-content">
+      <div class="settings-page-toolbar">
+        <div>
+          <span class="settings-page-banner__eyebrow">Global controls</span>
+          <h2>Minimal, grouped settings</h2>
+          <p>Start with the essentials. Advanced tuning stays tucked away so the page remains readable across long sessions.</p>
+        </div>
+        <div class="settings-page-toolbar__actions">
+          <span id="settings-status" class="settings-status">Ready</span>
+          <button class="btn-primary settings-save-trigger" type="button">Save</button>
+        </div>
+      </div>
+
+      <div id="settings-restart-banner" class="settings-restart-banner" hidden>
+        <strong>Restart required</strong>
+        <span id="settings-restart-banner-text">Some saved runtime changes require a server restart before they take effect everywhere.</span>
+      </div>
+
+      <div class="settings-tab-panels">
+        <section class="settings-tab-panel active" data-settings-panel="general" aria-labelledby="general-tab">
+          <div class="settings-page-grid settings-page-grid--two">
+            <div class="settings-page-stack">
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Assistant behavior</span>
+                    <h3>Default persona</h3>
+                  </div>
+                  <p>Choose which persona new and unassigned conversations should use by default.</p>
+                </div>
+                <div class="settings-subsection-grid settings-subsection-grid--two">
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Assignment</span>
+                      <h4 class="settings-subsection__title">Persona fallback</h4>
+                      <p class="settings-subsection__copy">Set the default assistant identity for new conversations. Individual conversations can still override it later.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="default-persona-select">Default persona</label>
+                      <select id="default-persona-select" class="settings-select">
+                        <option value="">No default persona</option>
+                      </select>
+                      <p class="settings-copy">Per-conversation personas override this choice. Use the Personas tab to create multiple assistants and assign them conversation by conversation.</p>
+                      <div class="settings-inline-actions">
+                        <button class="btn-ghost" id="open-personas-tab-btn" type="button">Manage personas</button>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Creativity</span>
+                      <h4 class="settings-subsection__title">Default temperature</h4>
+                      <p class="settings-subsection__copy">Tune the base balance between deterministic output and exploratory variation across the whole app.</p>
+                    </div>
+                    <label class="settings-label" for="temperature-input">Response temperature (0.0-2.0)</label>
+                    <input type="number" class="settings-number" id="temperature-input" min="0" max="2" step="0.1" value="0.7" />
+                    <p class="settings-copy">Lower values are more deterministic; higher values add more variation to assistant replies.</p>
+                  </section>
+                </div>
+              </div>
+
+            </div>
+
+            <div class="settings-page-stack">
+              <details class="settings-collapsible settings-collapsible--soft">
+                <summary class="settings-collapsible__summary">
+                  <div>
+                    <span class="settings-section-kicker">Clarification</span>
+                    <strong>Question limit</strong>
+                  </div>
+                  <span class="settings-collapsible__meta">Adjust only when complex workflows need deeper intake.</span>
+                </summary>
+                <div class="settings-collapsible__content">
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Turn depth</span>
+                      <h4 class="settings-subsection__title">Clarification breadth</h4>
+                      <p class="settings-subsection__copy">Useful when complex workflows need more structured intake, but still best kept lean for everyday use.</p>
+                    </div>
+                    <label class="settings-label" for="clarification-max-questions-input">Max clarification questions (1-25)</label>
+                    <input type="number" class="settings-number" id="clarification-max-questions-input" min="1" max="25" value="5" />
+                    <p class="settings-copy">Higher values allow broader clarification turns, but the assistant should still ask only the minimum needed.</p>
+                  </section>
+                </div>
+              </details>
+
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Image analysis</span>
+                    <h3>Image interpretation method</h3>
+                  </div>
+                  <p>Choose how uploaded images are processed: Multimodal sends the image directly to vision-capable models (like Gemini, GPT-4o). OCR extracts text only.</p>
+                </div>
+                <div class="settings-subsection-grid settings-subsection-grid--two">
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Processing</span>
+                      <h4 class="settings-subsection__title">How images are interpreted</h4>
+                    </div>
+                    <label class="settings-label" for="image-processing-method-select">Image processing method</label>
+                    <select id="image-processing-method-select">
+                      <option value="multimodal">Multimodal (vision-capable models)</option>
+                      <option value="local_ocr">Local OCR (text extraction only)</option>
+                    </select>
+                    <p class="settings-copy">Multimodal sends images directly to models that support vision (Gemini, GPT-4o, etc.). OCR extracts text only.</p>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-tab-panel" data-settings-panel="personas" aria-labelledby="personas-tab" hidden>
+          <div class="settings-page-grid settings-page-grid--two settings-page-grid--model-catalog">
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Persona library</span>
+                  <h3>Available personas</h3>
+                </div>
+                <p>Create multiple persistent AI personas and reuse them across conversations.</p>
+              </div>
+              <div class="settings-toggle-panel settings-toggle-panel--accent">
+                <div class="settings-inline-actions">
+                  <button class="btn-primary" id="persona-new-btn" type="button">New persona</button>
+                  <span id="persona-status" class="settings-status" data-tone="muted">Ready to create a persona</span>
+                </div>
+                <div id="persona-list" class="model-management-list model-management-list--spaced"></div>
+              </div>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Persona editor</span>
+                  <h3 id="persona-editor-title">Create persona</h3>
+                </div>
+                <p>Conversation personas replace the default persona for that conversation, but they still remain below direct user instructions at runtime.</p>
+              </div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Identity</span>
+                    <h4 class="settings-subsection__title">Persona name</h4>
+                  </div>
+                  <label class="settings-label" for="persona-name-input">Persona name</label>
+                  <input id="persona-name-input" class="settings-text" type="text" placeholder="Example: Pragmatic Engineer" />
+                </section>
+
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Behavior</span>
+                    <h4 class="settings-subsection__title">General instructions</h4>
+                  </div>
+                  <label class="settings-label" for="persona-name-input">Instructions</label>
+                  <textarea id="general-instructions-input" rows="5" placeholder="Example: Keep answers concise, state assumptions clearly, and use bullets only when they improve scanning."></textarea>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Voice</span>
+                    <h4 class="settings-subsection__title">AI personality</h4>
+                  </div>
+                  <textarea id="ai-personality-input" rows="4" placeholder="Example: Sound like a pragmatic senior engineer: calm, direct, rigorous, and low-fluff."></textarea>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Actions</span>
+                    <h4 class="settings-subsection__title">Save or remove persona</h4>
+                  </div>
+                  <div class="settings-inline-actions">
+                    <button class="btn-primary" id="persona-save-btn" type="button">Create persona</button>
+                    <button class="btn-ghost btn-ghost--danger" id="persona-delete-btn" type="button" hidden>Delete persona</button>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-tab-panel" data-settings-panel="models" aria-labelledby="models-tab">
+          <div class="settings-page-grid settings-page-grid--two settings-page-grid--model-catalog">
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Model providers</span>
+                  <h3>OpenRouter catalog</h3>
+                </div>
+                <p>Add OpenRouter models, declare their capabilities, and make them available to the rest of the settings UI.</p>
+              </div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Model identity</span>
+                    <h4 class="settings-subsection__title">Name and API id</h4>
+                  </div>
+                  <label class="settings-label" for="custom-model-name-input">Display name</label>
+                  <input id="custom-model-name-input" class="settings-text" type="text" placeholder="Example: Claude Sonnet 4.5" />
+                  <label class="settings-label" for="custom-model-api-model-input">OpenRouter model id</label>
+                  <input id="custom-model-api-model-input" class="settings-text" type="text" placeholder="anthropic/claude-sonnet-4.5" />
+                </section>
+
+                <details class="settings-collapsible">
+                  <summary class="settings-collapsible__summary">
+                    <div>
+                      <span class="settings-subsection__eyebrow">Advanced routing</span>
+                      <strong>Provider and reasoning</strong>
+                    </div>
+                    <span class="settings-collapsible__meta">Open to configure routing and reasoning options.</span>
+                  </summary>
+                  <div class="settings-collapsible__content">
+                    <section class="settings-subsection">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Routing</span>
+                        <h4 class="settings-subsection__title">Provider selection</h4>
+                      </div>
+                      <label class="settings-label" for="custom-model-routing-mode-select">Provider routing</label>
+                      <select id="custom-model-routing-mode-select">
+                        <option value="auto">Automatic OpenRouter routing</option>
+                        <option value="specific">Pin a specific provider</option>
+                      </select>
+                      <div id="custom-model-provider-field" hidden>
+                        <label class="settings-label" for="custom-model-provider-slug-input">Provider slug</label>
+                        <input id="custom-model-provider-slug-input" class="settings-text" type="text" placeholder="anthropic, azure, deepinfra/turbo" />
+                        <p class="settings-copy">Use the exact OpenRouter provider slug from the model page. Examples: anthropic, azure, deepinfra/turbo.</p>
+                      </div>
+                    </section>
+                    <section class="settings-subsection">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Reasoning profile</span>
+                        <h4 class="settings-subsection__title">Mode and effort</h4>
+                      </div>
+                      <label class="settings-label" for="custom-model-reasoning-mode-select">Reasoning</label>
+                      <select id="custom-model-reasoning-mode-select">
+                        <option value="default">Use model default</option>
+                        <option value="enabled">Enabled</option>
+                        <option value="disabled">Disabled</option>
+                      </select>
+                      <label class="settings-label" for="custom-model-reasoning-effort-select">Reasoning effort</label>
+                      <select id="custom-model-reasoning-effort-select">
+                        <option value="">Default effort</option>
+                        <option value="minimal">Minimal</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="xhigh">X-High</option>
+                      </select>
+                      <p class="settings-copy">Automatic routing keeps OpenRouter load balancing enabled. When reasoning is enabled, the selected effort is sent through OpenRouter's reasoning controls when the model supports it.</p>
+                    </section>
+                  </div>
+                </details>
+
+                <details class="settings-collapsible">
+                  <summary class="settings-collapsible__summary">
+                    <div>
+                      <span class="settings-subsection__eyebrow">Advanced visibility</span>
+                      <strong>Capability flags</strong>
+                    </div>
+                    <span class="settings-collapsible__meta">Open to configure where the model can appear.</span>
+                  </summary>
+                  <div class="settings-collapsible__content">
+                    <label class="tool-toggle"><input type="checkbox" id="custom-model-supports-tools-toggle" checked /> <span>Supports tool calling and can appear in the chat model selector</span></label>
+                    <label class="tool-toggle"><input type="checkbox" id="custom-model-supports-vision-toggle" /> <span>Supports image input for visual analysis</span></label>
+                    <label class="tool-toggle"><input type="checkbox" id="custom-model-supports-structured-toggle" /> <span>Supports structured outputs for strict JSON responses</span></label>
+                  </div>
+                </details>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Catalog action</span>
+                    <h4 class="settings-subsection__title">Save this model variant</h4>
+                  </div>
+                  <div class="settings-inline-actions">
+                    <button class="btn-primary" id="add-custom-model-btn" type="button">Add OpenRouter model</button>
+                    <span id="custom-model-status" class="settings-status" data-tone="muted">No pending model changes</span>
+                  </div>
+                  <p class="settings-copy">You can add the same base model more than once if the reasoning mode, provider route, or capability flags differ.</p>
+                </section>
+              </div>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Configured catalog</span>
+                  <h3>Available custom models</h3>
+                </div>
+                <p>OpenRouter models are saved in settings; built-in DeepSeek models remain available automatically.</p>
+              </div>
+              <div class="settings-subsection">
+                <div id="custom-model-list" class="model-management-list"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-page-grid settings-page-grid--two settings-page-grid--model-panels">
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Chat selector</span>
+                  <h3>Visible models</h3>
+                </div>
+                <p>These rows control which tool-capable models appear in the header ComboBox and in what order.</p>
+              </div>
+              <div class="settings-subsection">
+                <div id="chat-model-visibility-list" class="model-management-list"></div>
+              </div>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Special operations</span>
+                  <h3>Task-specific models</h3>
+                </div>
+                <p>Pick preferred models for helper work without changing the active chat model.</p>
+              </div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Preferred model</span>
+                    <h4 class="settings-subsection__title">Summaries</h4>
+                  </div>
+                  <select id="summary-model-preference-select"></select>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Runtime fallback</span>
+                    <h4 class="settings-subsection__title">Chat summary model <span class="settings-restart-badge">Restart</span></h4>
+                  </div>
+                  <select id="chat-summary-model-select"></select>
+                  <p class="settings-copy">Used when no preferred summary model is set.</p>
+                </section>
+              </div>
+              <details class="settings-collapsible">
+                <summary class="settings-collapsible__summary">
+                  <div>
+                    <span class="settings-subsection__eyebrow">Advanced routing</span>
+                    <strong>Summary fallback order</strong>
+                  </div>
+                  <span class="settings-collapsible__meta">Open only if you need explicit recovery order.</span>
+                </summary>
+                <div class="settings-collapsible__content">
+                  <div class="settings-callout" data-tone="info">Fallback models are used only when the preferred summary model is unavailable.</div>
+                  <div id="summary-model-fallback-list" class="model-management-list"></div>
+                  <div class="settings-inline-actions">
+                    <button class="btn-ghost" id="summary-model-fallback-add-btn" type="button">Add fallback model</button>
+                  </div>
+                </div>
+              </details>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-tab-panel" data-settings-panel="context" aria-labelledby="context-tab">
+          <div class="settings-page-grid settings-page-grid--two settings-page-grid--context">
+            <div class="settings-page-stack">
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Persistent memory</span>
+                    <h3>Scratchpad</h3>
+                  </div>
+                  <p>Structured durable memory injected into the runtime system prompt.</p>
+                </div>
+                <div class="settings-label">Scratchpad sections</div>
+                <p id="scratchpad-readonly-note" class="settings-callout" data-tone="info">Reserve the scratchpad for durable cross-conversation lessons, profile clues, recurring problems, long-running workstreams, preferences, domain facts, and a few general notes.</p>
+                <div id="scratchpad-list" class="scratchpad-list" aria-label="Stored notes list"></div>
+                <div class="scratchpad-toolbar">
+                  <button class="btn-ghost" id="scratchpad-add-btn" type="button">Quick add to General Notes</button>
+                  <span id="scratchpad-count" class="scratchpad-count">0 notes</span>
+                </div>
+              </div>
+
+              <div class="settings-page-section-card settings-page-section-card--summary-policy">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Conversation compression</span>
+                    <h3>Summary policy</h3>
+                  </div>
+                  <p>Define when long conversations get summarized, how detailed the summary should be, and which messages must stay untouched.</p>
+                </div>
+                <div class="settings-subsection-grid settings-subsection-grid--two">
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Compression thresholds</span>
+                      <h4 class="settings-subsection__title">When summaries happen</h4>
+                      <p class="settings-subsection__copy">Choose how soon summarization kicks in and how much detail survives once older turns are condensed.</p>
+                    </div>
+                    <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                      <div class="settings-form-cluster">
+                        <label class="settings-label" for="summary-mode-select">Conversation summary mode</label>
+                        <select id="summary-mode-select">
+                          <option value="auto">Auto</option>
+                          <option value="conservative">Conservative</option>
+                          <option value="aggressive">Aggressive</option>
+                          <option value="never">Never</option>
+                        </select>
+                        <p class="settings-copy">Auto balances cost and continuity, Conservative waits longer before compressing, Aggressive summarizes earlier and more often, and Never disables background summarization.</p>
+                      </div>
+                      <div class="settings-form-cluster">
+                        <label class="settings-label" for="summary-detail-level-select">Summary detail level</label>
+                        <select id="summary-detail-level-select">
+                          <option value="very_concise">Very concise</option>
+                          <option value="concise">Concise</option>
+                          <option value="balanced">Balanced</option>
+                          <option value="detailed">Detailed</option>
+                          <option value="comprehensive">Comprehensive</option>
+                        </select>
+                        <p class="settings-copy">Lower detail trims harder for speed and cost, while higher detail preserves more nuance, decisions, and task history.</p>
+                      </div>
+                      <div class="settings-form-cluster settings-form-cluster--split">
+                        <label class="settings-label" for="summary-trigger-input">Summary trigger in visible tokens (1000-200000)</label>
+                        <input type="number" class="settings-number" id="summary-trigger-input" min="1000" max="200000" value="80000" />
+                        <p class="settings-copy">Once the visible conversation exceeds this threshold, automatic summarization becomes eligible.</p>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Protected context</span>
+                      <h4 class="settings-subsection__title">Message safety window</h4>
+                      <p class="settings-subsection__copy">Keep the conversation opening and latest turn intact even when automatic summarization is active.</p>
+                    </div>
+                    <div class="settings-inline-grid">
+                      <div>
+                        <label class="settings-mini-label" for="summary-skip-first-input">Protect first N messages (0-20)</label>
+                        <input type="number" class="settings-number" id="summary-skip-first-input" min="0" max="20" value="2" />
+                      </div>
+                      <div>
+                        <label class="settings-mini-label" for="summary-skip-last-input">Protect last N messages (0-20)</label>
+                        <input type="number" class="settings-number" id="summary-skip-last-input" min="0" max="20" value="1" />
+                      </div>
+                    </div>
+                    <p class="settings-copy">These messages are excluded from automatic summarization so the assistant keeps your opening context and latest turn intact.</p>
+                  </section>
+
+                  <details class="settings-collapsible settings-collapsible--soft">
+                    <summary class="settings-collapsible__summary">
+                      <div>
+                        <span class="settings-subsection__eyebrow">Advanced summary budgets</span>
+                        <strong>Source window sizing</strong>
+                      </div>
+                      <span class="settings-collapsible__meta">Open only if default compression needs tuning.</span>
+                    </summary>
+                    <div class="settings-collapsible__content">
+                      <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                        <div class="settings-form-cluster settings-form-cluster--split">
+                          <label class="settings-label" for="prompt-preflight-summary-token-count-input">Preflight summary trigger (2000-200000)</label>
+                          <input type="number" class="settings-number" id="prompt-preflight-summary-token-count-input" min="2000" max="200000" value="90000" />
+                          <p class="settings-copy">If the current turn crosses this estimated prompt size, the agent can proactively summarize before it hits tighter runtime compaction pressure.</p>
+                        </div>
+                        <div class="settings-form-cluster settings-form-cluster--split">
+                          <label class="settings-label" for="summary-source-target-tokens-input">Summary source target (1000-40000)</label>
+                          <input type="number" class="settings-number" id="summary-source-target-tokens-input" min="1000" max="40000" value="6000" />
+                          <p class="settings-copy">Target budget for the raw message slice selected as summary source material before prompt overhead is added.</p>
+                        </div>
+                        <div class="settings-form-cluster settings-form-cluster--split">
+                          <label class="settings-label" for="summary-retry-min-source-tokens-input">Summary retry minimum (500-40000)</label>
+                          <input type="number" class="settings-number" id="summary-retry-min-source-tokens-input" min="500" max="40000" value="1500" />
+                          <p class="settings-copy">When a first summary attempt is too large or fails validation, retries can shrink the source window down to this floor.</p>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+
+                </div>
+                <details class="settings-collapsible settings-collapsible--soft">
+                  <summary class="settings-collapsible__summary">
+                    <div>
+                      <span class="settings-subsection__eyebrow">Advanced history selection</span>
+                      <strong>Entropy and hybrid retrieval tuning</strong>
+                    </div>
+                    <span class="settings-collapsible__meta">Open only when classic recency windows stop being enough.</span>
+                  </summary>
+                  <div class="settings-collapsible__content">
+                    <section class="settings-subsection settings-subsection--compact">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Selection strategy</span>
+                        <h4 class="settings-subsection__title">How raw history is chosen</h4>
+                        <p class="settings-subsection__copy">Classic keeps a recency-first window. Entropy scores older blocks by information density. Hybrid also reserves space so retrieval can refill dropped context.</p>
+                      </div>
+                      <div class="settings-form-cluster">
+                        <label class="settings-label" for="context-selection-strategy-select">Context selection strategy</label>
+                        <select id="context-selection-strategy-select">
+                          <option value="classic">Classic history window</option>
+                          <option value="entropy">Entropy only</option>
+                          <option value="entropy_rag_hybrid">Entropy + RAG hybrid</option>
+                        </select>
+                      </div>
+                      <fieldset id="entropy-controls-fieldset" class="settings-conditional-group settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                        <div class="settings-form-cluster">
+                          <label class="settings-label" for="entropy-profile-select">Entropy profile</label>
+                          <select id="entropy-profile-select">
+                            <option value="conservative">Conservative</option>
+                            <option value="balanced">Balanced</option>
+                            <option value="aggressive">Aggressive</option>
+                          </select>
+                          <p class="settings-copy">Conservative keeps more conversational continuity. Aggressive trims harder and favors dense technical context over filler.</p>
+                        </div>
+                        <div class="settings-form-cluster" id="entropy-rag-budget-cluster">
+                          <label class="settings-label" for="entropy-rag-budget-ratio-input">Hybrid RAG reserve (0-80%)</label>
+                          <input type="number" class="settings-number" id="entropy-rag-budget-ratio-input" min="0" max="80" value="35" />
+                          <p class="settings-copy">Only used in Entropy + RAG hybrid mode. Higher values reserve more prompt budget for retrieved context instead of raw history.</p>
+                        </div>
+                        <div class="settings-form-cluster settings-form-cluster--split">
+                          <div class="settings-label">Entropy protection rules</div>
+                          <div class="settings-inline-grid">
+                            <label class="tool-toggle" for="entropy-protect-code-blocks-toggle">
+                              <input type="checkbox" id="entropy-protect-code-blocks-toggle" />
+                              <span>Protect code-heavy blocks</span>
+                            </label>
+                            <label class="tool-toggle" for="entropy-protect-tool-results-toggle">
+                              <input type="checkbox" id="entropy-protect-tool-results-toggle" />
+                              <span>Protect tool results</span>
+                            </label>
+                            <label class="tool-toggle" for="entropy-reference-boost-toggle">
+                              <input type="checkbox" id="entropy-reference-boost-toggle" />
+                              <span>Boost later-referenced context</span>
+                            </label>
+                          </div>
+                          <p class="settings-copy">These rules bias entropy scoring so structured data, tool traces, and context reused later in the thread survive trimming more reliably.</p>
+                        </div>
+                      </fieldset>
+                    </section>
+                  </div>
+                </details>
+              </div>
+
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Runtime safeguards</span>
+                    <h3>Context compaction</h3>
+                  </div>
+                  <p>These controls decide when the agent starts aggressively compressing older runtime history to recover from budget pressure.</p>
+                </div>
+                <div class="settings-callout" data-tone="info">
+                  Compaction is a pressure-release valve, not a primary context strategy. Tune it only after the summary, entropy, and prompt budget settings above feel stable.
+                </div>
+                <div class="settings-subsection-grid settings-subsection-grid--two">
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Trigger</span>
+                      <h4 class="settings-subsection__title">When compaction begins</h4>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="context-compaction-threshold-input">Compaction trigger ratio (0.50-0.98)</label>
+                      <input type="number" class="settings-number" id="context-compaction-threshold-input" min="0.5" max="0.98" step="0.01" value="0.85" />
+                      <p class="settings-copy">The agent starts compacting when the current turn approaches this fraction of the configured prompt max input token budget.</p>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Protected recency</span>
+                      <h4 class="settings-subsection__title">Verbatim rounds to keep</h4>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="context-compaction-keep-recent-rounds-input">Keep recent rounds (0-6)</label>
+                      <input type="number" class="settings-number" id="context-compaction-keep-recent-rounds-input" min="0" max="6" value="2" />
+                      <p class="settings-copy">During compaction, this many latest conversation rounds stay verbatim before older history is merged harder.</p>
+                    </div>
+                  </section>
+                </div>
+              </div>
+
+            </div>
+
+            <div class="settings-page-stack">
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Retrieved context</span>
+                    <h3>RAG injection</h3>
+                  </div>
+                  <p>Control which memory pools can be searched. Automatic RAG/tool-memory prompt injection has been removed; retrieval now happens only through explicit tool usage.</p>
+                </div>
+                <p id="rag-disabled-note" class="settings-callout" data-tone="warning" hidden>RAG is disabled in the environment, so sync and auto-injection are unavailable.</p>
+                <div id="rag-inject-options" class="rag-settings-grid">
+                  <div class="rag-setting-group">
+                    <label class="settings-label" for="rag-sensitivity-select">Injection sensitivity</label>
+                    <select id="rag-sensitivity-select" class="settings-select">
+                      <option value="flexible">Flexible</option>
+                      <option value="normal">Normal</option>
+                      <option value="strict">Strict</option>
+                    </select>
+                    <p id="rag-sensitivity-hint" class="settings-copy">Normal: uses a balanced threshold around 0.35, which is usually the best tradeoff between relevant recall and prompt cleanliness.</p>
+                  </div>
+
+                  <div class="rag-setting-group">
+                    <label class="settings-label" for="rag-context-size-select">Injected context size</label>
+                    <select id="rag-context-size-select" class="settings-select">
+                      <option value="small">Small (2 chunks)</option>
+                      <option value="medium">Medium (5 chunks)</option>
+                      <option value="large">Large (8 chunks)</option>
+                    </select>
+                    <p class="settings-copy">This is the per-turn cap for injected material. Larger values preserve more context, but they also consume more prompt budget.</p>
+                  </div>
+
+                  <div class="rag-setting-group rag-setting-group--full">
+                    <div class="settings-label">Auto-inject configuration</div>
+                    <label class="tool-toggle" for="rag-auto-inject-enabled-toggle">
+                      <input type="checkbox" id="rag-auto-inject-enabled-toggle" />
+                      <span>Enable automatic RAG injection</span>
+                    </label>
+                    <p class="settings-copy">When enabled, the assistant automatically retrieves and injects relevant context from selected source pools into the prompt. When disabled, retrieval only happens through explicit tool usage (search_knowledge_base).</p>
+                  </div>
+
+                  <div class="rag-setting-group rag-setting-group--full">
+                    <div class="settings-label">RAG source pools</div>
+                    <p class="settings-copy">Each row maps one memory pool. Search controls whether the assistant may retrieve from that pool during normal RAG lookup. Tool outputs come from executed tools inside chats, while saved web/fetches are remembered external results kept separately for reuse.</p>
+                    <div class="rag-source-matrix" role="group" aria-label="RAG source pool controls">
+                      <div class="rag-source-matrix__row">
+                        <div class="rag-source-matrix__source">
+                          <strong>Chats</strong>
+                          <small>Earlier user and assistant messages indexed from previous conversations. Useful when the assistant should recall prior discussion without relying only on the visible thread.</small>
+                        </div>
+                        <div class="rag-source-matrix__actions">
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-source-type" value="conversation" />
+                            <span>Search</span>
+                          </label>
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-auto-inject-source-type" value="conversation" />
+                            <span>Auto inject</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div class="rag-source-matrix__group-label">Tool-derived context</div>
+
+                      <div class="rag-source-matrix__row">
+                        <div class="rag-source-matrix__source">
+                          <strong>Tool outputs</strong>
+                          <small>Outputs captured from executed tools inside conversation history, such as searches, fetches, or analysis steps. Use this when recent tool work should stay searchable in chat context.</small>
+                        </div>
+                        <div class="rag-source-matrix__actions">
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-source-type" value="tool_result" />
+                            <span>Search</span>
+                          </label>
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-auto-inject-source-type" value="tool_result" />
+                            <span>Auto inject</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div class="rag-source-matrix__row">
+                        <div class="rag-source-matrix__source">
+                          <strong>Uploaded documents</strong>
+                          <small>Manual files, notes, or other knowledge-base content added from Settings. Use this when uploaded reference material should participate in retrieval.</small>
+                        </div>
+                        <div class="rag-source-matrix__actions">
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-source-type" value="uploaded_document" />
+                            <span>Search</span>
+                          </label>
+                          <label class="rag-source-mode-toggle">
+                            <input type="checkbox" name="rag-auto-inject-source-type" value="uploaded_document" />
+                            <span>Auto inject</span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                    <p class="settings-copy">In practice, Search controls which pools are available to retrieval/search surfaces, while Auto inject controls which pools may be inserted automatically into prompts. These checklists are independent on purpose.</p>
+                    <p id="rag-source-summary" class="settings-copy">Search is enabled for the selected pools only; unselected pools will not participate in generic RAG retrieval.</p>
+                    <p id="rag-auto-inject-source-summary" class="settings-copy">Auto inject applies only to the selected pools.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Prompt allocation</span>
+                    <h3>Context budgets</h3>
+                  </div>
+                  <p>Fine-tune how much of the prompt window is reserved for raw history, summaries, retrieved context, remembered web results, and tool traces.</p>
+                </div>
+                <div class="settings-subsection-grid settings-subsection-grid--two">
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Prompt window</span>
+                      <h4 class="settings-subsection__title">Global ceiling</h4>
+                      <p class="settings-subsection__copy">Set the effective input ceiling first, then keep enough room for the model to answer without crowding the prompt.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-max-input-tokens-input">Prompt max input tokens (8000-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-max-input-tokens-input" min="8000" max="120000" value="80000" />
+                      <p class="settings-copy">Main upper bound used when the app decides how much total context can be sent into a model call.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-response-token-reserve-input">Response reserve (1000-32000)</label>
+                      <input type="number" class="settings-number" id="prompt-response-token-reserve-input" min="1000" max="32000" value="8000" />
+                      <p class="settings-copy">Held back for the model's answer. It must still leave at least 2000 tokens available for prompt input.</p>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Conversation lanes</span>
+                      <h4 class="settings-subsection__title">History and summaries</h4>
+                      <p class="settings-subsection__copy">Control how much near-term raw chat history stays visible before older turns move into condensed form.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-recent-history-max-tokens-input">Recent history budget (1000-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-recent-history-max-tokens-input" min="1000" max="120000" value="32000" />
+                      <p class="settings-copy">Caps how much near-term chat history can be preserved before older material is summarized or trimmed.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-summary-max-tokens-input">Summary budget (500-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-summary-max-tokens-input" min="500" max="120000" value="12000" />
+                      <p class="settings-copy">Maximum prompt space reserved for background summaries when long threads are compressed.</p>
+                    </div>
+                  </section>
+
+                  <section class="settings-subsection">
+                    <div class="settings-subsection__header">
+                      <span class="settings-subsection__eyebrow">Retrieved context</span>
+                      <h4 class="settings-subsection__title">RAG lane</h4>
+                      <p class="settings-subsection__copy">Reserve a predictable share of prompt space for retrieved context without letting it crowd out the active conversation.</p>
+                    </div>
+                    <div class="settings-form-cluster">
+                      <label class="settings-label" for="prompt-rag-max-tokens-input">RAG budget (0-120000)</label>
+                      <input type="number" class="settings-number" id="prompt-rag-max-tokens-input" min="0" max="120000" value="18000" />
+                      <p class="settings-copy">Upper bound for generic retrieved context coming from chats, tool outputs, saved web/fetches, and uploaded documents.</p>
+                    </div>
+                  </section>
+                </div>
+                <details class="settings-collapsible settings-collapsible--soft">
+                  <summary class="settings-collapsible__summary">
+                    <div>
+                      <span class="settings-subsection__eyebrow">Advanced lane budgets</span>
+                      <strong>Dedicated tool memory and trace retention</strong>
+                    </div>
+                    <span class="settings-collapsible__meta">Open when you want separate caps for saved fetch memory or verbose tool transcripts.</span>
+                  </summary>
+                  <div class="settings-collapsible__content">
+                    <div class="settings-subsection-grid settings-subsection-grid--two">
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Tool transcript</span>
+                          <h4 class="settings-subsection__title">Trace retention</h4>
+                        </div>
+                        <div class="settings-form-cluster">
+                          <label class="settings-label" for="prompt-tool-trace-max-tokens-input">Tool trace budget (0-120000)</label>
+                          <input type="number" class="settings-number" id="prompt-tool-trace-max-tokens-input" min="0" max="120000" value="9000" />
+                          <p class="settings-copy">Controls how much tool-call transcript detail can survive into the next model turn before aggressive compaction begins.</p>
+                        </div>
+                      </section>
+                    </div>
+                  </div>
+                </details>
+              </div>
+
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Canvas visibility</span>
+                    <h3>Canvas limits</h3>
+                  </div>
+                  <p>Control how much of large canvas files the assistant can see by default and per targeted read.</p>
+                </div>
+                <div class="settings-callout" data-tone="info">Ignored Canvas documents stay available for later reuse, but the prompt keeps only their title, metadata, and ignore reason until the assistant re-enables them.</div>
+                <div class="settings-page-grid settings-page-grid--two">
+                  <div>
+                    <label class="settings-label" for="canvas-prompt-lines-input">Prompt max lines (100-3000)</label>
+                    <input type="number" class="settings-number" id="canvas-prompt-lines-input" min="100" max="3000" value="250" />
+                    <p class="settings-copy">Injected automatically into each turn for the active canvas document. The token budget below can still clip this earlier on very long or Unicode-heavy files.</p>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="canvas-prompt-tokens-input">Prompt token budget (500-50000)</label>
+                    <input type="number" class="settings-number" id="canvas-prompt-tokens-input" min="500" max="50000" value="4000" />
+                    <p class="settings-copy">Hard cap on canvas visible-content tokens per turn. Reduce for Unicode-heavy documents (Turkish, Arabic, CJK) that tokenise at a higher rate than ASCII.</p>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="canvas-prompt-chars-input">Prompt max chars (1000-200000)</label>
+                    <input type="number" class="settings-number" id="canvas-prompt-chars-input" min="1000" max="200000" value="20000" />
+                    <p class="settings-copy">Hard ceiling on the raw character budget for the active canvas excerpt before token-based trimming kicks in.</p>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="canvas-expand-lines-input">Expand max lines (100-4000)</label>
+                    <input type="number" class="settings-number" id="canvas-expand-lines-input" min="100" max="4000" value="1600" />
+                    <p class="settings-copy">Used when the assistant calls the larger canvas expansion tool.</p>
+                  </div>
+                </div>
+                <details class="settings-collapsible settings-collapsible--soft">
+                  <summary class="settings-collapsible__summary">
+                    <div>
+                      <span class="settings-subsection__eyebrow">Advanced canvas reads</span>
+                      <strong>Line clipping and targeted scroll limits</strong>
+                    </div>
+                    <span class="settings-collapsible__meta">Open when very long code or prose lines still crowd the prompt.</span>
+                  </summary>
+                  <div class="settings-collapsible__content">
+                    <div class="settings-subsection-grid settings-subsection-grid--three">
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Long code lines</span>
+                          <h4 class="settings-subsection__title">Code line clip length</h4>
+                        </div>
+                        <label class="settings-label" for="canvas-code-line-chars-input">Code line clip length (40-1000)</label>
+                        <input type="number" class="settings-number" id="canvas-code-line-chars-input" min="40" max="1000" value="180" />
+                        <p class="settings-copy">Long code lines are clipped to this width unless the full active document preview already fits inside the current prompt budget.</p>
+                      </section>
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Long text lines</span>
+                          <h4 class="settings-subsection__title">Text line clip length</h4>
+                        </div>
+                        <label class="settings-label" for="canvas-text-line-chars-input">Text line clip length (40-1000)</label>
+                        <input type="number" class="settings-number" id="canvas-text-line-chars-input" min="40" max="1000" value="100" />
+                        <p class="settings-copy">Long prose or markdown lines are clipped to this width unless the full preview already fits inside the current prompt budget.</p>
+                      </section>
+                      <section class="settings-subsection settings-subsection--compact">
+                        <div class="settings-subsection__header">
+                          <span class="settings-subsection__eyebrow">Targeted reads</span>
+                          <h4 class="settings-subsection__title">Scroll window lines</h4>
+                        </div>
+                        <label class="settings-label" for="canvas-scroll-lines-input">Scroll window lines (50-800)</label>
+                        <input type="number" class="settings-number" id="canvas-scroll-lines-input" min="50" max="800" value="200" />
+                        <p class="settings-copy">Caps how many lines a single targeted canvas scroll can return.</p>
+                      </section>
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-tab-panel" data-settings-panel="tools" aria-labelledby="tools-tab">
+          <div class="settings-page-grid settings-page-grid--two">
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Tool execution</span>
+                  <h3>Tool budgets</h3>
+                </div>
+                <p>Control how much tool work the assistant and helper can perform per request.</p>
+              </div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Execution caps</span>
+                    <h4 class="settings-subsection__title">Parent model limits</h4>
+                  </div>
+                  <label class="settings-label" for="max-steps-input">Tool step limit (1-50)</label>
+                  <input type="number" class="settings-number" id="max-steps-input" min="1" max="50" value="5" />
+                  <label class="settings-label" for="max-parallel-tools-input">Parent model max parallel tools (1-12)</label>
+                  <input type="number" class="settings-number" id="max-parallel-tools-input" min="1" max="12" value="4" />
+                  <label class="settings-label" for="search-tool-query-limit-input">Search queries per call (1-20)</label>
+                  <input type="number" class="settings-number" id="search-tool-query-limit-input" min="1" max="20" value="5" />
+                  <p class="settings-copy">Applies to <code>search_web</code>, <code>search_news_ddgs</code>, <code>search_news_google</code>, and <code>search_scholar</code>. The assistant sees this cap in its tool guidance and splits broader search plans automatically.</p>
+                </section>
+
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Delegated work</span>
+                    <h4 class="settings-subsection__title">Sub-agent quick budget</h4>
+                  </div>
+                  <label class="settings-label" for="sub-agent-max-steps-input">Sub-agent max steps (1-12)</label>
+                  <input type="number" class="settings-number" id="sub-agent-max-steps-input" min="1" max="12" value="6" />
+                  <p class="settings-copy">Calls above the parallel limit queue in the same turn, and the sub-agent may still finish early if it already has enough evidence.</p>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Fetched content clipping</span>
+                    <h4 class="settings-subsection__title">How aggressively long fetches are trimmed</h4>
+                  </div>
+                  <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                    <div>
+                      <label class="settings-label" for="fetch-threshold-input">Clipping threshold in tokens (400-20000)</label>
+                      <input type="number" class="settings-number" id="fetch-threshold-input" min="400" max="20000" value="3500" />
+                    </div>
+                    <div>
+                      <label class="settings-label" for="fetch-aggressiveness-input">Clipping aggressiveness (0-100)</label>
+                      <input type="number" class="settings-number" id="fetch-aggressiveness-input" min="0" max="100" value="50" />
+                    </div>
+                  </div>
+                </section>
+              </div>
+              <details class="settings-collapsible settings-collapsible--soft">
+                <summary class="settings-collapsible__summary">
+                  <div>
+                    <span class="settings-subsection__eyebrow">Advanced fetch controls</span>
+                    <strong>Summarized fetch tuning</strong>
+                  </div>
+                  <span class="settings-collapsible__meta">Open when long pages still need tighter fetch-summary limits.</span>
+                </summary>
+                <div class="settings-collapsible__content">
+                  <div class="settings-subsection-grid settings-subsection-grid--two">
+                    <section class="settings-subsection settings-subsection--compact settings-subsection--full">
+                      <div class="settings-subsection__header">
+                        <span class="settings-subsection__eyebrow">Summarized fetch budget</span>
+                        <h4 class="settings-subsection__title">How much page text reaches the summary model</h4>
+                      </div>
+                      <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                        <div>
+                          <label class="settings-label" for="fetch-summarize-max-input-chars-input">Summary source max chars (4000-100000)</label>
+                          <input type="number" class="settings-number" id="fetch-summarize-max-input-chars-input" min="4000" max="100000" value="80000" />
+                          <p class="settings-copy">Caps how much cleaned page content is forwarded to <code>fetch_url_summarized</code> before the helper model sees it.</p>
+                        </div>
+                        <div>
+                          <label class="settings-label" for="fetch-summarize-max-output-tokens-input">Summary output token budget (200-4000)</label>
+                          <input type="number" class="settings-number" id="fetch-summarize-max-output-tokens-input" min="200" max="4000" value="2400" />
+                          <p class="settings-copy">Sets the default output-token budget for fetched URL summaries. Increase it for denser source summaries; lower it for tighter cost control.</p>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+              </details>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Cache</span>
+                  <h3>Cache settings</h3>
+                </div>
+                <p>Control how long fetched web content stays cached and whether supported OpenRouter models use prompt caching.</p>
+              </div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Web cache</span>
+                    <h4 class="settings-subsection__title">Fetched content retention</h4>
+                  </div>
+                  <label class="settings-label" for="web-cache-ttl-hours-input">Web cache TTL in hours (0-168)</label>
+                  <input type="number" class="settings-number" id="web-cache-ttl-hours-input" min="0" max="168" value="24" />
+                  <p class="settings-copy">Set to 0 to disable the SQLite-backed web cache.</p>
+                </section>
+
+                <div class="settings-toggle-panel">
+                  <label class="tool-toggle"><input type="checkbox" id="openrouter-prompt-cache-enabled-toggle" /> <span>Enable OpenRouter prompt cache when the selected model supports it</span></label>
+                  <p class="settings-copy">This only activates when the chosen OpenRouter model and provider actually support prompt caching.</p>
+                  <div id="openrouter-anthropic-cache-ttl-row" class="settings-cache-ttl-row">
+                    <span class="settings-label">Anthropic cache TTL</span>
+                    <label class="settings-cache-ttl-option"><input type="radio" name="openrouter-anthropic-cache-ttl" value="5m" /> 5 minutes <span class="settings-copy settings-copy--inline">(1.25× write cost)</span></label>
+                    <label class="settings-cache-ttl-option"><input type="radio" name="openrouter-anthropic-cache-ttl" value="1h" /> 1 hour <span class="settings-copy settings-copy--inline">(2× write cost)</span></label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Provider &amp; auth</span>
+                  <h3>Runtime identity and session policy <span class="settings-restart-badge">Restart</span></h3>
+                </div>
+                <p>These fields are saved in Settings so the runtime no longer has to lean on environment variables for routine provider attribution and session tuning.</p>
+              </div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">OpenRouter attribution</span>
+                    <h4 class="settings-subsection__title">HTTP headers</h4>
+                  </div>
+                  <label class="settings-label" for="openrouter-http-referer-input">HTTP referer</label>
+                  <input id="openrouter-http-referer-input" class="settings-text" type="url" placeholder="https://your-app.example.com" />
+                  <label class="settings-label" for="openrouter-app-title-input">Application title</label>
+                  <input id="openrouter-app-title-input" class="settings-text" type="text" placeholder="Flask RAG Vision Chatbot" />
+                  <p class="settings-copy">Sent only to OpenRouter requests for attribution and analytics-friendly routing headers.</p>
+                </section>
+
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Login sessions</span>
+                    <h4 class="settings-subsection__title">Timeout and lockout policy</h4>
+                  </div>
+                  <div class="settings-inline-grid">
+                    <div>
+                      <label class="settings-mini-label" for="login-session-timeout-minutes-input">Session timeout (minutes)</label>
+                      <input type="number" class="settings-number" id="login-session-timeout-minutes-input" min="1" max="10080" value="30" />
+                    </div>
+                    <div>
+                      <label class="settings-mini-label" for="login-max-failed-attempts-input">Max failed attempts</label>
+                      <input type="number" class="settings-number" id="login-max-failed-attempts-input" min="1" max="50" value="3" />
+                    </div>
+                    <div>
+                      <label class="settings-mini-label" for="login-lockout-seconds-input">Lockout (seconds)</label>
+                      <input type="number" class="settings-number" id="login-lockout-seconds-input" min="1" max="86400" value="300" />
+                    </div>
+                    <div>
+                      <label class="settings-mini-label" for="login-remember-session-days-input">Remember me (days)</label>
+                      <input type="number" class="settings-number" id="login-remember-session-days-input" min="1" max="3650" value="3650" />
+                    </div>
+                  </div>
+                  <p class="settings-copy">Useful when the app sits behind a PIN and you want session behavior to be adjustable without editing runtime files.</p>
+                </section>
+              </div>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Sub-agent</span>
+                  <h3>Runtime limits</h3>
+                </div>
+                <p>Control how long the delegated helper can run, how often it may retry, and how much parallel work it can do before falling back.</p>
+              </div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Runtime knobs</span>
+                    <h4 class="settings-subsection__title">Timeout, retries, and parallelism</h4>
+                  </div>
+                  <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
+                    <div>
+                      <label class="settings-label" for="sub-agent-timeout-seconds-input">Timeout in seconds (5-900)</label>
+                      <input type="number" class="settings-number" id="sub-agent-timeout-seconds-input" min="5" max="900" value="240" />
+                      <p class="settings-copy">If the helper exceeds this limit, it pauses and may continue on a fallback model when available.</p>
+                    </div>
+                    <div>
+                      <label class="settings-label" for="sub-agent-retry-attempts-input">Retry attempts (0-5)</label>
+                      <input type="number" class="settings-number" id="sub-agent-retry-attempts-input" min="0" max="5" value="2" />
+                      <p class="settings-copy">Retries stay on the same model before moving to the next fallback candidate.</p>
+                    </div>
+                    <div>
+                      <label class="settings-label" for="sub-agent-retry-delay-seconds-input">Retry delay in seconds (0-60)</label>
+                      <input type="number" class="settings-number" id="sub-agent-retry-delay-seconds-input" min="0" max="60" value="5" />
+                      <p class="settings-copy">A short delay can help recover from transient provider pressure without losing the run.</p>
+                    </div>
+                    <div>
+                      <label class="settings-label" for="sub-agent-max-parallel-tools-input">Max parallel tools (1-12)</label>
+                      <input type="number" class="settings-number" id="sub-agent-max-parallel-tools-input" min="1" max="12" value="2" />
+                      <p class="settings-copy">Limits how many read-only sub-agent calls can run at once. Use the same value as the parent limit if you want both to behave identically.</p>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Read-only boundaries</span>
+                    <h4 class="settings-subsection__title">Read-only tool access</h4>
+                    <p class="settings-subsection__copy">Research boundaries now cover a broader read-only runtime tool set. Choose which web-only tools the delegated helper may use during research. Write-capable tools remain unavailable to the helper.</p>
+                  </div>
+                  <div class="tool-permission-sections" id="sub-agent-tool-toggles">
+                    {% for section in sub_agent_tool_sections %}
+                    <section class="tool-permission-section">
+                      <div class="tool-permission-section__header">
+                        <div>
+                          <div class="settings-label">{{ section.title }}</div>
+                          <p class="settings-copy">{{ section.description }}</p>
+                        </div>
+                        <p class="settings-copy">{{ section.note }}</p>
+                      </div>
+                      <div class="tool-toggles tool-toggles--page tool-permission-section__tools">
+                        {% for tool in section.tools %}
+                        <label class="tool-toggle">
+                          <input type="checkbox" name="sub-agent-allowed-tool" value="{{ tool.name }}" />
+                          <span>
+                            <strong>{{ tool.label }}</strong>
+                            {% if tool.description %}<br /><small>{{ tool.description }}</small>{% endif %}
+                          </span>
+                        </label>
+                        {% endfor %}
+                      </div>
+                    </section>
+                    {% endfor %}
+                  </div>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Canvas handoff</span>
+                    <h4 class="settings-subsection__title">Research result handling</h4>
+                    <p class="settings-subsection__copy">Control whether completed sub-agent research is auto-saved to Canvas and whether the Canvas panel opens immediately after that save.</p>
+                  </div>
+                  <div class="settings-toggle-panel">
+                    <label class="settings-toggle-row" for="sub-agent-canvas-auto-save-toggle">
+                      <span>
+                        <strong>Auto-save research to Canvas</strong>
+                        <small>When enabled, completed sub-agent research is turned into a Canvas document automatically.</small>
+                      </span>
+                      <input type="checkbox" id="sub-agent-canvas-auto-save-toggle" />
+                    </label>
+                    <label class="settings-toggle-row" for="sub-agent-canvas-auto-open-toggle">
+                      <span>
+                        <strong>Open Canvas after auto-save</strong>
+                        <small>When enabled, the Canvas panel opens immediately after the research document is saved.</small>
+                      </span>
+                      <input type="checkbox" id="sub-agent-canvas-auto-open-toggle" />
+                    </label>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-page-section-card">
+            <div class="settings-page-section-card__header">
+              <div>
+                <span class="settings-section-kicker">Runtime contract</span>
+                <h3>Tool permissions</h3>
+              </div>
+              <p>Only enabled tools are exposed to the assistant and allowed to execute. This page does not widen the sandbox or override feature flags.</p>
+            </div>
+            <div class="settings-callout" data-tone="info">These toggles only control tool exposure. They do not bypass workspace, canvas, auth, or environment-level safety checks.</div>
+            <div class="tool-permission-sections" id="tool-toggles">
+              {% for section in tool_sections %}
+              <section class="tool-permission-section">
+                <div class="tool-permission-section__header">
+                  <div>
+                    <div class="settings-label">{{ section.title }}</div>
+                    <p class="settings-copy">{{ section.description }}</p>
+                  </div>
+                  <p class="settings-copy">{{ section.note }}</p>
+                </div>
+                <div class="tool-toggles tool-toggles--page tool-permission-section__tools">
+                  {% for tool in section.tools %}
+                  <label class="tool-toggle">
+                    <input type="checkbox" value="{{ tool.name }}" />
+                    <span>
+                      <strong>{{ tool.label }}</strong>
+                      {% if tool.description %}<br /><small>{{ tool.description }}</small>{% endif %}
+                    </span>
+                  </label>
+                  {% endfor %}
+                </div>
+              </section>
+              {% endfor %}
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-tab-panel" data-settings-panel="knowledge" aria-labelledby="knowledge-tab">
+          <div class="settings-page-grid settings-page-grid--two">
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Manual knowledge</span>
+                  <h3>Upload document</h3>
+                </div>
+                <p>Add a file to RAG and attach a short explanation so retrieval stays targeted.</p>
+              </div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Source file</span>
+                    <h4 class="settings-subsection__title">Choose the document</h4>
+                  </div>
+                  <label class="settings-label" for="kb-upload-file">File</label>
+                  <input
+                    id="kb-upload-file"
+                    class="settings-text"
+                    type="file"
+                    accept=".txt,.md,.csv,.pdf,.docx,.py,.js,.ts,.tsx,.jsx,.json,.html,.css,.scss,.sh,.sql,.yaml,.yml"
+                  />
+                  <p class="settings-copy">Text, markdown, CSV, PDF, DOCX, and common code files are supported.</p>
+                </section>
+
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Source metadata</span>
+                    <h4 class="settings-subsection__title">Title and description</h4>
+                  </div>
+                  <label class="settings-label" for="kb-upload-title">Title</label>
+                  <input id="kb-upload-title" class="settings-text" type="text" placeholder="Short source name" />
+                  <label class="settings-label" for="kb-upload-description">Description</label>
+                  <textarea id="kb-upload-description" rows="4" placeholder="Why should the assistant use this source?"></textarea>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Publishing controls</span>
+                    <h4 class="settings-subsection__title">Injection and upload</h4>
+                  </div>
+                  <label class="tool-toggle">
+                    <input type="checkbox" id="kb-upload-auto-inject-toggle" checked />
+                    <span>Allow this document in automatic RAG injection</span>
+                  </label>
+                  <div class="kb-actions-row kb-actions-row--upload">
+                    <div class="kb-actions-row__buttons">
+                      <button class="btn-ghost" id="kb-suggest-btn" type="button">Generate title &amp; description</button>
+                      <button class="btn-primary" id="kb-upload-btn" type="button">Upload to knowledge base</button>
+                    </div>
+                    <span id="kb-upload-status" class="settings-status">Ready to upload</span>
+                  </div>
+                </section>
+              </div>
+            </div>
+
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">RAG maintenance</span>
+                  <h3>Knowledge base</h3>
+                </div>
+                <p>Sync conversation history into RAG and manage indexed sources.</p>
+              </div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Sync</span>
+                    <h4 class="settings-subsection__title">Import conversation history</h4>
+                  </div>
+                  <div class="kb-actions-row">
+                    <button class="btn-primary" id="kb-sync-btn" type="button">Sync chats</button>
+                    <span id="kb-status" class="settings-status">Knowledge base idle</span>
+                  </div>
+                </section>
+
+                <section class="settings-subsection settings-subsection--full">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Indexed sources</span>
+                    <h4 class="settings-subsection__title">Current knowledge inventory</h4>
+                  </div>
+                  <div class="kb-documents-block">
+                    <div id="kb-documents-list" class="kb-documents-list"></div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-page-section-card">
+            <div class="settings-page-section-card__header">
+              <div>
+                <span class="settings-section-kicker">Knowledge runtime</span>
+                <h3>Feature gates and ingestion defaults <span class="settings-restart-badge">Restart</span></h3>
+              </div>
+              <p>These switches now live in the Settings UI so document, OCR, transcript, and retrieval behavior can be tuned without editing `.env` for every operational change.</p>
+            </div>
+            <div class="settings-callout" data-tone="warning">These values are saved immediately, but core runtime modules may need a server restart before every change becomes active.</div>
+            <div class="settings-subsection-grid settings-subsection-grid--three">
+              <section class="settings-subsection settings-subsection--compact">
+                <div class="settings-subsection__header">
+                  <span class="settings-subsection__eyebrow">Core features</span>
+                  <h4 class="settings-subsection__title">Memory, OCR, and RAG</h4>
+                </div>
+                <label class="tool-toggle"><input type="checkbox" id="conversation-memory-enabled-toggle" /> <span>Enable conversation memory</span></label>
+                <label class="tool-toggle"><input type="checkbox" id="ocr-enabled-toggle" /> <span>Enable OCR pipeline</span></label>
+                <label class="tool-toggle"><input type="checkbox" id="rag-enabled-toggle" /> <span>Enable RAG and indexed retrieval</span></label>
+              </section>
+
+              <section class="settings-subsection settings-subsection--compact">
+                <div class="settings-subsection__header">
+                  <span class="settings-subsection__eyebrow">YouTube transcripts</span>
+                  <h4 class="settings-subsection__title">Transcript source</h4>
+                </div>
+                <label class="tool-toggle"><input type="checkbox" id="youtube-transcripts-enabled-toggle" /> <span>Enable YouTube transcripts</span></label>
+              </section>
+
+              <details class="settings-collapsible settings-collapsible--soft">
+                <summary class="settings-collapsible__summary">
+                  <div>
+                    <span class="settings-subsection__eyebrow">Advanced retrieval</span>
+                    <strong>Chunking and retrieval</strong>
+                  </div>
+                  <span class="settings-collapsible__meta">Open to tune RAG indexing behavior.</span>
+                </summary>
+                <div class="settings-collapsible__content">
+                  <div class="settings-form-cluster">
+                    <label class="settings-label" for="rag-chunk-size-input">Chunk size</label>
+                    <input type="number" class="settings-number" id="rag-chunk-size-input" min="300" max="1000000" value="1800" />
+                  </div>
+                  <div class="settings-form-cluster">
+                    <label class="settings-label" for="rag-chunk-overlap-input">Chunk overlap</label>
+                    <input type="number" class="settings-number" id="rag-chunk-overlap-input" min="0" max="4000" value="250" />
+                  </div>
+                  <div class="settings-form-cluster">
+                    <label class="settings-label" for="rag-max-chunks-per-source-input">Max chunks per source</label>
+                    <input type="number" class="settings-number" id="rag-max-chunks-per-source-input" min="1" max="20" value="2" />
+                  </div>
+                  <div class="settings-form-cluster">
+                    <label class="settings-label" for="rag-search-top-k-input">Search top K</label>
+                    <input type="number" class="settings-number" id="rag-search-top-k-input" min="1" max="50" value="5" />
+                  </div>
+                  <div class="settings-form-cluster">
+                    <label class="settings-label" for="rag-search-min-similarity-input">Min similarity</label>
+                    <input type="number" class="settings-number" id="rag-search-min-similarity-input" min="0" max="1" step="0.01" value="0.35" />
+                  </div>
+                </div>
+              </details>
+
+              <section class="settings-subsection settings-subsection--compact">
+                <div class="settings-subsection__header">
+                  <span class="settings-subsection__eyebrow">Query expansion</span>
+                  <h4 class="settings-subsection__title">Variant generation</h4>
+                </div>
+                <label class="tool-toggle"><input type="checkbox" id="rag-query-expansion-enabled-toggle" /> <span>Enable RAG query expansion</span></label>
+                <label class="settings-label" for="rag-query-expansion-max-variants-input">Max query variants</label>
+                <input type="number" class="settings-number" id="rag-query-expansion-max-variants-input" min="1" max="10" value="2" />
+                <p class="settings-copy">Higher values improve recall on fuzzy searches, but they also increase retrieval work and noise.</p>
+              </section>
+
+              <section class="settings-subsection settings-subsection--compact">
+                <div class="settings-subsection__header">
+                  <span class="settings-subsection__eyebrow">Fetch storage</span>
+                  <h4 class="settings-subsection__title">Persisted text caps</h4>
+                </div>
+                <label class="settings-label" for="fetch-raw-max-text-chars-input">Raw fetch max chars</label>
+                <input type="number" class="settings-number" id="fetch-raw-max-text-chars-input" min="1000" max="1000000" value="24000" />
+                <label class="settings-label" for="fetch-summary-max-chars-input">Summary memory max chars</label>
+                <input type="number" class="settings-number" id="fetch-summary-max-chars-input" min="500" max="1000000" value="8000" />
+                <p class="settings-copy">Controls how much fetched source text and distilled fetch memory survive for later reuse.</p>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-tab-panel" data-settings-panel="activity" aria-labelledby="activity-tab" hidden>
+          <div class="settings-page-grid settings-page-grid--two">
+            <section class="settings-page-section-card settings-page-section-card--activity-log">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Outbound LLM requests</span>
+                  <h3>Activity Log</h3>
+                </div>
+                <p>Every provider request — model, token count, cost, latency, and raw request/response summary payloads.</p>
+              </div>
+
+              <div class="activity-toolbar-row" role="group" aria-label="Activity filters">
+                <label class="settings-label" for="activity-filter-conversation">Conversation</label>
+                <select id="activity-filter-conversation" class="settings-select activity-filter-select activity-filter-select--wide">
+                  <option value="">All chats</option>
+                </select>
+
+                <label class="settings-label" for="activity-filter-provider">Provider</label>
+                <select id="activity-filter-provider" class="settings-select activity-filter-select">
+                  <option value="">All</option>
+                </select>
+
+                <label class="settings-label" for="activity-filter-operation">Operation</label>
+                <select id="activity-filter-operation" class="settings-select activity-filter-select">
+                  <option value="">All</option>
+                  <option value="agent_step">Chat / Agent</option>
+                  <option value="fetch_summarize">Fetch Summarize</option>
+                  <option value="prune">Prune</option>
+                  <option value="image_analysis">Image Analysis</option>
+                  <option value="image_question">Image Question</option>
+                  <option value="summarize_reformat">Summarize Reformat</option>
+                </select>
+
+                <label class="settings-label" for="activity-filter-status">Status</label>
+                <select id="activity-filter-status" class="settings-select activity-filter-select">
+                  <option value="">All</option>
+                  <option value="ok">OK</option>
+                  <option value="error">Error</option>
+                  <option value="stream_error">Stream Error</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+
+                <div class="settings-inline-actions activity-toolbar-actions">
+                  <button class="btn-primary" id="activity-filter-apply-btn" type="button">Apply</button>
+                  <button class="btn-ghost" id="activity-filter-reset-btn" type="button">Reset</button>
+                  <button class="btn-ghost btn-ghost--danger" id="activity-purge-btn" type="button">Purge expired</button>
+                </div>
+              </div>
+
+              <div id="activity-list-root" class="activity-list-root">
+                <p class="settings-copy" id="activity-list-placeholder">Loading activity log…</p>
+                <table class="activity-table" id="activity-table" hidden>
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Provider</th>
+                      <th>Model</th>
+                      <th>Operation</th>
+                      <th>Status</th>
+                      <th>Tokens (in/out)</th>
+                      <th>Cache</th>
+                      <th>Latency</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="activity-table-body"></tbody>
+                </table>
+                <div class="activity-pagination" id="activity-pagination" hidden>
+                  <button class="btn-ghost" id="activity-prev-btn" type="button">&#8592; Prev</button>
+                  <span id="activity-page-info"></span>
+                  <button class="btn-ghost" id="activity-next-btn" type="button">Next &#8594;</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-page-section-card settings-page-section-card--activity-detail" id="activity-detail-section" hidden>
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Request detail</span>
+                  <h3 id="activity-detail-title">Record #…</h3>
+                </div>
+                <div class="settings-inline-actions">
+                  <button class="btn-ghost" id="activity-detail-copy-btn" type="button">Copy JSON</button>
+                  <button class="btn-ghost activity-detail-close-btn" id="activity-detail-close-btn" type="button">Close</button>
+                </div>
+              </div>
+
+              <div class="activity-detail-summary" id="activity-detail-summary" hidden></div>
+              <div class="activity-detail-toolbar">
+                <div class="activity-detail-view-toggle" role="tablist" aria-label="Activity detail view">
+                  <button class="btn-ghost activity-detail-view-btn is-active" id="activity-detail-view-full" type="button" data-activity-detail-view="full">Full</button>
+                  <button class="btn-ghost activity-detail-view-btn" id="activity-detail-view-request" type="button" data-activity-detail-view="request">Request</button>
+                  <button class="btn-ghost activity-detail-view-btn" id="activity-detail-view-response" type="button" data-activity-detail-view="response">Response</button>
+                </div>
+              </div>
+              <pre id="activity-detail-payload" class="activity-detail-payload"></pre>
+            </section>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+<script id="app-bootstrap" type="application/json">{{ {"settings": settings, "features": settings.features, "csrf_token": csrf_token}|tojson }}</script>
+  <script src="/static/shared/csrf-utils.js"></script>
+  <script src="/static/shared/form-utils.js?v={{ settings_js_version }}"></script>
+  <script src="/static/shared/dom-utils.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/activity.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/personas.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/scratchpad.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/custom-models.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/knowledge-base.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/core.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/models.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/rag.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/canvas.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/fetch.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/context.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/tools.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/tabs.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/init.js?v={{ settings_js_version }}"></script>
+  <script src="/static/settings/index.js?v={{ settings_js_version }}"></script>
+</body>
+</html>
