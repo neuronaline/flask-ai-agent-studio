@@ -15,7 +15,7 @@ from core.config import (
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
 )
-from services.canvas_service import get_canvas_document_capabilities
+from services.canvas import get_canvas_document_capabilities
 
 SCRATCHPAD_SECTION_ENUM = list(SCRATCHPAD_SECTION_ORDER)
 SCRATCHPAD_SECTION_DESCRIPTION = "Section to update: " + "; ".join(
@@ -368,7 +368,8 @@ TOOL_SPECS = [
             "Use after search_web when you actually need the page's exact content or source wording. "
             "For very large pages the content may be clipped to fit the token budget; "
             "when that happens the result includes an outline of the page sections plus preserved leading, middle, and trailing excerpts when space allows. "
-            "If you need omitted sections or an exact passage from a clipped page, use scroll_fetched_content or grep_fetched_content after this tool."
+            "By default content is auto-compressed for pages >~10k chars (keeping head/middle/tail). Set compress=false to get the full uncompressed content, "
+            "then use context management tools (compress_context_node, purge_context_nodes) to manage token budget afterward."
         ),
         "parameters": {
             "type": "object",
@@ -376,21 +377,25 @@ TOOL_SPECS = [
                 "url": {
                     "type": "string",
                     "description": "Full URL of the page (must start with http:// or https://).",
+                },
+                "compress": {
+                    "type": "boolean",
+                    "description": "When true (default), auto-compress content by keeping head/middle/tail portions for pages >~10k chars. Set false to get full uncompressed content.",
                 }
             },
             "required": ["url"],
         },
         "prompt": {
             "purpose": "Reads the cleaned content of a specific URL.",
-            "inputs": {"url": "full http/https URL"},
+            "inputs": {"url": "full http/https URL", "compress": "true (default) for compressed, false for full content"},
             "guidance": (
                 "Large pages are automatically clipped to stay within the token budget. "
                 "When content is clipped the result shows a Page Outline of the section headings. "
                 "The tool also tries to preserve a middle excerpt so important details are not biased toward only the start or end of the page. "
                 "Do not fetch a page unless you actually need its exact content or source wording. "
                 "Do not repeat the same URL in the same turn. "
-                "If a long page will remain useful across later turns, fetch_url keeps the raw page text available for later scroll_fetched_content and grep_fetched_content calls without importing it into Canvas. "
-                "Use scroll_fetched_content to browse omitted sections and grep_fetched_content to locate exact text in a clipped page. "
+                "By default pages are compressed: set compress=false if you need the full uncompressed content, "
+                "then use context management tools (compress_context_node, purge_context_nodes, merge_context_nodes) to manage the token budget. "
                 "To recall content from a previously fetched URL across turns, store it in conversation memory."
             ),
         },
@@ -423,110 +428,7 @@ TOOL_SPECS = [
                 "Use this when you want the page distilled before it reaches you, such as long articles where only the key points matter. "
                 "If focus is given, the summary should prioritize that question or angle. "
                 "Expect short labeled sections with key facts, constraints, and any unresolved uncertainty the source still leaves open. "
-                "Use fetch_url instead when you need raw extracted text, metadata, page outline details, exact wording from the source page, or later browsing via scroll_fetched_content / grep_fetched_content."
-            ),
-        },
-    },
-    {
-        "name": "scroll_fetched_content",
-        "description": (
-            "Read a window of lines from the content of a previously fetched URL. "
-            "Prefers already-fetched raw page text, but can also re-fetch the page live when cached content is unavailable. "
-            "Use this to browse omitted sections of a long or clipped page without importing it into Canvas."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "The URL whose fetched content should be browsed; cached content is preferred and live refetch can be used when needed.",
-                },
-                "start_line": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Optional 1-based first line to show (default 1).",
-                },
-                "window_lines": {
-                    "type": "integer",
-                    "minimum": 20,
-                    "maximum": 400,
-                    "description": "Number of lines to return (20–400, default 120).",
-                },
-                "refresh_if_missing": {
-                    "type": "boolean",
-                    "description": "When true, automatically re-fetch the URL live if cached raw content is unavailable (default true).",
-                },
-            },
-            "required": ["url"],
-        },
-        "prompt": {
-            "purpose": "Browses a previously fetched page by returning a specific line window from its cached content.",
-            "inputs": {
-                "url": "URL to browse; cached content is preferred and live refetch can be used when needed",
-                "start_line": "optional 1-based first line to show",
-                "window_lines": "optional 20-400 line window size",
-                "refresh_if_missing": "whether to re-fetch the page live when cached raw content is missing",
-            },
-            "guidance": (
-                "Use this after fetch_url when the returned page text was clipped or when you want to inspect a large fetched source incrementally across later turns. "
-                "Start with start_line=1 when you need the top of the page, then continue with the next window when the result reports more content below. "
-                "Use grep_fetched_content first when you need to jump directly to a keyword, heading, code snippet, or exact passage instead of browsing sequentially. "
-                "Use refresh_if_missing=false only when you explicitly need cache-only behavior."
-            ),
-        },
-    },
-    {
-        "name": "grep_fetched_content",
-        "description": (
-            "Search for a keyword, phrase, or regex pattern inside the content of a previously fetched URL. "
-            "Prefers already-fetched raw page text, but can also re-fetch the page live when cached content is unavailable. "
-            "Returns matching lines with surrounding context. "
-            "Use this instead of re-fetching the same URL when you need to find a specific value, code snippet, heading, or term."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "The URL whose content to search; the tool can use cached content or re-fetch the page live when needed.",
-                },
-                "pattern": {
-                    "type": "string",
-                    "description": "Keyword, phrase, or Python regex pattern to search for (case-insensitive).",
-                },
-                "context_lines": {
-                    "type": "integer",
-                    "description": "Number of lines of context to include before and after each match (0–5, default 2).",
-                    "minimum": 0,
-                    "maximum": 5,
-                },
-                "max_matches": {
-                    "type": "integer",
-                    "description": "Maximum number of matches to return (1–30, default 20).",
-                    "minimum": 1,
-                    "maximum": 30,
-                },
-                "refresh_if_missing": {
-                    "type": "boolean",
-                    "description": "When true, automatically re-fetch the URL live if cached raw content is unavailable (default true).",
-                },
-            },
-            "required": ["url", "pattern"],
-        },
-        "prompt": {
-            "purpose": "Searches cached fetch_url content for a keyword, phrase, or regex.",
-            "inputs": {
-                "url": "URL to search; cached content is preferred and live refetch can be used when needed",
-                "pattern": "keyword or regex",
-                "context_lines": "0-5 lines of context (default 2)",
-                "max_matches": "1-30 max results (default 20)",
-                "refresh_if_missing": "whether to re-fetch the page live when cached raw content is missing",
-            },
-            "guidance": (
-                "Prefer this over repeating fetch_url when you need exact wording from a page you already inspected. "
-                "If raw cached content is missing, the tool can refresh the page live unless you explicitly disable refresh_if_missing. "
-                "Use simple keywords for broad matches or anchored regex (e.g. r'price:\\s*\\d+') for precise values. "
-                "Use refresh_if_missing=false only when you explicitly need cache-only behavior."
+                "Use fetch_url instead when you need raw extracted text, metadata, page outline details, or exact wording from the source page."
             ),
         },
     },
@@ -1238,21 +1140,10 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "exclusive_turn": True,
         "state_domains": ("clarification",),
     },
-    "set_conversation_title": {
-        "ui_hidden": True,
-        "prompt_visible": True,
-        "state_domains": ("conversation",),
-    },
     "list_context_summary": {
         "ui_hidden": True,
     },
     "purge_context_nodes": {
-        "ui_hidden": True,
-    },
-    "archive_context_nodes": {
-        "ui_hidden": True,
-    },
-    "get_context_node_detail": {
         "ui_hidden": True,
     },
     "merge_context_nodes": {
@@ -1286,17 +1177,6 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
     "fetch_url_summarized": {
         "read_only": True,
         "parallel_safe": True,
-        "state_domains": ("web",),
-    },
-    "scroll_fetched_content": {
-        "read_only": True,
-        "parallel_safe": True,
-        "state_domains": ("web",),
-    },
-    "grep_fetched_content": {
-        "read_only": True,
-        "parallel_safe": True,
-        "session_cacheable": True,
         "state_domains": ("web",),
     },
     "search_news": {

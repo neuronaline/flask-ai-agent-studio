@@ -26,7 +26,7 @@ from jsonschema import Draft7Validator
 
 from utils.logging_config import get_logger
 
-from services.canvas_service import (
+from services.canvas import (
     batch_read_canvas_documents,
     batch_canvas_edits,
     build_canvas_document_result_snapshot,
@@ -135,12 +135,10 @@ from lib.tool_registry import (
 from utils.token_utils import estimate_text_tokens
 from web.web_tools import (
     fetch_url_tool,
-    grep_fetched_content_tool,
     search_news_tool,
     search_news_google_tool,
     search_scholar_tool,
     search_web_tool,
-    scroll_fetched_content_tool,
 )
 from services.video_transcript_service import (
     build_video_transcript_context_block,
@@ -176,7 +174,7 @@ CANVAS_CONTEXT_READ_TOOL_NAMES = {
 # Used by the canvas dependency barrier and the self-read guard to identify
 # tools that must not observe stale pre-mutation canvas state.
 CANVAS_ALL_READ_TOOL_NAMES = set(CANVAS_READ_BARRIER_TOOL_NAMES)
-# CANVAS_MUTATION_TOOL_NAMES: alias for the authoritative set imported from canvas_service.
+# CANVAS_MUTATION_TOOL_NAMES: alias for the authoritative set.
 CANVAS_MUTATION_TOOL_NAMES = CANVAS_MUTATING_TOOL_NAMES
 # Derived: all canvas-related tool names (mutations + reads).
 CANVAS_TOOL_NAMES = CANVAS_MUTATION_TOOL_NAMES | CANVAS_CONTEXT_READ_TOOL_NAMES | CANVAS_ALL_READ_TOOL_NAMES
@@ -832,19 +830,13 @@ def _build_recovery_hint_for_tool(tool_name: str, tool_args: dict | None = None)
     if normalized_tool_name == "fetch_url":
         url = _clean_tool_text(normalized_tool_args.get("url") or "", limit=160)
         if url:
-            return f"Need omitted text? Use scroll_fetched_content with {url} and a start line, or grep_fetched_content with {url} and a keyword or regex."
-        return (
-            "Need omitted text? Use scroll_fetched_content with the same URL and a start line, "
-            "or grep_fetched_content with a keyword or regex."
-        )
+            return f"Need omitted text? Re-fetch {url} with compress=false to get the full uncompressed content."
+        return "Need omitted text? Re-fetch the same URL with compress=false to get the full uncompressed content."
     if normalized_tool_name == "fetch_url_summarized":
         url = _clean_tool_text(normalized_tool_args.get("url") or "", limit=160)
         if url:
-            return (
-                f"Need more than the summary? Call fetch_url for {url}, then use scroll_fetched_content or "
-                "grep_fetched_content."
-            )
-        return "Need more than the summary? Call fetch_url, then use scroll_fetched_content or grep_fetched_content."
+            return f"Need more than the summary? Call fetch_url for {url} with compress=false to get the full content."
+        return "Need more than the summary? Call fetch_url with compress=false to get the full content."
     if normalized_tool_name in {"search_web", "search_news", "search_news_google", "search_scholar"}:
         return "If exact wording is needed, fetch a specific returned URL or rerun the search with a narrower query."
     if normalized_tool_name == "search_knowledge_base":
@@ -1546,7 +1538,7 @@ def _build_fetch_diagnostic_fields(result: dict) -> dict:
         "fetch_diagnostic": (
             f"fetch_url already attempted this URL. Outcome: {detail} "
             "Do not call fetch_url again for the same URL in this turn. "
-            "If you need omitted sections or exact text from this page, use scroll_fetched_content or grep_fetched_content instead."
+            "If you need omitted sections or exact text from this page, re-fetch with compress=false to get the full uncompressed content."
         ).strip(),
     }
 
@@ -2031,7 +2023,7 @@ def _prepare_fetch_result_for_model(
         f"({clipped_pct}% of the page, approximately {token_estimate:,} tokens). "
         f"{coverage_note} "
         f"{('Context anchors: ' + context_summary + ' ') if context_summary else ''}"
-        f"{recovery_hint or 'Use scroll_fetched_content to browse omitted sections and grep_fetched_content for exact text.'}"
+        f"{recovery_hint or 'Re-fetch with compress=false to get the full content, then use compress_context_node/purge_context_nodes to manage token budget.'}"
     )
     prepared["content_token_estimate"] = token_estimate
     prepared["raw_content_available"] = True
@@ -2083,11 +2075,10 @@ def _build_fetch_tool_message_content(tool_args: dict, summary: str, transcript_
         coverage_lines.append(f"Coverage: {_describe_fetch_content_mode(content_mode, clip_strategy)}")
     if transcript_result.get("raw_content_available") is True:
         coverage_lines.append(
-            "Raw page recovery: Use scroll_fetched_content for sequential browsing and grep_fetched_content for exact text."
+            "Raw page recovery: Re-fetch with compress=false to get the full content, then use context management tools."
         )
     if content_mode in {"clipped_text", "budget_compact", "budget_brief"} and url:
-        coverage_lines.append(f'Scroll example: scroll_fetched_content(url="{url}", start_line=1)')
-        coverage_lines.append(f'Exact-text lookup example: grep_fetched_content(url="{url}", pattern="keyword")')
+        coverage_lines.append(f'Full content example: fetch_url(url="{url}", compress=false)')
     if coverage_lines:
         parts.append("## Content Coverage\n" + "\n".join(coverage_lines))
 
@@ -2144,34 +2135,6 @@ def _format_canvas_scroll_result_as_text(result: dict) -> str:
         nav.append(f"↓ More content below line {end}")
     if nav:
         parts.append(" | ".join(nav))
-    return "\n".join(parts)
-
-
-def _format_fetched_content_scroll_result_as_text(result: dict) -> str:
-    """Format a fetched-page scroll result into human-readable text."""
-    title = result.get("title") or result.get("url") or "Fetched page"
-    total = result.get("line_count", 0)
-    start = result.get("start_line", 1)
-    end = result.get("end_line_actual", total)
-    lines = result.get("visible_lines") or []
-    parts = [f"### {title} (fetched lines {start}–{end} of {total})"]
-    url = _clean_tool_text(result.get("url") or "", limit=220)
-    if url:
-        parts.append(f"URL: {url}")
-    if lines:
-        parts.append("```text")
-        parts.append("\n".join(str(line) for line in lines))
-        parts.append("```")
-    nav = []
-    if result.get("has_more_above"):
-        nav.append(f"↑ More page content above line {start}")
-    if result.get("has_more_below"):
-        nav.append(f"↓ More page content below line {end}")
-    if nav:
-        parts.append(" | ".join(nav))
-    note = _clean_tool_text(result.get("note") or "", limit=280)
-    if note:
-        parts.append(note)
     return "\n".join(parts)
 
 
@@ -2232,8 +2195,6 @@ def _prepare_tool_result_for_transcript(
             fetch_url_token_threshold=fetch_url_token_threshold,
             fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
         )
-    if tool_name == "scroll_fetched_content" and isinstance(result, dict) and not result.get("error"):
-        return _format_fetched_content_scroll_result_as_text(result)
     if tool_name in CANVAS_CONTEXT_READ_TOOL_NAMES and isinstance(result, dict):
         result = _format_canvas_read_result_as_text(tool_name, result)
     if tool_name in CANVAS_MUTATION_TOOL_NAMES and isinstance(result, dict):
@@ -3240,28 +3201,16 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
                 else:
                     return f"Argument '{key}' in {tool_name} allows at most {max_items} items"
 
-        # Numeric constraints (minimum/maximum) with silent clamping for specific tools
+        # Numeric constraints (minimum/maximum)
         if expected_type in {"string", "integer", "number"}:
             minimum = property_schema.get("minimum")
             maximum = property_schema.get("maximum")
 
-            # Special silent clamping for grep_fetched_content and scroll_fetched_content
-            silent_clamp_keys = {"context_lines", "max_matches", "window_lines"}
-            silent_clamp_tools = {"grep_fetched_content", "scroll_fetched_content"}
-
             if minimum is not None and value < minimum:
-                if tool_name in silent_clamp_tools and key in silent_clamp_keys:
-                    value = minimum
-                    tool_args[key] = value
-                else:
-                    return f"Argument '{key}' in {tool_name} must be >= {minimum}"
+                return f"Argument '{key}' in {tool_name} must be >= {minimum}"
 
             if maximum is not None and value > maximum:
-                if tool_name in silent_clamp_tools and key in silent_clamp_keys:
-                    value = maximum
-                    tool_args[key] = value
-                else:
-                    return f"Argument '{key}' in {tool_name} must be <= {maximum}"
+                return f"Argument '{key}' in {tool_name} must be <= {maximum}"
 
         # Enum validation with silent fallback for role -> "note"
         enum_values = property_schema.get("enum")
@@ -3347,7 +3296,7 @@ def _build_tool_execution_result_message(transcript_results: list[dict]) -> dict
             }:
                 parts.append(f"  Recovery: {recovery_hint}")
 
-    return {"role": "user", "content": "\n".join(parts)}
+    return {"role": "system", "content": "\n".join(parts)}
 
 
 def _merge_tool_execution_result_message(messages: list[dict], tool_execution_result_message: dict | None) -> None:
@@ -3709,24 +3658,6 @@ def _run_fetch_url(tool_args: dict, runtime_state: dict):
     return result, _summarize_fetch_result(result, tool_args.get("url", ""))
 
 
-def _run_scroll_fetched_content(tool_args: dict, runtime_state: dict):
-    del runtime_state
-    result = scroll_fetched_content_tool(
-        url=tool_args.get("url", ""),
-        start_line=tool_args.get("start_line", 1),
-        window_lines=tool_args.get("window_lines", 120),
-        refresh_if_missing=tool_args.get("refresh_if_missing", True),
-    )
-    if result.get("error"):
-        summary = f"scroll_fetched_content error: {_clean_tool_text(result['error'], limit=120)}"
-    else:
-        target_label = _clean_tool_text(
-            result.get("title") or result.get("url") or tool_args.get("url") or "page", limit=80
-        )
-        summary = f"scroll_fetched_content: {target_label} {result.get('start_line')}-{result.get('end_line_actual')}"
-    return result, summary
-
-
 def _run_fetch_url_summarized(tool_args: dict, runtime_state: dict):
     url = str(tool_args.get("url") or "").strip()
     focus = str(tool_args.get("focus") or "").strip()
@@ -3755,27 +3686,6 @@ def _run_fetch_url_summarized(tool_args: dict, runtime_state: dict):
         agent_context=agent_context,
         invocation_log_sink=invocation_log_sink,
     )
-
-
-def _run_grep_fetched_content(tool_args: dict, runtime_state: dict):
-    del runtime_state
-    result = grep_fetched_content_tool(
-        url=tool_args.get("url", ""),
-        pattern=tool_args.get("pattern", ""),
-        context_lines=tool_args.get("context_lines", 2),
-        max_matches=tool_args.get("max_matches", 20),
-        refresh_if_missing=tool_args.get("refresh_if_missing", True),
-    )
-    match_count = result.get("match_count", 0)
-    if result.get("error"):
-        summary = f"grep_fetched_content error: {_clean_tool_text(result['error'], limit=120)}"
-    elif match_count == 0:
-        summary = (
-            f"grep_fetched_content: no matches for pattern '{_clean_tool_text(tool_args.get('pattern', ''), limit=60)}'"
-        )
-    else:
-        summary = f"grep_fetched_content: {match_count} match(es) for pattern '{_clean_tool_text(tool_args.get('pattern', ''), limit=60)}'"
-    return result, summary
 
 
 def _run_create_canvas_document(tool_args: dict, runtime_state: dict):
@@ -4228,8 +4138,6 @@ _TOOL_EXECUTORS = {
     "search_scholar": _run_search_scholar,
     "fetch_url": _run_fetch_url,
     "fetch_url_summarized": _run_fetch_url_summarized,
-    "scroll_fetched_content": _run_scroll_fetched_content,
-    "grep_fetched_content": _run_grep_fetched_content,
     "batch_read_canvas_documents": _run_batch_read_canvas_documents,
     "search_canvas_document": _run_search_canvas_document,
     "create_canvas_document": _run_create_canvas_document,
@@ -4426,44 +4334,6 @@ def _resolve_canvas_read_targets(tool_name: str, tool_args: dict, canvas_state: 
     return resolved_targets
 
 
-# DEPRECATED: This function is no longer used for execution gating.
-# Canvas read tools are now filtered during slot building via
-# _is_canvas_read_blocked_by_mutation() instead, which uses a pre-pass
-# to identify mutations before executing any sequential slots.
-# Kept for backward compatibility with tests.
-def _should_skip_canvas_read_after_same_turn_mutation(
-    tool_name: str,
-    tool_args: dict,
-    canvas_state: dict,
-    mutated_doc_ids: set[str],
-    mutated_doc_paths: set[str],
-) -> tuple[bool, str]:
-    normalized_tool_name = _normalize_tool_name(tool_name)
-    if normalized_tool_name not in CANVAS_ALL_READ_TOOL_NAMES:
-        return False, ""
-    if not mutated_doc_ids and not mutated_doc_paths:
-        return False, ""
-
-    read_targets = _resolve_canvas_read_targets(normalized_tool_name, tool_args, canvas_state)
-    for target in read_targets:
-        target_document_id = str(target.get("document_id") or "").strip()
-        target_document_path = _normalize_canvas_document_path_key(target.get("document_path"))
-        if target_document_id and target_document_id in mutated_doc_ids:
-            target_label = target_document_path or target_document_id
-        elif target_document_path and target_document_path in mutated_doc_paths:
-            target_label = target_document_path
-        else:
-            continue
-        guard_message = (
-            f"Skipped: document '{target_label}' was already modified in this turn. "
-            "The mutation result above contains the updated snapshot. "
-            "Re-reading immediately is unnecessary."
-        )
-        return True, guard_message
-
-    return False, ""
-
-
 def _is_canvas_read_blocked_by_mutation(
     tool_name: str,
     tool_args: dict,
@@ -4622,14 +4492,6 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
         if url and focus:
             return f"{url} | {focus}"[:300]
         return url[:300]
-    if tool_name == "scroll_fetched_content":
-        url = str(tool_args.get("url") or "").strip()
-        start_line = _coerce_int_range(tool_args.get("start_line"), 1, 1, 1_000_000)
-        window_lines = _coerce_int_range(tool_args.get("window_lines"), 120, 20, 400)
-        preview = f"line {start_line} (+{window_lines})"
-        if url:
-            return f"{url} | {preview}"[:300]
-        return preview[:300]
     if tool_name == "batch_read_canvas_documents":
         docs = tool_args.get("documents") or []
         count = len(docs) if isinstance(docs, list) else 1

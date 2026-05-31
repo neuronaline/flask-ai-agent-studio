@@ -177,8 +177,6 @@ TOOL_PERMISSION_LABELS = {
     "search_web": "Web search",
     "fetch_url": "Read URL content",
     "fetch_url_summarized": "Summarize URL",
-    "scroll_fetched_content": "Scroll fetched page content",
-    "grep_fetched_content": "Search fetched page content",
     "search_news": "News search",
     "search_news_google": "News search — Google",
     "search_scholar": "Academic search — Google Scholar",
@@ -203,8 +201,6 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "search_web": "Live web search via DuckDuckGo for current facts.",
     "fetch_url": "Read and extract cleaned text from a specific web page.",
     "fetch_url_summarized": "Fetch a page and return only a focused AI summary.",
-    "scroll_fetched_content": "Read another window from a previously fetched page without importing it into Canvas.",
-    "grep_fetched_content": "Search for a keyword or pattern inside a previously fetched page.",
     "search_news": "Search recent news articles via Google News.",
     "search_news_google": "Search recent news articles via Google News RSS.",
     "search_scholar": "Search academic papers via Google Scholar with citation counts and metadata.",
@@ -249,7 +245,7 @@ def validate_tool_catalog_sync() -> tuple[list[str], list[str], list[str]]:
     return missing_in_labels, missing_in_descriptions, missing_in_specs
 
 
-TOOL_PERMISSION_SECTION_ORDER = ["assistant", "research", "canvas"]
+TOOL_PERMISSION_SECTION_ORDER = ["assistant", "research", "canvas", "context_management"]
 TOOL_PERMISSION_SECTION_METADATA = {
     "assistant": {
         "title": "Assistant & Memory",
@@ -265,6 +261,11 @@ TOOL_PERMISSION_SECTION_METADATA = {
         "title": "Draft Files (Canvas)",
         "description": "Conversation-attached draft documents, canvas search, and line-level changes inside Canvas.",
         "note": "Enable inspection helpers such as expand and scroll separately when you want read-only canvas navigation.",
+    },
+    "context_management": {
+        "title": "Context Management",
+        "description": "List, purge, merge, and compress persistent context nodes to manage token budget.",
+        "note": "These tools operate on the agent's long-term memory store, not the Canvas draft filesystem.",
     },
 }
 
@@ -283,8 +284,6 @@ def _get_tool_permission_section_key(name: str) -> str:
         "search_web",
         "fetch_url",
         "fetch_url_summarized",
-        "scroll_fetched_content",
-        "grep_fetched_content",
         "search_news",
         "search_news_google",
         "search_scholar",
@@ -300,6 +299,8 @@ def _get_tool_permission_section_key(name: str) -> str:
         "delete_canvas_document",
     }:
         return "canvas"
+    if name in {"list_context_summary", "purge_context_nodes", "merge_context_nodes", "compress_context_node"}:
+        return "context_management"
     return "canvas"
 
 

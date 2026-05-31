@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 
 import pdfplumber
-from services.canvas_service import find_latest_canvas_documents
+from services.canvas import find_latest_canvas_documents
 
 from core.db import get_db, insert_message, serialize_message_metadata
 

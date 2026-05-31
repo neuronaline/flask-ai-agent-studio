@@ -11,7 +11,7 @@ from utils.logging_config import get_logger
 
 LOGGER = get_logger(__name__)
 
-from services.canvas_service import (
+from services.canvas import (
     build_html_download,
     build_markdown_download,
     build_pdf_download,

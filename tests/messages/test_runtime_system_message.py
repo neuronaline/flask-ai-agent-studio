@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from services.canvas_service import (
+from services.canvas import (
     create_canvas_runtime_state,
     get_canvas_runtime_active_document_id,
     get_canvas_runtime_documents,
@@ -405,7 +405,6 @@ class TestRuntimeSystemMessage:
     def test_parallel_safe_read_only_tool_metadata_stays_in_sync(self):
         expected_recent_tools = {
             "fetch_url_summarized",
-            "scroll_fetched_content",
             "batch_read_canvas_documents",
             "preview_canvas_changes",
         }

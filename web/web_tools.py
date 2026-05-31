@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import httpx
 import ipaddress
 import json
 import logging
 import re
+import socket
+import threading
 import unicodedata
 from urllib.parse import urlparse
 from defusedxml import ElementTree as ET
@@ -16,7 +19,7 @@ from core.config import (
     DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
     SEARCH_MAX_RESULTS,
 )
-from core.db import cache_get, cache_set, get_proxy_enabled_operations, get_search_tool_query_limit as load_search_tool_query_limit
+from core.db import cache_get, cache_set, get_search_tool_query_limit as load_search_tool_query_limit
 from serp import (
     SerpClient,
     SerpConfig,
@@ -38,7 +41,7 @@ _GN_LANG = {
 _THIN_CONTENT_MIN_CHARS = 80
 _ZERO_WIDTH_TRANSLATION = dict.fromkeys(map(ord, "\u200b\u200c\u200d\ufeff"), None)
 LOGGER = logging.getLogger(__name__)
-_ASYNC_LOOP: asyncio.AbstractEventLoop | None = None
+_ASYNC_LOOP_LOCAL = threading.local()
 
 
 def _is_safe_url(url: str) -> tuple[bool, str]:
@@ -62,6 +65,50 @@ def _is_safe_url(url: str) -> tuple[bool, str]:
     if ip.is_private or ip.is_loopback or ip.is_link_local:
         return False, "Private or local IP addresses are prohibited"
     return True, ""
+
+
+def _validate_resolved_ip_address(address: str) -> None:
+    """Validate that a DNS-resolved IP address is not private/reserved.
+
+    Raises socket.gaierror if the address is in a non-public range,
+    mimicking a DNS resolution failure.
+    """
+    try:
+        ip = ipaddress.ip_address(str(address).strip())
+    except ValueError:
+        raise socket.gaierror(f"Invalid IP address: {address}")
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+        raise socket.gaierror(f"Resolution blocked for non-public address: {address}")
+
+
+@contextlib.contextmanager
+def _guarded_dns_resolution(enabled: bool = True):
+    """Context manager that wraps socket.getaddrinfo to validate resolved IPs.
+
+    When enabled, temporarily replaces socket.getaddrinfo with a version that
+    calls _validate_resolved_ip_address on every resolved IP address, blocking
+    DNS rebinding / SSRF attacks that resolve public hostnames to private IPs.
+    Restores the original socket.getaddrinfo on exit, even on exception.
+    """
+    if not enabled:
+        yield
+        return
+
+    original_getaddrinfo = socket.getaddrinfo
+
+    def guarded_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        results = original_getaddrinfo(host, port, family, type, proto, flags)
+        for result in results:
+            addr = result[4][0] if len(result) >= 5 else None
+            if addr:
+                _validate_resolved_ip_address(addr)
+        return results
+
+    try:
+        socket.getaddrinfo = guarded_getaddrinfo
+        yield
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
 
 
 def _clean_extracted_text(text: str) -> str:
@@ -124,28 +171,26 @@ def _iter_limited_search_queries(queries: list):
 def _run_async(coro):
     """Run an async coroutine in a synchronous context.
 
-    Uses a reusable module-level event loop to avoid the overhead of
-    creating and destroying a new loop on every call.
+    Uses a thread-local event loop to avoid race conditions when
+    multiple threads call search/fetch tools concurrently.
     """
-    global _ASYNC_LOOP
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
             # Already inside an async context; create a temporary loop
             temp_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(temp_loop)
             try:
                 return temp_loop.run_until_complete(coro)
             finally:
                 temp_loop.close()
-                asyncio.set_event_loop(loop)
     except RuntimeError:
         pass
-    # Reuse the module-level singleton loop
-    if _ASYNC_LOOP is None or _ASYNC_LOOP.is_closed():
-        _ASYNC_LOOP = asyncio.new_event_loop()
-        asyncio.set_event_loop(_ASYNC_LOOP)
-    return _ASYNC_LOOP.run_until_complete(coro)
+    # Use thread-local loop singleton
+    loop = getattr(_ASYNC_LOOP_LOCAL, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        _ASYNC_LOOP_LOCAL.loop = loop
+    return loop.run_until_complete(coro)
 
 
 def _get_serp_config():
@@ -233,24 +278,18 @@ def search_web_tool(queries: list) -> list:
     return results
 
 
-def search_news_tool(queries: list, lang: str = "tr", when: str | None = None) -> list:
-    """News search using serp-scraper GoogleNewsClient.
-
-    Args:
-        queries: List of search query strings
-        lang: Language code (tr, en, etc.)
-        when: Time range (d, w, m, y)
-
-    Returns:
-        List of dicts with keys: title, link, time, source (or error, query on failure)
-    """
+def _search_news_internal(
+    queries: list,
+    lang: str,
+    when: str | None,
+    country: str,
+    cache_prefix: str,
+) -> list:
+    """Internal news search helper shared by search_news_tool and search_news_google_tool."""
     if not queries:
         return []
 
-    region = _NEWS_REGION.get(lang, "tr-tr")
     time_range = _NEWS_TIMELIMIT.get(when) if when else None
-    news_language = lang
-    news_country = region.upper().replace("-", "_")
     results = []
     seen_urls = set()
 
@@ -259,7 +298,7 @@ def search_news_tool(queries: list, lang: str = "tr", when: str | None = None) -
         if not query:
             continue
 
-        cache_key = f"news:{hashlib.md5((query + lang + (when or '')).lower().encode()).hexdigest()}"
+        cache_key = f"{cache_prefix}:{hashlib.md5((query + lang + (when or '')).lower().encode()).hexdigest()}"
         cached = cache_get(cache_key)
         if cached is not None:
             for row in cached:
@@ -271,8 +310,8 @@ def search_news_tool(queries: list, lang: str = "tr", when: str | None = None) -
         try:
             async def _do_news():
                 async with GoogleNewsClient(
-                    language=news_language,
-                    country=news_country,
+                    language=lang,
+                    country=country,
                     time_range=time_range,
                 ) as client:
                     return await client.get_news(query, max_results=SEARCH_MAX_RESULTS)
@@ -314,8 +353,8 @@ def search_news_tool(queries: list, lang: str = "tr", when: str | None = None) -
     return results
 
 
-def search_news_google_tool(queries: list, lang: str = "tr", when: str | None = None) -> list:
-    """News search using Google News RSS via serp-scraper 2.0.9+.
+def search_news_tool(queries: list, lang: str = "tr", when: str | None = None) -> list:
+    """News search using serp-scraper GoogleNewsClient (DuckDuckGo region codes).
 
     Args:
         queries: List of search query strings
@@ -325,74 +364,25 @@ def search_news_google_tool(queries: list, lang: str = "tr", when: str | None = 
     Returns:
         List of dicts with keys: title, link, time, source (or error, query on failure)
     """
-    if not queries:
-        return []
+    region = _NEWS_REGION.get(lang, "tr-tr")
+    country = region.upper().replace("-", "_")
+    return _search_news_internal(queries, lang, when, country, cache_prefix="news")
 
+
+def search_news_google_tool(queries: list, lang: str = "tr", when: str | None = None) -> list:
+    """News search using Google News RSS via serp-scraper (Google hl/gl/ceid params).
+
+    Args:
+        queries: List of search query strings
+        lang: Language code (tr, en, etc.)
+        when: Time range (d, w, m, y)
+
+    Returns:
+        List of dicts with keys: title, link, time, source (or error, query on failure)
+    """
     geo = _GN_LANG.get(lang, _GN_LANG["tr"])
-    time_range = when if when and when in _NEWS_TIMELIMIT else None
-    news_language = lang
-    news_country = geo["gl"]
-    results = []
-    seen_urls = set()
-
-    for raw_query in _iter_limited_search_queries(queries):
-        query = str(raw_query).strip()
-        if not query:
-            continue
-
-        cache_key = f"news_google:{hashlib.md5((query + lang + (when or '')).lower().encode()).hexdigest()}"
-        cached = cache_get(cache_key)
-        if cached is not None:
-            for row in cached:
-                if row.get("link") not in seen_urls:
-                    seen_urls.add(row["link"])
-                    results.append(row)
-            continue
-
-        try:
-            async def _do_news():
-                async with GoogleNewsClient(
-                    language=news_language,
-                    country=news_country,
-                    time_range=time_range,
-                ) as client:
-                    return await client.get_news(query, max_results=SEARCH_MAX_RESULTS)
-
-            news_results = _run_async(_do_news())
-
-            normalized = []
-            for r in news_results:
-                if isinstance(r, NewsResult):
-                    normalized.append({
-                        "title": r.title,
-                        "link": r.original_url or r.url,
-                        "time": r.published.isoformat() if r.published else "",
-                        "source": r.source,
-                    })
-                elif isinstance(r, dict):
-                    normalized.append({
-                        "title": r.get("title", ""),
-                        "link": r.get("original_url") or r.get("url", ""),
-                        "time": r.get("published", ""),
-                        "source": r.get("source", ""),
-                    })
-                else:
-                    normalized.append({
-                        "title": r.title,
-                        "link": r.original_url or r.url,
-                        "time": r.published.isoformat() if r.published else "",
-                        "source": r.source,
-                    })
-
-            cache_set(cache_key, normalized)
-            for row in normalized:
-                if row.get("link") not in seen_urls:
-                    seen_urls.add(row["link"])
-                    results.append(row)
-        except Exception as exc:
-            results.append({"error": str(exc), "query": raw_query})
-
-    return results
+    country = geo["gl"]
+    return _search_news_internal(queries, lang, when, country, cache_prefix="news_google")
 
 
 def search_scholar_tool(
@@ -535,30 +525,10 @@ def _fetch_url_direct(url: str, timeout: int = 30) -> tuple[bytes | None, str, E
         return None, "", exc
 
 
-def _cache_fetch_scroll_key(url: str, title: str, content_format: str, full_text: str) -> None:
-    """Cache full (untruncated) content under the simple URL key for scroll/grep tools.
-
-    The main fetch_url_tool caches truncated content under a key that includes
-    the converter mode and content_max_chars.  scroll_fetched_content and
-    grep_fetched_content look up a simpler ``fetch:{md5(url)}`` key and need
-    the full text so they can window or search through it without re-fetching.
-    """
-    key = f"fetch:{hashlib.md5(url.encode()).hexdigest()}"
-    cache_set(
-        key,
-        {
-            "url": url,
-            "title": title,
-            "content": full_text,
-            "raw_content": full_text,
-            "content_format": content_format,
-        },
-    )
-
-
 def fetch_url_tool(
     url: str,
     *,
+    compress: bool = True,
     content_max_chars: int = CONTENT_MAX_CHARS,
     cache_namespace: str = "fetch",
 ) -> dict:
@@ -566,6 +536,8 @@ def fetch_url_tool(
 
     Args:
         url: Target URL to fetch
+        compress: When true (default), auto-compress by keeping head/middle/tail
+                  for pages >~10k chars. Set false for full uncompressed content.
         content_max_chars: Maximum characters in content
         cache_namespace: Cache namespace for this fetch
 
@@ -577,18 +549,15 @@ def fetch_url_tool(
         return {"url": url, "error": reason, "content": ""}
 
     normalized_content_max_chars = _normalize_fetch_content_max_chars(content_max_chars)
-    normalized_cache_namespace = str(cache_namespace or "").strip()
     fetch_html_converter_mode = "hybrid"
 
-    if normalized_cache_namespace == "fetch" and normalized_content_max_chars == CONTENT_MAX_CHARS:
-        cache_key = f"fetch:{hashlib.md5((url + '|' + fetch_html_converter_mode).encode()).hexdigest()}"
-    elif normalized_cache_namespace:
-        digest = hashlib.md5(f"{url}|{normalized_content_max_chars}|{fetch_html_converter_mode}".encode()).hexdigest()
-        cache_key = f"{normalized_cache_namespace}:{digest}"
-    else:
-        cache_key = None
+    # Unified cache key: includes content_max_chars, converter mode, and compress flag
+    digest = hashlib.md5(
+        f"{url}|{normalized_content_max_chars}|{fetch_html_converter_mode}|compress={compress}".encode()
+    ).hexdigest()
+    cache_key = f"fetch:{digest}"
 
-    cached = cache_get(cache_key) if cache_key else None
+    cached = cache_get(cache_key)
     if cached is not None:
         return cached
 
@@ -623,9 +592,7 @@ def fetch_url_tool(
             if total_pages is not None:
                 result["page_count"] = total_pages
                 result["pages_extracted"] = total_pages
-            if cache_key:
-                cache_set(cache_key, result)
-            _cache_fetch_scroll_key(url, result["title"], "pdf", text)
+            cache_set(cache_key, result)
             return result
         except Exception as exc:
             return {"url": url, "error": f"Could not read PDF: {exc}", "content": ""}
@@ -649,9 +616,7 @@ def fetch_url_tool(
                 "cleanup_applied": False,
                 "status": 200,
             }
-            if cache_key:
-                cache_set(cache_key, result)
-            _cache_fetch_scroll_key(url, title, "json", _clean_extracted_text(text))
+            cache_set(cache_key, result)
             return result
 
         if "xml" in ct and "html" not in ct:
@@ -677,9 +642,7 @@ def fetch_url_tool(
                 "cleanup_applied": False,
                 "status": 200,
             }
-            if cache_key:
-                cache_set(cache_key, result)
-            _cache_fetch_scroll_key(url, result["title"], "xml", _clean_extracted_text(text))
+            cache_set(cache_key, result)
             return result
 
         if "text/plain" in ct:
@@ -693,9 +656,7 @@ def fetch_url_tool(
                 "cleanup_applied": False,
                 "status": 200,
             }
-            if cache_key:
-                cache_set(cache_key, result)
-            _cache_fetch_scroll_key(url, result["title"], "text", _clean_extracted_text(text))
+            cache_set(cache_key, result)
             return result
 
     # --- Default: use serp-scraper SerpClient for HTML pages ---
@@ -705,7 +666,7 @@ def fetch_url_tool(
     try:
         async def _do_fetch():
             async with SerpClient(config) as client:
-                return await client.fetch(url, compress=False)
+                return await client.fetch(url, compress=compress)
 
         content = _run_async(_do_fetch())
 
@@ -723,255 +684,11 @@ def fetch_url_tool(
             "status": 200,
         }
 
-        if cache_key:
-            cache_set(cache_key, result)
-        _cache_fetch_scroll_key(url, title, "html", content)
+        cache_set(cache_key, result)
         return result
 
     except Exception as exc:
         return {"url": url, "error": str(exc), "content": ""}
-
-
-_GREP_CONTEXT_MAX_LINES = 5
-_GREP_MAX_MATCHES = 30
-_FETCH_SCROLL_DEFAULT_WINDOW_LINES = 120
-_FETCH_SCROLL_MIN_WINDOW_LINES = 20
-_FETCH_SCROLL_MAX_WINDOW_LINES = 400
-
-
-def _coerce_grep_int(value, default: int, minimum: int, maximum: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        parsed = default
-    return max(minimum, min(maximum, parsed))
-
-
-def _normalize_fetched_snapshot_text(text: str) -> str:
-    return str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-
-
-def _load_fetched_content_snapshot(url: str, *, refresh_if_missing: bool = True) -> dict:
-    searched_source = ""
-    refetch_error = ""
-    raw_text = ""
-    title = ""
-    content_format = ""
-
-    def _apply_snapshot(candidate: dict, source_name: str) -> bool:
-        nonlocal raw_text, searched_source, title, content_format
-        if not isinstance(candidate, dict):
-            return False
-        normalized_text = _normalize_fetched_snapshot_text(candidate.get("raw_content") or candidate.get("content") or "")
-        if not normalized_text:
-            return False
-        raw_text = normalized_text
-        searched_source = source_name
-        title = str(candidate.get("title") or "").strip()
-        content_format = str(candidate.get("content_format") or "").strip()
-        return True
-
-    cache_key = f"fetch:{hashlib.md5(url.encode()).hexdigest()}"
-    cached = cache_get(cache_key)
-    if _apply_snapshot(cached, "fetch_cache"):
-        return {
-            "raw_text": raw_text,
-            "searched_source": searched_source,
-            "refetch_error": refetch_error,
-            "title": title,
-            "content_format": content_format,
-        }
-
-    if refresh_if_missing:
-        refreshed = fetch_url_tool(url)
-        if _apply_snapshot(refreshed, "live_refetch") and not refreshed.get("error"):
-            return {
-                "raw_text": raw_text,
-                "searched_source": searched_source,
-                "refetch_error": refetch_error,
-                "title": title,
-                "content_format": content_format,
-            }
-        refetch_error = str(refreshed.get("error") or refreshed.get("fetch_warning") or "").strip()
-
-    return {
-        "raw_text": raw_text,
-        "searched_source": searched_source,
-        "refetch_error": refetch_error,
-        "title": title,
-        "content_format": content_format,
-    }
-
-
-def scroll_fetched_content_tool(
-    url: str,
-    start_line: int = 1,
-    window_lines: int = _FETCH_SCROLL_DEFAULT_WINDOW_LINES,
-    refresh_if_missing: bool = True,
-) -> dict:
-    """Read a line window from a previously fetched URL without importing it into Canvas."""
-    url = str(url or "").strip()
-    if not url:
-        return {"error": "url is required", "url": ""}
-
-    start_line = _coerce_grep_int(start_line, default=1, minimum=1, maximum=1_000_000)
-    window_lines = _coerce_grep_int(
-        window_lines,
-        default=_FETCH_SCROLL_DEFAULT_WINDOW_LINES,
-        minimum=_FETCH_SCROLL_MIN_WINDOW_LINES,
-        maximum=_FETCH_SCROLL_MAX_WINDOW_LINES,
-    )
-    refresh_if_missing = _coerce_bool(refresh_if_missing, default=True)
-
-    snapshot = _load_fetched_content_snapshot(url, refresh_if_missing=refresh_if_missing)
-    raw_text = snapshot.get("raw_text") or ""
-    searched_source = str(snapshot.get("searched_source") or "").strip()
-    refetch_error = str(snapshot.get("refetch_error") or "").strip()
-
-    if not raw_text:
-        error_message = (
-            "URL content not found in cache, live fetch, or tool memory. "
-            "Call fetch_url for this URL first, then use scroll_fetched_content."
-        )
-        if refetch_error:
-            error_message += f" Live refetch also failed: {refetch_error}"
-        return {
-            "error": error_message,
-            "url": url,
-            "line_count": 0,
-            "visible_lines": [],
-        }
-
-    lines = raw_text.splitlines()
-    if not lines:
-        lines = [raw_text]
-
-    line_count = len(lines)
-    max_start_line = max(1, line_count - window_lines + 1)
-    requested_start_line = start_line
-    actual_start_line = min(requested_start_line, max_start_line)
-    actual_end_line = min(line_count, actual_start_line + window_lines - 1)
-    visible_lines = [
-        f"{line_number}: {line}"
-        for line_number, line in enumerate(lines[actual_start_line - 1 : actual_end_line], start=actual_start_line)
-    ]
-
-    result: dict = {
-        "url": url,
-        "line_count": line_count,
-        "start_line": actual_start_line,
-        "end_line_actual": actual_end_line,
-        "visible_lines": visible_lines,
-        "has_more_above": actual_start_line > 1,
-        "has_more_below": actual_end_line < line_count,
-        "searched_source": searched_source or "unknown",
-        "window_lines": window_lines,
-    }
-    title = str(snapshot.get("title") or "").strip()
-    if title:
-        result["title"] = title
-    content_format = str(snapshot.get("content_format") or "").strip()
-    if content_format:
-        result["content_format"] = content_format
-    if searched_source == "live_refetch":
-        result["refetched"] = True
-    if requested_start_line != actual_start_line:
-        result["requested_start_line"] = requested_start_line
-
-    note_parts = []
-    if requested_start_line != actual_start_line:
-        note_parts.append(
-            f"Requested start line {requested_start_line} exceeded the available content window; showing the last available window instead."
-        )
-    if note_parts:
-        result["note"] = " ".join(note_parts)
-
-    return result
-
-
-def grep_fetched_content_tool(
-    url: str,
-    pattern: str,
-    context_lines: int = 2,
-    max_matches: int = 20,
-    refresh_if_missing: bool = True,
-) -> dict:
-    """Search for a pattern in the cached content of a previously fetched URL.
-
-    Looks up the raw page content from the fetch cache or tool memory, then
-    performs a case-insensitive regex search line-by-line and returns matching
-    lines with surrounding context.
-    """
-    url = str(url or "").strip()
-    pattern = str(pattern or "").strip()
-    if not url:
-        return {"error": "url is required", "url": ""}
-    if not pattern:
-        return {"error": "pattern is required", "url": url}
-
-    context_lines = _coerce_grep_int(context_lines, default=2, minimum=0, maximum=_GREP_CONTEXT_MAX_LINES)
-    max_matches = _coerce_grep_int(max_matches, default=20, minimum=1, maximum=_GREP_MAX_MATCHES)
-    refresh_if_missing = _coerce_bool(refresh_if_missing, default=True)
-    snapshot = _load_fetched_content_snapshot(url, refresh_if_missing=refresh_if_missing)
-    raw_text = str(snapshot.get("raw_text") or "")
-    searched_source = str(snapshot.get("searched_source") or "").strip()
-    refetch_error = str(snapshot.get("refetch_error") or "").strip()
-
-    if not raw_text:
-        error_message = (
-            "URL content not found in cache, live fetch, or tool memory. "
-            "Call fetch_url for this URL first, then use grep_fetched_content."
-        )
-        if refetch_error:
-            error_message += f" Live refetch also failed: {refetch_error}"
-        return {
-            "error": error_message,
-            "url": url,
-            "match_count": 0,
-            "matches": [],
-        }
-
-    try:
-        compiled = re.compile(pattern, re.IGNORECASE)
-    except re.error as exc:
-        return {"error": f"Invalid regex pattern: {exc}", "url": url, "match_count": 0, "matches": []}
-
-    lines = raw_text.splitlines()
-    matches: list[dict] = []
-    for line_index, line in enumerate(lines):
-        if len(matches) >= max_matches:
-            break
-        if not compiled.search(line):
-            continue
-        before_start = max(0, line_index - context_lines)
-        after_end = min(len(lines), line_index + context_lines + 1)
-        matches.append(
-            {
-                "line_number": line_index + 1,
-                "line": line,
-                "context_before": lines[before_start:line_index],
-                "context_after": lines[line_index + 1 : after_end],
-            }
-        )
-
-    truncated = len(matches) >= max_matches and any(
-        compiled.search(line) for line in lines[matches[-1]["line_number"] :]
-    )
-    result: dict = {
-        "url": url,
-        "pattern": pattern,
-        "match_count": len(matches),
-        "matches": matches,
-        "searched_source": searched_source or "unknown",
-    }
-    if searched_source == "live_refetch":
-        result["refetched"] = True
-    if truncated:
-        result["truncated"] = True
-        result["note"] = f"Results limited to {max_matches} matches. Refine the pattern or increase max_matches to see more."
-    if not matches:
-        result["note"] = "No matches found. The pattern may not appear in the fetched content, or the content was not cached."
-    return result
 
 
 def get_proxy_candidates_for_operation(
@@ -980,31 +697,20 @@ def get_proxy_candidates_for_operation(
     include_direct_fallback: bool = False,
     settings: dict | None = None,
 ) -> list[str | None]:
-    """Get proxy candidates for an operation.
+    """Return proxy candidates for a given operation.
 
-    Note: serp-scraper handles proxy rotation internally. This function
-    is kept for backward compatibility with code that still needs it.
+    Proxy management is delegated to serp-scraper (via environment variables).
+    This function always returns [None] (direct connection) and exists only for
+    backward compatibility with callers that still iterate proxy candidates.
     """
-    enabled_operations = set(get_proxy_enabled_operations(settings))
-    normalized_operation = str(operation or "").strip().lower()
-    if normalized_operation not in enabled_operations:
-        return [None]
     return [None]
 
 
 def load_proxies() -> list[str]:
-    """Load proxies from file.
-
-    Note: serp-scraper uses environment variables for proxy configuration.
-    This function is kept for backward compatibility.
-    """
+    """Load proxies from file (stub — serp-scraper handles proxy configuration)."""
     return []
 
 
 def get_proxy_candidates(include_direct_fallback: bool = False) -> list[str | None]:
-    """Get proxy candidates.
-
-    Note: serp-scraper handles proxy rotation internally.
-    This function is kept for backward compatibility.
-    """
-    return [None] if not include_direct_fallback else [None, None]
+    """Return proxy candidates (stub — serp-scraper handles proxy configuration)."""
+    return [None]

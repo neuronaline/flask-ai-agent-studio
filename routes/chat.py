@@ -24,7 +24,7 @@ from agent.agent import (
     collect_agent_response,
     run_agent_stream,
 )
-from services.canvas_service import (
+from services.canvas import (
     create_canvas_document,
     create_canvas_runtime_state,
     decrement_canvas_viewport_ttls,

@@ -12,7 +12,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
-from services.canvas_service import extract_canvas_documents
+from services.canvas import extract_canvas_documents
 from core.db import extract_message_attachments
 
 

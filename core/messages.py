@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 from core.prompts import get_prompt
 
-from services.canvas_service import (
+from services.canvas import (
     build_canvas_project_manifest,
     CANVAS_CONTENT_MUTATING_TOOL_NAMES,
     extract_canvas_documents,
@@ -2372,7 +2372,6 @@ def build_tool_call_contract(
         "search_scholar",
         "fetch_url",
         "fetch_url_summarized",
-        "grep_fetched_content",
     }
     if any(name in normalized_tool_names for name in web_research_tool_names):
         rules.append(

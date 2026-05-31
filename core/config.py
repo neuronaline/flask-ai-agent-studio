@@ -290,8 +290,6 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "search_web",
     "fetch_url",
     "fetch_url_summarized",
-    "scroll_fetched_content",
-    "grep_fetched_content",
     "search_news",
     "search_news_google",
     "search_scholar",

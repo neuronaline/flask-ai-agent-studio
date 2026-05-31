@@ -110,7 +110,7 @@ The LLM is equipped with a vast array of tools. Schemas are strictly validated b
 *   `search_tool_memory`: Search successfully cached past web results.
 *   `search_web` / `search_news_ddgs` / `search_news_google`: Web discovery.
 *   `fetch_url` / `fetch_url_summarized`: Fetch, clean, and summarize web pages.
-*   `scroll_fetched_content` / `grep_fetched_content`: Deep-dive into long web pages.
+*   `fetch_url` with `compress`: Built-in content compression (head/middle/tail) for long pages.
 
 **Canvas & Document Editing**
 *   `create_canvas_document` / `delete_canvas_document` / `clear_canvas`: File management.

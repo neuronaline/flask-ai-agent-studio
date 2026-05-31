@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from services.canvas_service import (
+from services.canvas import (
     batch_read_canvas_documents,
     create_canvas_runtime_state,
     get_canvas_viewport_payloads,

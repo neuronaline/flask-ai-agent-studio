@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from flask import current_app, g, has_app_context
 
-from services.canvas_service import extract_canvas_active_document_id, extract_canvas_documents, extract_canvas_viewports
+from services.canvas import extract_canvas_active_document_id, extract_canvas_documents, extract_canvas_viewports
 from core.config import (
     AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS,
     AGENT_CONTEXT_COMPACTION_THRESHOLD,
