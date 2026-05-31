@@ -28,7 +28,10 @@ from core.db import (
     get_context_node_stats as db_get_context_node_stats,
     insert_context_node as db_insert_context_node,
     list_context_nodes as db_list_context_nodes,
+    list_context_summary,
+    merge_context_nodes,
     purge_context_nodes as db_purge_context_nodes,
+    update_context_node,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -384,6 +387,83 @@ class ContextNodeService:
             total_tokens=stats.get("total_tokens", 0),
             active_tokens=stats.get("active_tokens", 0),
             model_limit=self.model_token_limit,
+        )
+
+    def list_summary(
+        self,
+        conversation_id: int,
+        sort_by: str = "created_at",
+    ) -> list[dict]:
+        """Lightweight overview of context nodes — no full payloads.
+
+        Per AI Memory and Context Management doc Section 2.1:
+        Returns node_id, summary, token_count, timestamp.
+
+        Args:
+            conversation_id: Conversation to query.
+            sort_by: 'created_at' or 'token_count'.
+
+        Returns:
+            List of lightweight node summaries.
+        """
+        return list_context_summary(
+            conversation_id=conversation_id,
+            sort_by=sort_by,
+        )
+
+    def merge_nodes(
+        self,
+        conversation_id: int,
+        node_ids: list[str],
+        new_summary: str,
+    ) -> dict | None:
+        """Merge multiple related context nodes into one.
+
+        Per AI Memory and Context Management doc Section 2.3.
+
+        Args:
+            conversation_id: Conversation ID.
+            node_ids: List of node UUIDs to merge.
+            new_summary: Condensed summary (max ~50 tokens).
+
+        Returns:
+            New merged node dict or None.
+        """
+        return merge_context_nodes(
+            conversation_id=conversation_id,
+            node_ids=node_ids,
+            new_summary=new_summary,
+        )
+
+    def update_node(
+        self,
+        node_id: str,
+        *,
+        full_content: str | None = None,
+        token_count: int | None = None,
+        summary: str | None = None,
+        compressed: bool | None = None,
+    ) -> dict | None:
+        """Update an existing context node's content, token_count, summary, or compressed flag.
+
+        Used by compress_context_node to update the payload after compression.
+
+        Args:
+            node_id: UUID of the node.
+            full_content: Optional new content.
+            token_count: Optional new token count.
+            summary: Optional new summary.
+            compressed: Optional compressed flag.
+
+        Returns:
+            Updated node dict or None.
+        """
+        return update_context_node(
+            node_id=node_id,
+            full_content=full_content,
+            token_count=token_count,
+            summary=summary,
+            compressed=compressed,
         )
 
     def check_execution_cost(

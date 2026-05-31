@@ -41,8 +41,6 @@
   const subAgentRetryAttemptsEl = document.getElementById("sub-agent-retry-attempts-input");
   const subAgentRetryDelaySecondsEl = document.getElementById("sub-agent-retry-delay-seconds-input");
   const subAgentMaxParallelToolsEl = document.getElementById("sub-agent-max-parallel-tools-input");
-  const subAgentCanvasAutoSaveEl = document.getElementById("sub-agent-canvas-auto-save-toggle");
-  const subAgentCanvasAutoOpenEl = document.getElementById("sub-agent-canvas-auto-open-toggle");
   const webCacheTtlHoursEl = document.getElementById("web-cache-ttl-hours-input");
   const openrouterPromptCacheEnabledEl = document.getElementById("openrouter-prompt-cache-enabled-toggle");
   const openrouterAnthropicCacheTtlEls = document.querySelectorAll("input[name='openrouter-anthropic-cache-ttl']");
@@ -78,6 +76,9 @@
   const openrouterHttpRefererEl = document.getElementById("openrouter-http-referer-input");
   const openrouterAppTitleEl = document.getElementById("openrouter-app-title-input");
   const conversationMemoryEnabledEl = document.getElementById("conversation-memory-enabled-toggle");
+  const conversationTruncationEnabledEl = document.getElementById("conversation-truncation-enabled-toggle");
+  const conversationMaxMessagesEl = document.getElementById("conversation-max-messages-input");
+  const conversationMaxMessageCharsEl = document.getElementById("conversation-max-message-chars-input");
   const ocrEnabledEl = document.getElementById("ocr-enabled-toggle");
   const loginSessionTimeoutMinutesEl = document.getElementById("login-session-timeout-minutes-input");
   const loginMaxFailedAttemptsEl = document.getElementById("login-max-failed-attempts-input");
@@ -160,15 +161,22 @@
     if (promptRagMaxTokensEl) promptRagMaxTokensEl.value = String(appSettings.prompt_rag_max_tokens ?? 18000);
     if (promptToolTraceMaxTokensEl) promptToolTraceMaxTokensEl.value = String(appSettings.prompt_tool_trace_max_tokens ?? 9000);
 
-    // Context / canvas / fetch settings are set inline above and read from DOM at save time.
+    // Context / canvas / fetch settings are synced below by dedicated module functions.
     // Module read functions (read*Payload) are still used at save time for correct user-modified values.
+    window.__settingsContext?.syncContextSettingsToForm?.(appSettings);
+    window.__settingsCanvas?.syncCanvasSettingsToForm?.(appSettings);
+    window.__settingsFetch?.syncFetchSettingsToForm?.(appSettings);
 
-    if (subAgentCanvasAutoSaveEl) subAgentCanvasAutoSaveEl.checked = Boolean(appSettings.sub_agent_canvas_auto_save ?? true);
-    if (subAgentCanvasAutoOpenEl) subAgentCanvasAutoOpenEl.checked = Boolean(appSettings.sub_agent_canvas_auto_open);
     if (conversationMemoryEnabledEl) conversationMemoryEnabledEl.checked = Boolean(appSettings.conversation_memory_enabled);
+    if (conversationTruncationEnabledEl) conversationTruncationEnabledEl.checked = Boolean(appSettings.conversation_truncation_enabled ?? true);
+    if (conversationMaxMessagesEl) conversationMaxMessagesEl.value = String(appSettings.conversation_max_messages ?? 20);
+    if (conversationMaxMessageCharsEl) conversationMaxMessageCharsEl.value = String(appSettings.conversation_max_message_chars ?? 500);
     if (ocrEnabledEl) ocrEnabledEl.checked = Boolean(appSettings.ocr_enabled);
     if (ragEnabledEl) ragEnabledEl.checked = Boolean(appSettings.rag_enabled);
     if (youtubeTranscriptsEnabledEl) youtubeTranscriptsEnabledEl.checked = Boolean(appSettings.youtube_transcripts_enabled);
+
+    const reasoningAutoCollapseEl = document.getElementById("reasoning-auto-collapse-toggle");
+    if (reasoningAutoCollapseEl) reasoningAutoCollapseEl.checked = Boolean(appSettings.reasoning_auto_collapse);
 
     const chatSummaryModelEl = document.getElementById("chat-summary-model-select");
     if (chatSummaryModelEl) chatSummaryModelEl.value = String(appSettings.chat_summary_model || "");
@@ -203,8 +211,6 @@
     window.__settingsModels?.setCustomModelStatus?.("No pending model changes", "muted");
 
     window.__settingsRag?.updateRagSensitivityHint?.();
-    window.__settingsContext?.syncContextStrategyAvailability?.();
-    window.__settingsContext?.syncPruningSettingsAvailability?.();
 
     if (scratchpadListEl || scratchpadAddBtn || scratchpadCountEl) {
       window.__scratchpadModule?.renderScratchpad(true);
@@ -257,7 +263,6 @@
 
     window.__settingsRag?.syncRagAutoInjectSourceAvailability?.();
     window.__settingsContext?.syncContextStrategyAvailability?.();
-    window.__settingsContext?.syncPruningSettingsAvailability?.();
     window.__settingsRag?.updateRagSourceSummary?.();
     syncOverviewStats();
   }
@@ -283,8 +288,6 @@
     appSettings.sub_agent_retry_attempts = data.sub_agent_retry_attempts ?? 2;
     appSettings.sub_agent_retry_delay_seconds = data.sub_agent_retry_delay_seconds ?? 5;
     appSettings.sub_agent_max_parallel_tools = data.sub_agent_max_parallel_tools ?? data.max_parallel_tools ?? 2;
-    appSettings.sub_agent_canvas_auto_save = Boolean(data.sub_agent_canvas_auto_save ?? true);
-    appSettings.sub_agent_canvas_auto_open = Boolean(data.sub_agent_canvas_auto_open);
     appSettings.web_cache_ttl_hours = data.web_cache_ttl_hours ?? 24;
     appSettings.openrouter_prompt_cache_enabled = Boolean(data.openrouter_prompt_cache_enabled ?? true);
     appSettings.openrouter_anthropic_cache_ttl = data.openrouter_anthropic_cache_ttl || "5m";
@@ -305,6 +308,9 @@
     appSettings.operation_model_fallback_preferences = data.operation_model_fallback_preferences && typeof data.operation_model_fallback_preferences === "object" ? data.operation_model_fallback_preferences : {};
     appSettings.image_processing_method = data.image_processing_method || "multimodal";
     appSettings.conversation_memory_enabled = Boolean(data.conversation_memory_enabled);
+    appSettings.conversation_truncation_enabled = Boolean(data.conversation_truncation_enabled ?? true);
+    appSettings.conversation_max_messages = data.conversation_max_messages ?? 20;
+    appSettings.conversation_max_message_chars = data.conversation_max_message_chars ?? 500;
     appSettings.ocr_enabled = Boolean(data.ocr_enabled);
     appSettings.rag_enabled = Boolean(data.rag_enabled);
     appSettings.youtube_transcripts_enabled = Boolean(data.youtube_transcripts_enabled);
@@ -325,12 +331,6 @@
     appSettings.prompt_tool_trace_max_tokens = data.prompt_tool_trace_max_tokens ?? 9000;
     appSettings.context_compaction_threshold = data.context_compaction_threshold ?? 0.85;
     appSettings.context_compaction_keep_recent_rounds = data.context_compaction_keep_recent_rounds ?? 2;
-    appSettings.context_selection_strategy = data.context_selection_strategy || "classic";
-    appSettings.entropy_profile = data.entropy_profile || "balanced";
-    appSettings.entropy_rag_budget_ratio = data.entropy_rag_budget_ratio ?? 35;
-    appSettings.entropy_protect_code_blocks = Boolean(data.entropy_protect_code_blocks ?? true);
-    appSettings.entropy_protect_tool_results = Boolean(data.entropy_protect_tool_results ?? true);
-    appSettings.entropy_reference_boost = Boolean(data.entropy_reference_boost ?? true);
     appSettings.reasoning_auto_collapse = Boolean(data.reasoning_auto_collapse);
     appSettings.fetch_url_token_threshold = data.fetch_url_token_threshold || 3500;
     appSettings.fetch_url_clip_aggressiveness = data.fetch_url_clip_aggressiveness ?? 50;
@@ -411,8 +411,6 @@
       sub_agent_retry_attempts: readNumericSetting(subAgentRetryAttemptsEl, 2),
       sub_agent_retry_delay_seconds: readNumericSetting(subAgentRetryDelaySecondsEl, 5),
       sub_agent_max_parallel_tools: readNumericSetting(subAgentMaxParallelToolsEl, 2, { allowZero: false }),
-      sub_agent_canvas_auto_save: Boolean(subAgentCanvasAutoSaveEl?.checked ?? true),
-      sub_agent_canvas_auto_open: Boolean(subAgentCanvasAutoOpenEl?.checked),
       web_cache_ttl_hours: readNumericSetting(webCacheTtlHoursEl, 24),
       openrouter_prompt_cache_enabled: Boolean(openrouterPromptCacheEnabledEl?.checked),
       openrouter_anthropic_cache_ttl: (() => { const r = [...openrouterAnthropicCacheTtlEls].find(el => el.checked); return r ? r.value : "5m"; })(),
@@ -442,6 +440,9 @@
       ...(window.__settingsCanvas?.readCanvasSettingsPayload?.() ?? {}),
       ...(window.__settingsFetch?.readFetchSettingsPayload?.() ?? {}),
       conversation_memory_enabled: Boolean(conversationMemoryEnabledEl?.checked),
+      conversation_truncation_enabled: Boolean(conversationTruncationEnabledEl?.checked ?? true),
+      conversation_max_messages: readNumericSetting(conversationMaxMessagesEl, 20, { allowZero: false, min: 3, max: 200 }),
+      conversation_max_message_chars: readNumericSetting(conversationMaxMessageCharsEl, 500, { allowZero: false, min: 100, max: 50000 }),
       ocr_enabled: Boolean(ocrEnabledEl?.checked),
       rag_enabled: Boolean(ragEnabledEl?.checked),
       youtube_transcripts_enabled: Boolean(youtubeTranscriptsEnabledEl?.checked),
@@ -453,8 +454,6 @@
       rag_search_min_similarity: readFloatSetting(ragSearchMinSimilarityEl, 0.35, { min: 0, max: 1 }),
       rag_query_expansion_enabled: Boolean(ragQueryExpansionEnabledEl?.checked),
       rag_query_expansion_max_variants: readNumericSetting(ragQueryExpansionMaxVariantsEl, 2, { allowZero: false, min: 1, max: 10 }),
-      fetch_raw_max_text_chars: readNumericSetting(fetchRawMaxTextCharsEl, 24000, { allowZero: false, min: 1000 }),
-      fetch_summary_max_chars: readNumericSetting(fetchSummaryMaxCharsEl, 8000, { allowZero: false, min: 500 }),
       // Custom models (delegated to __customModelsModule)
       custom_models: (window.__customModelsModule?.getDraftCustomModels?.() ?? []).map((model) => window.__customModelsModule?.serializeDraftCustomModel?.(model) ?? model),
       visible_model_order: window.__customModelsModule?.getDraftVisibleModelOrder?.() ?? [],
@@ -547,6 +546,33 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════════════════
+  // Context filter toggles (parent model / sub-agent visibility)
+  // ═══════════════════════════════════════════════════════════════════════════════
+  function initContextFilters() {
+    const parentFilter = document.getElementById("context-filter-parent");
+    const subAgentFilter = document.getElementById("context-filter-sub-agent");
+    if (!parentFilter || !subAgentFilter) return;
+
+    function applyContextFilters() {
+      const showParent = parentFilter.checked;
+      const showSubAgent = subAgentFilter.checked;
+
+      document.querySelectorAll(".settings-budget-item").forEach((item) => {
+        const context = item.getAttribute("data-context");
+        if (context === "parent") {
+          item.style.display = showParent ? "" : "none";
+        } else if (context === "sub-agent") {
+          item.style.display = showSubAgent ? "" : "none";
+        }
+      });
+    }
+
+    parentFilter.addEventListener("change", applyContextFilters);
+    subAgentFilter.addEventListener("change", applyContextFilters);
+    applyContextFilters();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════════
   // Public API (for backward compatibility and init.js)
   // ═══════════════════════════════════════════════════════════════════════════════
   window.saveAllSettings = saveAllSettings;
@@ -567,6 +593,9 @@
 
     // Apply feature availability constraints
     applyFeatureAvailability();
+
+    // Init context filter toggles
+    initContextFilters();
 
     // Initial status
     window.__settingsCore?.setSettingsStatus?.("Ready");

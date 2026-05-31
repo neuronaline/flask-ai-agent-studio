@@ -24,10 +24,10 @@ from core.config import (
     CANVAS_PROMPT_DEFAULT_MAX_TOKENS,
     CANVAS_SCROLL_WINDOW_LINES,
     CHAT_SUMMARY_ALLOWED_MODES,
+    CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL,
     CHAT_SUMMARY_DETAIL_LEVELS,
     CHAT_SUMMARY_MODE,
     CHAT_SUMMARY_TRIGGER_TOKEN_COUNT,
-    CONTEXT_SELECTION_ALLOWED_STRATEGIES,
     CONTENT_MAX_CHARS,
     CLARIFICATION_DEFAULT_MAX_QUESTIONS,
     CLARIFICATION_QUESTION_LIMIT_MAX,
@@ -40,8 +40,6 @@ from core.config import (
     DEFAULT_SETTINGS,
     OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
     OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT,
-    PRUNING_MIN_TARGET_TOKENS,
-    PRUNING_TARGET_REDUCTION_RATIO,
     SCRATCHPAD_DEFAULT_SECTION,
     SCRATCHPAD_SECTION_ORDER,
     SCRATCHPAD_SECTION_SETTING_KEYS,
@@ -52,9 +50,9 @@ from core.config import (
     FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
     FETCH_SUMMARY_MAX_CHARS,
     FETCH_SUMMARY_TOKEN_THRESHOLD,
+    FETCH_URL_CLIP_AGGRESSIVENESS,
     IMAGE_STORAGE_DIR,
     DEFAULT_MAX_PARALLEL_TOOLS,
-    ENTROPY_PROFILE_PRESETS,
     MAX_AI_PERSONALITY_LENGTH,
     MAX_PERSONA_COUNT,
     MAX_PERSONA_NAME_LENGTH,
@@ -455,6 +453,8 @@ def init_db() -> None:
                 result_preview          TEXT NOT NULL DEFAULT '',
                 full_content            TEXT,
                 token_count             INTEGER NOT NULL DEFAULT 0,
+                summary                 TEXT NOT NULL DEFAULT '',
+                compressed              INTEGER NOT NULL DEFAULT 0,
                 status                  TEXT NOT NULL DEFAULT 'active',
                 created_at              TEXT NOT NULL DEFAULT (datetime('now')),
                 archived_at             TEXT,
@@ -614,6 +614,8 @@ def _context_node_row_to_dict(row) -> dict | None:
         "result_preview": str(row["result_preview"] or "").strip(),
         "full_content": str(row["full_content"] or "").strip() if row["full_content"] else None,
         "token_count": int(row["token_count"] or 0),
+        "summary": str(row["summary"] or "").strip() if row["summary"] else None,
+        "compressed": bool(row["compressed"] if row["compressed"] else 0),
         "status": str(row["status"] or "active").strip(),
         "created_at": str(row["created_at"] or "").strip(),
         "archived_at": str(row["archived_at"] or "").strip() if row["archived_at"] else None,
@@ -851,6 +853,202 @@ def get_context_node_stats(conversation_id: int) -> dict:
     }
 
 
+def list_context_summary(
+    conversation_id: int,
+    sort_by: str = "created_at",
+    status: str | None = "active",
+) -> list[dict]:
+    """Lightweight overview of active context nodes — no full payloads.
+
+    Per AI Memory and Context Management doc Section 2.1:
+    Returns node_id, summary, token_count, timestamp for each node.
+
+    Args:
+        conversation_id: Conversation to query.
+        sort_by: 'created_at' or 'token_count'. Default: 'created_at'.
+        status: Filter by status. Default: 'active'.
+
+    Returns:
+        List of lightweight node summaries.
+    """
+    normalized_conversation_id = int(conversation_id) if conversation_id else None
+    if not normalized_conversation_id:
+        return []
+
+    valid_sort_by = {"created_at", "token_count"}
+    normalized_sort_by = sort_by if sort_by in valid_sort_by else "created_at"
+
+    valid_statuses = {"active", "archived", "deleted"}
+    normalized_status = status if status in valid_statuses else "active"
+
+    with get_db() as conn:
+        if normalized_sort_by == "created_at":
+            order_clause = "created_at ASC, id ASC"
+        else:
+            order_clause = "token_count DESC, id DESC"
+
+        rows = conn.execute(
+            f"""SELECT node_id, summary, token_count, created_at
+                FROM context_nodes
+                WHERE conversation_id = ? AND status = ?
+                ORDER BY {order_clause}""",
+            (normalized_conversation_id, normalized_status),
+        ).fetchall()
+
+    result = []
+    for row in rows:
+        result.append({
+            "node_id": str(row["node_id"] or "").strip(),
+            "summary": str(row["summary"] or "").strip() if row["summary"] else None,
+            "token_count": int(row["token_count"] or 0),
+            "timestamp": str(row["created_at"] or "").strip(),
+        })
+    return result
+
+
+def update_context_node(
+    node_id: str,
+    *,
+    full_content: str | None = None,
+    token_count: int | None = None,
+    summary: str | None = None,
+    compressed: bool | None = None,
+) -> dict | None:
+    """Update an existing context node's content, token_count, summary, or compressed flag.
+
+    Used by compress_context_node to update the payload after compression.
+
+    Args:
+        node_id: UUID of the node to update.
+        full_content: Optional new full content.
+        token_count: Optional new token count.
+        summary: Optional new summary.
+        compressed: Optional compressed flag.
+
+    Returns:
+        Updated node dict, or None if not found.
+    """
+    normalized_node_id = str(node_id or "").strip()
+    if not normalized_node_id:
+        return None
+
+    existing = get_context_node(normalized_node_id)
+    if not existing:
+        return None
+
+    updates = {}
+    if full_content is not None:
+        updates["full_content"] = str(full_content).strip() if full_content else None
+    if token_count is not None:
+        updates["token_count"] = max(0, int(token_count))
+    if summary is not None:
+        updates["summary"] = str(summary).strip()[:500] if summary else ""
+    if compressed is not None:
+        updates["compressed"] = 1 if compressed else 0
+
+    if not updates:
+        return existing
+
+    set_parts = ", ".join(f"{key} = ?" for key in updates)
+    values = list(updates.values())
+    values.append(normalized_node_id)
+
+    with get_db() as conn:
+        conn.execute(
+            f"UPDATE context_nodes SET {set_parts} WHERE node_id = ?",
+            tuple(values),
+        )
+
+    return get_context_node(normalized_node_id)
+
+
+def merge_context_nodes(
+    conversation_id: int,
+    node_ids: list[str],
+    new_summary: str,
+) -> dict | None:
+    """Merge two or more context nodes into one, purging the originals.
+
+    Per AI Memory and Context Management doc Section 2.3:
+    - Payloads of listed nodes are concatenated and stored as a single new node.
+    - Source nodes are purged automatically.
+    - New node inherits the earliest timestamp from the source set.
+
+    Args:
+        conversation_id: Conversation ID.
+        node_ids: List of node UUIDs to merge.
+        new_summary: Condensed summary for the merged node (max ~50 tokens).
+
+    Returns:
+        The new merged node dict, or None on failure.
+    """
+    normalized_conversation_id = int(conversation_id) if conversation_id else None
+    if not normalized_conversation_id or not node_ids:
+        return None
+
+    normalized_node_ids = [str(nid or "").strip() for nid in node_ids if str(nid or "").strip()]
+    if len(normalized_node_ids) < 2:
+        return None
+
+    # Fetch all source nodes
+    source_nodes = []
+    for nid in normalized_node_ids:
+        node = get_context_node(nid)
+        if node and node.get("conversation_id") == normalized_conversation_id:
+            source_nodes.append(node)
+
+    if len(source_nodes) < 2:
+        return None
+
+    # Concatenate payloads and find earliest timestamp
+    combined_payload_parts = []
+    earliest_timestamp = None
+    combined_token_count = 0
+    for node in source_nodes:
+        content = node.get("full_content") or node.get("result_preview") or ""
+        if content:
+            combined_payload_parts.append(content)
+        combined_token_count += node.get("token_count") or 0
+        ts = node.get("created_at") or ""
+        if ts and (earliest_timestamp is None or ts < earliest_timestamp):
+            earliest_timestamp = ts
+
+    merged_payload = "\n\n---\n\n".join(part for part in combined_payload_parts if part)
+    if not merged_payload:
+        return None
+
+    # Create new node
+    new_node_id = str(uuid4())
+    normalized_summary = str(new_summary or "").strip()[:500] or "Merged context nodes"
+
+    from utils.token_utils import estimate_text_tokens
+    merged_token_count = estimate_text_tokens(merged_payload)
+
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO context_nodes
+               (node_id, tool_name, args_preview, result_preview, full_content,
+                token_count, summary, compressed, conversation_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                new_node_id,
+                "merge_context_nodes",
+                f"Merged {len(source_nodes)} nodes",
+                normalized_summary,
+                merged_payload,
+                merged_token_count,
+                normalized_summary,
+                0,
+                normalized_conversation_id,
+            ),
+        )
+
+    # Purge originals
+    purge_context_nodes(normalized_node_ids, f"Merged into {new_node_id}")
+
+    return get_context_node(new_node_id)
+
+
 def initialize_database() -> None:
     init_db()
     ensure_conversation_title_columns()
@@ -863,6 +1061,17 @@ def initialize_database() -> None:
     ensure_messages_deleted_at_column()
     ensure_rag_documents_expires_at_column()
     ensure_model_invocations_activity_columns()
+    ensure_context_nodes_columns()
+
+
+def ensure_context_nodes_columns() -> None:
+    """Add summary and compressed columns to context_nodes table if missing."""
+    with get_db() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(context_nodes)").fetchall()}
+        if "summary" not in columns:
+            conn.execute("ALTER TABLE context_nodes ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
+        if "compressed" not in columns:
+            conn.execute("ALTER TABLE context_nodes ADD COLUMN compressed INTEGER NOT NULL DEFAULT 0")
 
 
 def _normalize_user_profile_value(value, max_length: int = 500) -> str:
@@ -5076,54 +5285,6 @@ def get_rag_auto_inject_top_k(settings: dict | None = None) -> int:
     return int(RAG_CONTEXT_SIZE_PRESETS[get_rag_context_size(settings)])
 
 
-def get_context_selection_strategy(settings: dict | None = None) -> str:
-    source = settings if settings is not None else get_app_settings()
-    raw_value = (
-        str(source.get("context_selection_strategy", DEFAULT_SETTINGS["context_selection_strategy"]) or "")
-        .strip()
-        .lower()
-    )
-    if raw_value in CONTEXT_SELECTION_ALLOWED_STRATEGIES:
-        return raw_value
-    return DEFAULT_SETTINGS["context_selection_strategy"]
-
-
-def get_entropy_profile(settings: dict | None = None) -> str:
-    source = settings if settings is not None else get_app_settings()
-    raw_value = str(source.get("entropy_profile", DEFAULT_SETTINGS["entropy_profile"]) or "").strip().lower()
-    if raw_value in ENTROPY_PROFILE_PRESETS:
-        return raw_value
-    return DEFAULT_SETTINGS["entropy_profile"]
-
-
-def get_entropy_rag_budget_ratio(settings: dict | None = None) -> int:
-    source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("entropy_rag_budget_ratio", DEFAULT_SETTINGS["entropy_rag_budget_ratio"])
-    try:
-        value = int(raw_value)
-    except (TypeError, ValueError):
-        value = int(DEFAULT_SETTINGS["entropy_rag_budget_ratio"])
-    return max(0, min(80, value))
-
-
-def get_entropy_protect_code_blocks_enabled(settings: dict | None = None) -> bool:
-    source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("entropy_protect_code_blocks", DEFAULT_SETTINGS["entropy_protect_code_blocks"])
-    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def get_entropy_protect_tool_results_enabled(settings: dict | None = None) -> bool:
-    source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("entropy_protect_tool_results", DEFAULT_SETTINGS["entropy_protect_tool_results"])
-    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def get_entropy_reference_boost_enabled(settings: dict | None = None) -> bool:
-    source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("entropy_reference_boost", DEFAULT_SETTINGS["entropy_reference_boost"])
-    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
-
-
 def get_chat_summary_mode(settings: dict | None = None) -> str:
     source = settings if settings is not None else get_app_settings()
     raw_value = str(source.get("chat_summary_mode", DEFAULT_SETTINGS["chat_summary_mode"]) or "").strip().lower()
@@ -5137,12 +5298,9 @@ def get_chat_summary_trigger_token_count(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
     raw_value = source.get("chat_summary_trigger_token_count")
     if raw_value in (None, ""):
-        raw_value = source.get(
-            "chat_summary_trigger_message_count",
-            DEFAULT_SETTINGS["chat_summary_trigger_token_count"],
-        )
+        raw_value = source.get("chat_summary_trigger_message_count")
     try:
-        value = int(raw_value)
+        value = int(raw_value) if raw_value is not None else CHAT_SUMMARY_TRIGGER_TOKEN_COUNT
     except (TypeError, ValueError):
         value = CHAT_SUMMARY_TRIGGER_TOKEN_COUNT
     return max(1_000, min(200_000, value))
@@ -5151,20 +5309,18 @@ def get_chat_summary_trigger_token_count(settings: dict | None = None) -> int:
 def get_chat_summary_detail_level(settings: dict | None = None) -> str:
     source = settings if settings is not None else get_app_settings()
     raw_value = (
-        str(source.get("chat_summary_detail_level", DEFAULT_SETTINGS["chat_summary_detail_level"]) or "")
-        .strip()
-        .lower()
+        str(source.get("chat_summary_detail_level") or "").strip().lower()
     )
     if raw_value in CHAT_SUMMARY_DETAIL_LEVELS:
         return raw_value
-    return DEFAULT_SETTINGS["chat_summary_detail_level"]
+    return CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL
 
 
 def get_summary_skip_first(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("summary_skip_first", DEFAULT_SETTINGS["summary_skip_first"])
+    raw_value = source.get("summary_skip_first")
     try:
-        value = int(raw_value)
+        value = int(raw_value) if raw_value is not None else 2
     except (TypeError, ValueError):
         value = 2
     return max(0, min(20, value))
@@ -5172,9 +5328,9 @@ def get_summary_skip_first(settings: dict | None = None) -> int:
 
 def get_summary_skip_last(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("summary_skip_last", DEFAULT_SETTINGS["summary_skip_last"])
+    raw_value = source.get("summary_skip_last")
     try:
-        value = int(raw_value)
+        value = int(raw_value) if raw_value is not None else 1
     except (TypeError, ValueError):
         value = 1
     return max(0, min(20, value))
@@ -5182,9 +5338,9 @@ def get_summary_skip_last(settings: dict | None = None) -> int:
 
 def get_clarification_max_questions(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("clarification_max_questions", DEFAULT_SETTINGS["clarification_max_questions"])
+    raw_value = source.get("clarification_max_questions")
     try:
-        value = int(raw_value)
+        value = int(raw_value) if raw_value is not None else CLARIFICATION_DEFAULT_MAX_QUESTIONS
     except (TypeError, ValueError):
         value = CLARIFICATION_DEFAULT_MAX_QUESTIONS
     return max(CLARIFICATION_QUESTION_LIMIT_MIN, min(CLARIFICATION_QUESTION_LIMIT_MAX, value))
@@ -5192,9 +5348,9 @@ def get_clarification_max_questions(settings: dict | None = None) -> int:
 
 def get_search_tool_query_limit(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("search_tool_query_limit", DEFAULT_SETTINGS["search_tool_query_limit"])
+    raw_value = source.get("search_tool_query_limit")
     try:
-        value = int(raw_value)
+        value = int(raw_value) if raw_value is not None else DEFAULT_SEARCH_TOOL_QUERY_LIMIT
     except (TypeError, ValueError):
         value = DEFAULT_SEARCH_TOOL_QUERY_LIMIT
     return max(SEARCH_TOOL_QUERY_LIMIT_MIN, min(SEARCH_TOOL_QUERY_LIMIT_MAX, value))
@@ -5202,9 +5358,9 @@ def get_search_tool_query_limit(settings: dict | None = None) -> int:
 
 def get_canvas_prompt_max_lines(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("canvas_prompt_max_lines", DEFAULT_SETTINGS["canvas_prompt_max_lines"])
+    raw_value = source.get("canvas_prompt_max_lines")
     try:
-        value = int(raw_value)
+        value = int(raw_value) if raw_value is not None else CANVAS_PROMPT_DEFAULT_MAX_LINES
     except (TypeError, ValueError):
         value = CANVAS_PROMPT_DEFAULT_MAX_LINES
     return max(100, min(3_000, value))
@@ -5212,9 +5368,9 @@ def get_canvas_prompt_max_lines(settings: dict | None = None) -> int:
 
 def get_canvas_prompt_max_tokens(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("canvas_prompt_max_tokens", DEFAULT_SETTINGS["canvas_prompt_max_tokens"])
+    raw_value = source.get("canvas_prompt_max_tokens")
     try:
-        value = int(raw_value)
+        value = int(raw_value) if raw_value is not None else CANVAS_PROMPT_DEFAULT_MAX_TOKENS
     except (TypeError, ValueError):
         value = CANVAS_PROMPT_DEFAULT_MAX_TOKENS
     return max(500, min(50_000, value))
@@ -5222,9 +5378,9 @@ def get_canvas_prompt_max_tokens(settings: dict | None = None) -> int:
 
 def get_canvas_prompt_max_chars(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("canvas_prompt_max_chars", DEFAULT_SETTINGS["canvas_prompt_max_chars"])
+    raw_value = source.get("canvas_prompt_max_chars")
     try:
-        value = int(raw_value)
+        value = int(raw_value) if raw_value is not None else CANVAS_PROMPT_DEFAULT_MAX_CHARS
     except (TypeError, ValueError):
         value = CANVAS_PROMPT_DEFAULT_MAX_CHARS
     return max(1_000, min(200_000, value))
@@ -5232,12 +5388,9 @@ def get_canvas_prompt_max_chars(settings: dict | None = None) -> int:
 
 def get_canvas_prompt_code_line_max_chars(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get(
-        "canvas_prompt_code_line_max_chars",
-        DEFAULT_SETTINGS["canvas_prompt_code_line_max_chars"],
-    )
+    raw_value = source.get("canvas_prompt_code_line_max_chars")
     try:
-        value = int(raw_value)
+        value = int(raw_value) if raw_value is not None else CANVAS_PROMPT_CODE_LINE_MAX_CHARS
     except (TypeError, ValueError):
         value = CANVAS_PROMPT_CODE_LINE_MAX_CHARS
     return max(40, min(1_000, value))
@@ -5245,12 +5398,9 @@ def get_canvas_prompt_code_line_max_chars(settings: dict | None = None) -> int:
 
 def get_canvas_prompt_text_line_max_chars(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get(
-        "canvas_prompt_text_line_max_chars",
-        DEFAULT_SETTINGS["canvas_prompt_text_line_max_chars"],
-    )
+    raw_value = source.get("canvas_prompt_text_line_max_chars")
     try:
-        value = int(raw_value)
+        value = int(raw_value) if raw_value is not None else CANVAS_PROMPT_TEXT_LINE_MAX_CHARS
     except (TypeError, ValueError):
         value = CANVAS_PROMPT_TEXT_LINE_MAX_CHARS
     return max(40, min(1_000, value))
@@ -5258,9 +5408,9 @@ def get_canvas_prompt_text_line_max_chars(settings: dict | None = None) -> int:
 
 def get_canvas_expand_max_lines(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("canvas_expand_max_lines", DEFAULT_SETTINGS["canvas_expand_max_lines"])
+    raw_value = source.get("canvas_expand_max_lines")
     try:
-        value = int(raw_value)
+        value = int(raw_value) if raw_value is not None else CANVAS_EXPAND_DEFAULT_MAX_LINES
     except (TypeError, ValueError):
         value = CANVAS_EXPAND_DEFAULT_MAX_LINES
     return max(100, min(4_000, value))
@@ -5268,9 +5418,9 @@ def get_canvas_expand_max_lines(settings: dict | None = None) -> int:
 
 def get_canvas_scroll_window_lines(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("canvas_scroll_window_lines", DEFAULT_SETTINGS["canvas_scroll_window_lines"])
+    raw_value = source.get("canvas_scroll_window_lines")
     try:
-        value = int(raw_value)
+        value = int(raw_value) if raw_value is not None else CANVAS_SCROLL_WINDOW_LINES
     except (TypeError, ValueError):
         value = CANVAS_SCROLL_WINDOW_LINES
     return max(50, min(800, value))
@@ -5550,9 +5700,9 @@ def get_summary_retry_min_source_tokens(settings: dict | None = None) -> int:
 
 def get_fetch_url_token_threshold(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("fetch_url_token_threshold", DEFAULT_SETTINGS["fetch_url_token_threshold"])
+    raw_value = source.get("fetch_url_token_threshold")
     try:
-        threshold = int(raw_value)
+        threshold = int(raw_value) if raw_value is not None else FETCH_SUMMARY_TOKEN_THRESHOLD
     except (TypeError, ValueError):
         threshold = FETCH_SUMMARY_TOKEN_THRESHOLD
     return max(400, min(20_000, threshold))
@@ -5560,24 +5710,20 @@ def get_fetch_url_token_threshold(settings: dict | None = None) -> int:
 
 def get_fetch_url_clip_aggressiveness(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("fetch_url_clip_aggressiveness", DEFAULT_SETTINGS["fetch_url_clip_aggressiveness"])
+    raw_value = source.get("fetch_url_clip_aggressiveness")
     try:
-        aggressiveness = int(raw_value)
+        aggressiveness = int(raw_value) if raw_value is not None else FETCH_URL_CLIP_AGGRESSIVENESS
     except (TypeError, ValueError):
-        aggressiveness = 50
+        aggressiveness = FETCH_URL_CLIP_AGGRESSIVENESS
     return max(0, min(100, aggressiveness))
 
 
 def get_fetch_html_converter_mode(settings: dict | None = None) -> str:
     source = settings if settings is not None else get_app_settings()
-    raw_value = (
-        str(source.get("fetch_html_converter_mode", DEFAULT_SETTINGS["fetch_html_converter_mode"]) or "")
-        .strip()
-        .lower()
-    )
+    raw_value = str(source.get("fetch_html_converter_mode") or "").strip().lower()
     if raw_value in FETCH_HTML_CONVERTER_MODES:
         return raw_value
-    return DEFAULT_SETTINGS["fetch_html_converter_mode"]
+    return "hybrid"
 
 
 def get_fetch_url_summarized_max_input_chars(settings: dict | None = None) -> int:
@@ -5604,8 +5750,8 @@ def get_fetch_url_summarized_max_output_tokens(settings: dict | None = None) -> 
 
 def get_reasoning_auto_collapse(settings: dict | None = None) -> bool:
     source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("reasoning_auto_collapse", DEFAULT_SETTINGS["reasoning_auto_collapse"])
-    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+    raw_value = source.get("reasoning_auto_collapse")
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"} if raw_value is not None else False
 
 
 def get_next_message_position(conn: sqlite3.Connection, conversation_id: int) -> int:
@@ -5934,3 +6080,166 @@ def get_message_tool_result_content(message_id: int, tool_call_id: str) -> str |
                 pass
 
         return None
+
+
+# =============================================================================
+# Conversation Truncation Policy
+# (per Conversation Truncation Policy.md)
+# =============================================================================
+
+
+def get_conversation_truncation_enabled(settings: dict | None = None) -> bool:
+    """Whether the conversation truncation policy is active.
+
+    Per Conversation Truncation Policy.md — configurable setting.
+    """
+    source = settings if settings is not None else get_app_settings()
+    return _get_bool_setting_value(source, "conversation_truncation_enabled", True)
+
+
+def get_conversation_max_messages(settings: dict | None = None) -> int:
+    """Maximum number of messages before truncation kicks in (FIFO eviction).
+
+    Per Conversation Truncation Policy.md Section 2:
+    - Conversation is capped at CONVERSATION_MAX_MESSAGES (default 20).
+    - When a new message would exceed this, the oldest is removed.
+    """
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "conversation_max_messages", 20, 3, 200)
+
+
+def get_conversation_max_message_chars(settings: dict | None = None) -> int:
+    """Maximum character length for individual messages.
+
+    Per Conversation Truncation Policy.md Section 3:
+    - Messages longer than this have their middle portion trimmed.
+    - Messages at or below this length are left intact.
+    """
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "conversation_max_message_chars", 500, 100, 50_000)
+
+
+def _trim_message_content(content: str, max_chars: int) -> str:
+    """Trim a message by keeping head and tail, discarding the middle.
+
+    Per Conversation Truncation Policy.md Section 3:
+    - If message > max_chars, preserve beginning and end, discard middle.
+    - If message <= max_chars, leave intact.
+
+    Args:
+        content: The message content to potentially trim.
+        max_chars: Maximum allowed characters.
+
+    Returns:
+        Trimmed or original content.
+    """
+    if not content or len(content) <= max_chars:
+        return content
+
+    # Keep ~40% head and ~40% tail, discard ~20% middle
+    head_chars = max(100, int(max_chars * 0.40))
+    tail_chars = max(100, int(max_chars * 0.40))
+    available = max_chars - head_chars - tail_chars
+    if available < 50:
+        # Very tight budget — just truncate
+        return content[:max_chars - 3] + "..."
+
+    marker = f"\n\n[... {len(content) - head_chars - tail_chars:,} characters omitted ...]\n\n"
+    # Adjust for marker length
+    marker_len = len(marker)
+    if marker_len >= available:
+        return content[:max_chars - 3] + "..."
+
+    head = content[:head_chars].rstrip()
+    tail = content[-tail_chars:].lstrip()
+    return f"{head}{marker}{tail}"
+
+
+def apply_conversation_truncation(
+    conversation_id: int,
+    settings: dict | None = None,
+) -> int:
+    """Apply the Conversation Truncation Policy to a conversation.
+
+    Per Conversation Truncation Policy.md:
+    1. Truncation activates once conversation reaches CONVERSATION_MAX_MESSAGES.
+    2. When adding a message would exceed the cap, oldest messages are removed (FIFO).
+    3. All remaining messages longer than CONVERSATION_MAX_MESSAGE_CHARS are trimmed.
+    4. Trimming preserves beginning and end, discards middle.
+
+    This function should be called AFTER saving a new message to a conversation.
+
+    Args:
+        conversation_id: The conversation to truncate.
+        settings: Optional settings dict (fetched fresh if not provided).
+
+    Returns:
+        Number of messages removed (evicted).
+    """
+    source = settings if settings is not None else get_app_settings()
+    if not get_conversation_truncation_enabled(source):
+        return 0
+
+    max_messages = get_conversation_max_messages(source)
+    max_chars = get_conversation_max_message_chars(source)
+
+    removed_count = 0
+
+    with get_db() as conn:
+        # Get visible (non-deleted) messages ordered by position
+        rows = conn.execute(
+            """SELECT id, role, content, position
+               FROM messages
+               WHERE conversation_id = ? AND deleted_at IS NULL
+               ORDER BY position ASC, id ASC""",
+            (conversation_id,),
+        ).fetchall()
+
+        messages = [
+            {
+                "id": int(row["id"]),
+                "role": str(row["role"] or "").strip(),
+                "content": str(row["content"] or ""),
+                "position": int(row["position"] or 0),
+            }
+            for row in rows
+        ]
+
+        if not messages:
+            return 0
+
+        # Phase 1: Evict oldest messages if over limit (FIFO)
+        # System messages are always preserved (never evicted)
+        non_system = [m for m in messages if m["role"] != "system"]
+        total_non_system = len(non_system)
+
+        evicted_ids: set[int] = set()
+        while len(non_system) > max_messages:
+            oldest = non_system.pop(0)
+            evicted_ids.add(oldest["id"])
+            conn.execute(
+                "UPDATE messages SET deleted_at = datetime('now') WHERE id = ?",
+                (oldest["id"],),
+            )
+            removed_count += 1
+
+        # Phase 2: Trim long messages — once conversation reaches the threshold.
+        # Per Conversation Truncation Policy.md Section 1:
+        # "Truncation logic activates once a conversation reaches max_messages.
+        #  From that point onward, the system continuously manages both the message
+        #  count and the content length of individual messages."
+        # Section 4: "Trimming is applied universally — no message is exempt just
+        #  because it is the first or the last in the conversation."
+        # Skip evicted (soft-deleted) messages.
+        if total_non_system >= max_messages:
+            for msg in messages:
+                if msg["id"] in evicted_ids:
+                    continue
+                if len(msg["content"]) > max_chars:
+                    trimmed = _trim_message_content(msg["content"], max_chars)
+                    conn.execute(
+                        "UPDATE messages SET content = ? WHERE id = ?",
+                        (trimmed, msg["id"]),
+                    )
+
+    return removed_count

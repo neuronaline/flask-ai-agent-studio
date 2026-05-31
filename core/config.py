@@ -202,11 +202,18 @@ DEFAULT_SUB_AGENT_MAX_PARALLEL_TOOLS = 2
 
 CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL = "balanced"
 CHAT_SUMMARY_DETAIL_LEVELS = {"very_concise", "concise", "balanced", "detailed", "comprehensive"}
-CONTEXT_SELECTION_ALLOWED_STRATEGIES = {"classic", "entropy", "entropy_rag_hybrid"}
-ENTROPY_PROFILE_PRESETS = {"conservative", "balanced", "aggressive"}
 CLARIFICATION_QUESTION_LIMIT_MIN = 1
 CLARIFICATION_QUESTION_LIMIT_MAX = 25
 CLARIFICATION_DEFAULT_MAX_QUESTIONS = 5
+
+# Conversation Truncation Policy (configurable per Conversation Truncation Policy.md)
+CONVERSATION_TRUNCATION_ENABLED = _parse_bool_env("CONVERSATION_TRUNCATION_ENABLED", True)
+CONVERSATION_MAX_MESSAGES = max(3, _parse_int_env("CONVERSATION_MAX_MESSAGES", 20))
+CONVERSATION_MAX_MESSAGE_CHARS = max(100, _parse_int_env("CONVERSATION_MAX_MESSAGE_CHARS", 500))
+CONVERSATION_TRUNCATION_KEEP_SYSTEM = _parse_bool_env("CONVERSATION_TRUNCATION_KEEP_SYSTEM", True)
+
+# Context Node compression threshold (chars) — payloads below this are kept intact
+CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS = max(500, _parse_int_env("CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS", 3000))
 SEARCH_TOOL_QUERY_LIMIT_MIN = 1
 SEARCH_TOOL_QUERY_LIMIT_MAX = 20
 DEFAULT_SEARCH_TOOL_QUERY_LIMIT = 5
@@ -224,78 +231,54 @@ FETCH_HTML_CONVERTER_MODES = {"internal", "external", "hybrid"}
 CACHE_TTL_HOURS = DEFAULT_WEB_CACHE_TTL_HOURS
 SEARCH_MAX_RESULTS = 5
 CONTENT_MAX_CHARS = 100_000
-FETCH_SUMMARY_TOKEN_THRESHOLD = max(400, _parse_int_env("FETCH_SUMMARY_TOKEN_THRESHOLD", 3500))
-FETCH_SUMMARY_MAX_CHARS = max(2000, min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_SUMMARY_MAX_CHARS", 8000)))
-FETCH_SUMMARIZE_MAX_INPUT_CHARS = max(
-    4_000, min(CONTENT_MAX_CHARS, _parse_int_env("FETCH_SUMMARIZE_MAX_INPUT_CHARS", 80_000))
-)
-FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS = max(200, min(4_000, _parse_int_env("FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS", 2400)))
-FETCH_SUMMARY_GENERAL_TOP_K = max(1, min(6, _parse_int_env("FETCH_SUMMARY_GENERAL_TOP_K", 3)))
-FETCH_SUMMARY_QUERY_TOP_K = max(1, min(8, _parse_int_env("FETCH_SUMMARY_QUERY_TOP_K", 4)))
-FETCH_SUMMARY_EXCERPT_MAX_CHARS = max(200, min(1200, _parse_int_env("FETCH_SUMMARY_EXCERPT_MAX_CHARS", 500)))
-CHAT_SUMMARY_TRIGGER_TOKEN_COUNT = max(1_000, min(200_000, _parse_int_env("CHAT_SUMMARY_TRIGGER_TOKEN_COUNT", 120_000)))
-CHAT_SUMMARY_STAGE_AWARE_ENABLED = _parse_bool_env("CHAT_SUMMARY_STAGE_AWARE_ENABLED", False)
+FETCH_SUMMARY_TOKEN_THRESHOLD = 3500
+FETCH_SUMMARY_MAX_CHARS = 8000
+FETCH_SUMMARIZE_MAX_INPUT_CHARS = 80_000
+FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS = 2400
+FETCH_SUMMARY_GENERAL_TOP_K = 3
+FETCH_SUMMARY_QUERY_TOP_K = 4
+FETCH_SUMMARY_EXCERPT_MAX_CHARS = 500
+FETCH_URL_CLIP_AGGRESSIVENESS = 50
+CHAT_SUMMARY_TRIGGER_TOKEN_COUNT = 120_000
+CHAT_SUMMARY_STAGE_AWARE_ENABLED = False
 CHAT_SUMMARY_STAGES = {
-    "early": {  # First 3 exchanges
-        "trigger_ratio": 0.95,  # Trigger when 95% of budget is used
-        "target_ratio": 0.70,   # Target to reduce to 70%
+    "early": {
+        "trigger_ratio": 0.95,
+        "target_ratio": 0.70,
     },
-    "mid": {  # 4-10 exchanges
+    "mid": {
         "trigger_ratio": 0.85,
         "target_ratio": 0.65,
     },
-    "late": {  # 10+ exchanges
+    "late": {
         "trigger_ratio": 0.75,
         "target_ratio": 0.55,
     },
 }
-CHAT_SUMMARY_MODE = (os.getenv("CHAT_SUMMARY_MODE") or "auto").strip().lower()
-CHAT_SUMMARY_MODEL = (os.getenv("CHAT_SUMMARY_MODEL") or DEFAULT_CHAT_MODEL).strip() or DEFAULT_CHAT_MODEL
+CHAT_SUMMARY_MODE = "auto"
+CHAT_SUMMARY_MODEL = DEFAULT_CHAT_MODEL
 CHAT_SUMMARY_ALLOWED_MODES = {"auto", "conservative", "never", "aggressive"}
-SUMMARY_RETRY_REDUCTION_FACTOR = max(0.5, min(0.95, _parse_float_env("SUMMARY_RETRY_REDUCTION_FACTOR", 0.80)))
-PROMPT_MAX_INPUT_TOKENS = max(8_000, min(120_000, _parse_int_env("PROMPT_MAX_INPUT_TOKENS", 100_000)))
-PROMPT_RESPONSE_TOKEN_RESERVE = max(1_000, min(32_000, _parse_int_env("PROMPT_RESPONSE_TOKEN_RESERVE", 8_000)))
-PROMPT_RECENT_HISTORY_MAX_TOKENS = max(
-    1_000, min(PROMPT_MAX_INPUT_TOKENS, _parse_int_env("PROMPT_RECENT_HISTORY_MAX_TOKENS", 90_000))
-)
-PROMPT_SUMMARY_MAX_TOKENS = max(500, min(PROMPT_MAX_INPUT_TOKENS, _parse_int_env("PROMPT_SUMMARY_MAX_TOKENS", 15_000)))
-PROMPT_RAG_MAX_TOKENS = max(0, min(PROMPT_MAX_INPUT_TOKENS, _parse_int_env("PROMPT_RAG_MAX_TOKENS", 6_000)))
-PROMPT_RAG_AUTO_MAX_TOKENS = max(
-    0,
-    min(PROMPT_RAG_MAX_TOKENS, _parse_int_env("PROMPT_RAG_AUTO_MAX_TOKENS", min(3_000, PROMPT_RAG_MAX_TOKENS))),
-)
-PROMPT_TOOL_TRACE_MAX_TOKENS = max(
-    0, min(PROMPT_MAX_INPUT_TOKENS, _parse_int_env("PROMPT_TOOL_TRACE_MAX_TOKENS", 2_000))
-)
-PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT = max(
-    2_000, min(200_000, _parse_int_env("PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT", 110_000))
-)
-CANVAS_PROMPT_DEFAULT_MAX_LINES = max(100, min(3_000, _parse_int_env("CANVAS_PROMPT_DEFAULT_MAX_LINES", 250)))
-CANVAS_PROMPT_DEFAULT_MAX_TOKENS = max(500, min(50_000, _parse_int_env("CANVAS_PROMPT_DEFAULT_MAX_TOKENS", 4_000)))
-CANVAS_PROMPT_DEFAULT_MAX_CHARS = max(1_000, min(200_000, _parse_int_env("CANVAS_PROMPT_DEFAULT_MAX_CHARS", 20_000)))
-CANVAS_PROMPT_CODE_LINE_MAX_CHARS = max(40, min(1_000, _parse_int_env("CANVAS_PROMPT_CODE_LINE_MAX_CHARS", 180)))
-CANVAS_PROMPT_TEXT_LINE_MAX_CHARS = max(40, min(1_000, _parse_int_env("CANVAS_PROMPT_TEXT_LINE_MAX_CHARS", 100)))
-CANVAS_EXPAND_DEFAULT_MAX_LINES = max(100, min(4_000, _parse_int_env("CANVAS_EXPAND_DEFAULT_MAX_LINES", 1_600)))
-CANVAS_SCROLL_WINDOW_LINES = max(50, min(800, _parse_int_env("CANVAS_SCROLL_WINDOW_LINES", 200)))
-AGENT_CONTEXT_COMPACTION_THRESHOLD = max(0.5, min(0.98, _parse_float_env("AGENT_CONTEXT_COMPACTION_THRESHOLD", 0.85)))
-AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS = max(
-    0,
-    min(6, _parse_int_env("AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS", 2)),
-)
-PRUNING_TARGET_REDUCTION_RATIO = max(0.1, min(0.9, _parse_float_env("PRUNING_TARGET_REDUCTION_RATIO", 0.65)))
-PRUNING_MIN_TARGET_TOKENS = max(50, min(5_000, _parse_int_env("PRUNING_MIN_TARGET_TOKENS", 160)))
-PRUNE_WEIGHT_ENTROPY = max(0.0, min(1.0, _parse_float_env("PRUNE_WEIGHT_ENTROPY", 0.35)))
-PRUNE_WEIGHT_RAG = max(0.0, min(1.0, _parse_float_env("PRUNE_WEIGHT_RAG", 0.30)))
-PRUNE_WEIGHT_STALENESS = max(0.0, min(1.0, _parse_float_env("PRUNE_WEIGHT_STALENESS", 0.25)))
-PRUNE_WEIGHT_TOKEN = max(0.0, min(1.0, _parse_float_env("PRUNE_WEIGHT_TOKEN", 0.10)))
-AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS = max(
-    8_000,
-    min(CONTENT_MAX_CHARS, _parse_int_env("AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS", 16_000)),
-)
-SUMMARY_SOURCE_TARGET_TOKENS = max(1_000, min(40_000, _parse_int_env("SUMMARY_SOURCE_TARGET_TOKENS", 6_000)))
-SUMMARY_RETRY_MIN_SOURCE_TOKENS = max(
-    500, min(SUMMARY_SOURCE_TARGET_TOKENS, _parse_int_env("SUMMARY_RETRY_MIN_SOURCE_TOKENS", 1_500))
-)
+SUMMARY_RETRY_REDUCTION_FACTOR = 0.80
+PROMPT_MAX_INPUT_TOKENS = 100_000
+PROMPT_RESPONSE_TOKEN_RESERVE = 8_000
+PROMPT_RECENT_HISTORY_MAX_TOKENS = 90_000
+PROMPT_SUMMARY_MAX_TOKENS = 15_000
+PROMPT_RAG_MAX_TOKENS = 6_000
+PROMPT_RAG_AUTO_MAX_TOKENS = 3_000
+PROMPT_TOOL_TRACE_MAX_TOKENS = 2_000
+PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT = 110_000
+CANVAS_PROMPT_DEFAULT_MAX_LINES = 250
+CANVAS_PROMPT_DEFAULT_MAX_TOKENS = 4_000
+CANVAS_PROMPT_DEFAULT_MAX_CHARS = 20_000
+CANVAS_PROMPT_CODE_LINE_MAX_CHARS = 180
+CANVAS_PROMPT_TEXT_LINE_MAX_CHARS = 100
+CANVAS_EXPAND_DEFAULT_MAX_LINES = 1_600
+CANVAS_SCROLL_WINDOW_LINES = 200
+AGENT_CONTEXT_COMPACTION_THRESHOLD = 0.85
+AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS = 2
+AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS = 16_000
+SUMMARY_SOURCE_TARGET_TOKENS = 6_000
+SUMMARY_RETRY_MIN_SOURCE_TOKENS = 1_500
 
 DEFAULT_ACTIVE_TOOL_NAMES = [
     "append_scratchpad",
@@ -530,13 +513,6 @@ DEFAULT_SETTINGS = {
         ],
         ensure_ascii=False,
     ),
-    "fetch_url_token_threshold": str(FETCH_SUMMARY_TOKEN_THRESHOLD),
-    "fetch_url_clip_aggressiveness": "50",
-    "fetch_html_converter_mode": "hybrid",
-    "fetch_url_summarized_max_input_chars": str(FETCH_SUMMARIZE_MAX_INPUT_CHARS),
-    "fetch_url_summarized_max_output_tokens": str(FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS),
-    "fetch_raw_max_text_chars": str(FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS),
-    "fetch_summary_max_chars": str(FETCH_SUMMARY_MAX_CHARS),
     "rag_chunk_size": str(RAG_CHUNK_SIZE),
     "rag_chunk_overlap": str(RAG_CHUNK_OVERLAP),
     "rag_max_chunks_per_source": str(RAG_MAX_CHUNKS_PER_SOURCE),
@@ -544,35 +520,12 @@ DEFAULT_SETTINGS = {
     "rag_search_min_similarity": str(RAG_SEARCH_MIN_SIMILARITY),
     "rag_query_expansion_enabled": "true" if RAG_QUERY_EXPANSION_ENABLED else "false",
     "rag_query_expansion_max_variants": str(RAG_QUERY_EXPANSION_MAX_VARIANTS),
-    "prompt_max_input_tokens": str(PROMPT_MAX_INPUT_TOKENS),
-    "prompt_response_token_reserve": str(PROMPT_RESPONSE_TOKEN_RESERVE),
-    "prompt_recent_history_max_tokens": str(PROMPT_RECENT_HISTORY_MAX_TOKENS),
-    "prompt_summary_max_tokens": str(PROMPT_SUMMARY_MAX_TOKENS),
-    "prompt_preflight_summary_token_count": str(PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT),
-    "prompt_rag_max_tokens": str(PROMPT_RAG_MAX_TOKENS),
-    "prompt_tool_trace_max_tokens": str(PROMPT_TOOL_TRACE_MAX_TOKENS),
-    "summary_source_target_tokens": str(SUMMARY_SOURCE_TARGET_TOKENS),
-    "summary_retry_min_source_tokens": str(SUMMARY_RETRY_MIN_SOURCE_TOKENS),
-    "canvas_prompt_max_lines": str(CANVAS_PROMPT_DEFAULT_MAX_LINES),
-    "canvas_prompt_max_tokens": str(CANVAS_PROMPT_DEFAULT_MAX_TOKENS),
-    "canvas_prompt_max_chars": str(CANVAS_PROMPT_DEFAULT_MAX_CHARS),
-    "canvas_prompt_code_line_max_chars": str(CANVAS_PROMPT_CODE_LINE_MAX_CHARS),
-    "canvas_prompt_text_line_max_chars": str(CANVAS_PROMPT_TEXT_LINE_MAX_CHARS),
-    "canvas_expand_max_lines": str(CANVAS_EXPAND_DEFAULT_MAX_LINES),
-    "canvas_scroll_window_lines": str(CANVAS_SCROLL_WINDOW_LINES),
-    "chat_summary_trigger_token_count": str(CHAT_SUMMARY_TRIGGER_TOKEN_COUNT),
     "chat_summary_mode": CHAT_SUMMARY_MODE if CHAT_SUMMARY_MODE in CHAT_SUMMARY_ALLOWED_MODES else "auto",
     "chat_summary_detail_level": CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL,
     "summary_skip_first": "2",
     "summary_skip_last": "1",
     "context_compaction_threshold": str(AGENT_CONTEXT_COMPACTION_THRESHOLD),
     "context_compaction_keep_recent_rounds": str(AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS),
-    "context_selection_strategy": "classic",
-    "entropy_profile": "balanced",
-    "entropy_rag_budget_ratio": "35",
-    "entropy_protect_code_blocks": "true",
-    "entropy_protect_tool_results": "true",
-    "entropy_reference_boost": "true",
     "reasoning_auto_collapse": "false",
     # Sub-agent settings
     "sub_agent_max_steps": str(DEFAULT_SUB_AGENT_MAX_STEPS),
@@ -583,6 +536,10 @@ DEFAULT_SETTINGS = {
     "sub_agent_canvas_auto_save": "true",
     "sub_agent_canvas_auto_open": "false",
     "sub_agent_allowed_tool_names": "[]",
+    # Conversation Truncation Policy settings
+    "conversation_truncation_enabled": "true" if CONVERSATION_TRUNCATION_ENABLED else "false",
+    "conversation_max_messages": str(CONVERSATION_MAX_MESSAGES),
+    "conversation_max_message_chars": str(CONVERSATION_MAX_MESSAGE_CHARS),
 }
 
 

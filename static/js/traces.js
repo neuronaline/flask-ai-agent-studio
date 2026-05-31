@@ -397,80 +397,8 @@ function getLatestUnsavedCompletedSubAgentTrace(metadata) {
 /*  Canvas Prompt Storage Helpers                                      */
 /* ------------------------------------------------------------------ */
 
-/**
- * Builds a localStorage key for tracking whether a sub-agent canvas prompt has been shown.
- * @param {string} conversationId
- * @param {number|string} assistantMessageId
- * @param {number|string} traceIndex
- * @returns {string|null}
- */
-function getSubAgentCanvasPromptStorageKey(conversationId, assistantMessageId, traceIndex) {
-  const normalizedConversationId = String(conversationId || "").trim();
-  const normalizedAssistantMessageId = String(assistantMessageId || "").trim();
-  const normalizedTraceIndex = Number.isInteger(traceIndex) ? traceIndex : Number.parseInt(traceIndex, 10);
-  if (!normalizedConversationId || !normalizedAssistantMessageId || !Number.isInteger(normalizedTraceIndex)) {
-    return null;
-  }
-  return `sub-agent-canvas-prompted:${normalizedConversationId}:${normalizedAssistantMessageId}:${normalizedTraceIndex}`;
-}
-
-/**
- * Checks if the sub-agent canvas prompt has been shown for a given trace.
- * @param {string} conversationId
- * @param {number|string} assistantMessageId
- * @param {number|string} traceIndex
- * @returns {boolean}
- */
-function hasSubAgentCanvasPromptBeenShown(conversationId, assistantMessageId, traceIndex) {
-  const storageKey = getSubAgentCanvasPromptStorageKey(conversationId, assistantMessageId, traceIndex);
-  if (!storageKey) {
-    return false;
-  }
-  try {
-    return localStorage.getItem(storageKey) === "1";
-  } catch (_) {
-    return false;
-  }
-}
-
-/**
- * Marks the sub-agent canvas prompt as shown in localStorage.
- * @param {string} conversationId
- * @param {number|string} assistantMessageId
- * @param {number|string} traceIndex
- */
-function markSubAgentCanvasPromptShown(conversationId, assistantMessageId, traceIndex) {
-  const storageKey = getSubAgentCanvasPromptStorageKey(conversationId, assistantMessageId, traceIndex);
-  if (!storageKey) {
-    return;
-  }
-  try {
-    localStorage.setItem(storageKey, "1");
-  } catch (_) {
-    // Ignore storage errors.
-  }
-}
-
-/**
- * Clears the sub-agent canvas prompt shown flag from localStorage.
- * @param {string} conversationId
- * @param {number|string} assistantMessageId
- * @param {number|string} traceIndex
- */
-function clearSubAgentCanvasPromptShown(conversationId, assistantMessageId, traceIndex) {
-  const storageKey = getSubAgentCanvasPromptStorageKey(conversationId, assistantMessageId, traceIndex);
-  if (!storageKey) {
-    return;
-  }
-  try {
-    localStorage.removeItem(storageKey);
-  } catch (_) {
-    // Ignore storage errors.
-  }
-}
-
 /* ------------------------------------------------------------------ */
-/*  Sub-Agent Canvas Save Orchestration                                */
+/*  Sub-Agent Research Context Injection                                */
 /* ------------------------------------------------------------------ */
 
 /**
@@ -499,120 +427,50 @@ function findPersistedAssistantEntryForSubAgentPrompt(preferredAssistantId = nul
 }
 
 /**
- * Builds a title for a sub-agent research canvas document.
+ * Builds a heading for sub-agent research context.
  * @param {{task_full?: string, task?: string, summary?: string}} entry
  * @returns {string}
  */
-function buildSubAgentResearchCanvasTitle(entry) {
+function getSubAgentResearchContextHeading(entry) {
   const taskInstructions = String(entry?.task_full || entry?.task || "").trim();
   const taskHeading = getSubAgentTaskHeading(taskInstructions || entry?.summary || "Research");
-  const normalizedHeading = String(taskHeading || "Research").trim();
-  return `Research - ${normalizedHeading}`.slice(0, 120).trim() || "Research";
+  return String(taskHeading || "Research").trim();
 }
 
 /**
- * Builds markdown content for a sub-agent research canvas document.
+ * Builds the research context text to inject into the assistant message.
  * @param {{task_full?: string, task?: string, summary?: string, fallback_note?: string, error?: string}} entry
  * @returns {string}
  */
-function buildSubAgentResearchCanvasContent(entry) {
-  const lines = [`# ${buildSubAgentResearchCanvasTitle(entry)}`, ""];
+function buildSubAgentResearchContextContent(entry) {
+  const parts = [];
 
   const summaryText = String(entry?.summary || "").trim();
   if (summaryText) {
-    lines.push("## Summary", "", summaryText, "");
+    parts.push(summaryText);
   }
 
   if (!summaryText) {
     const fallbackNote = String(entry?.fallback_note || "").trim();
     if (fallbackNote) {
-      lines.push("## Note", "", fallbackNote, "");
+      parts.push(fallbackNote);
     }
 
     const errorText = String(entry?.error || "").trim();
     if (!fallbackNote && errorText) {
-      lines.push("## Error", "", errorText, "");
+      parts.push(errorText);
     }
   }
 
-  return lines.join("\n").trim();
+  return parts.join("\n\n").trim();
 }
 
 /**
- * @returns {boolean}
- */
-function isSubAgentCanvasAutoSaveEnabled() {
-  return Boolean(appSettings.sub_agent_canvas_auto_save ?? true);
-}
-
-/**
- * @returns {boolean}
- */
-function isSubAgentCanvasAutoOpenEnabled() {
-  return Boolean(appSettings.sub_agent_canvas_auto_open);
-}
-
-/**
- * Saves a sub-agent's research output to a Canvas document.
- * @param {number|string} assistantMessageId
- * @param {number} traceIndex
- * @param {object} traceEntry
- * @param {{openCanvasOnSave?: boolean, statusMessage?: string, toastMessage?: string}} [options={}]
- * @returns {Promise<void>}
- */
-async function saveSubAgentResearchToCanvas(assistantMessageId, traceIndex, traceEntry, options = {}) {
-  const openCanvasOnSave = options?.openCanvasOnSave !== false;
-  const statusMessage = String(options?.statusMessage || "Research saved to Canvas.").trim() || "Research saved to Canvas.";
-  const toastMessage = String(options?.toastMessage || statusMessage).trim() || statusMessage;
-  if (!chatState.currentConvId) {
-    showError("Create a conversation first so the research can be saved to Canvas.");
-    return;
-  }
-
-  const response = await fetch(`/api/conversations/${chatState.currentConvId}/canvas`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      title: buildSubAgentResearchCanvasTitle(traceEntry),
-      content: buildSubAgentResearchCanvasContent(traceEntry),
-      format: "markdown",
-      source_assistant_message_id: assistantMessageId,
-      source_sub_agent_trace_index: traceIndex,
-      summary: String(traceEntry.summary || "").trim() || null,
-    }),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload.error || "Research could not be saved to Canvas.");
-  }
-
-  chatState.history = Array.isArray(payload.messages) ? payload.messages.map(normalizeHistoryEntry) : chatState.history;
-  canvasState.streamingCanvasDocuments = [];
-  resetStreamingCanvasPreview();
-  canvasState.activeCanvasDocumentId = String(payload.active_document_id || "").trim() || getActiveCanvasDocument(chatState.history)?.id || null;
-  rebuildTokenStatsFromHistory();
-  renderConversationHistory({ preserveScroll: true });
-  renderCanvasPanel();
-  uiState.lastConversationSignature = getConversationSignature(chatState.history);
-  loadSidebar();
-  if (openCanvasOnSave) {
-    openCanvas(null, { deferPanelRender: false });
-  } else {
-    setCanvasAttention(true);
-  }
-  setCanvasStatus(statusMessage, "success");
-  showToast(toastMessage, "success");
-}
-
-/**
- * Checks if there is an unsaved completed sub-agent trace and auto-saves it.
+ * Injects completed sub-agent research directly into the assistant message context
+ * so it is available to the AI in subsequent turns.
  * @param {object|null} assistantEntry
  */
 function maybePromptToSaveSubAgentResearch(assistantEntry) {
-  if (!isSubAgentCanvasAutoSaveEnabled()) {
-    return;
-  }
-
   const resolvedEntry = isPersistedMessageId(assistantEntry?.id)
     ? assistantEntry
     : findPersistedAssistantEntryForSubAgentPrompt(assistantEntry?.id);
@@ -626,29 +484,24 @@ function maybePromptToSaveSubAgentResearch(assistantEntry) {
     return;
   }
 
-  if (hasSubAgentCanvasPromptBeenShown(chatState.currentConvId, resolvedEntry.id, pendingTrace.index)) {
+  const { entry } = pendingTrace;
+  const contextText = buildSubAgentResearchContextContent(entry);
+  if (!contextText) {
     return;
   }
 
-  markSubAgentCanvasPromptShown(chatState.currentConvId, resolvedEntry.id, pendingTrace.index);
+  // Merge the research output into the assistant message's metadata
+  // so it is included in the conversation context sent to the AI on subsequent turns.
+  const existingMetadata = resolvedEntry.metadata && typeof resolvedEntry.metadata === "object"
+    ? { ...resolvedEntry.metadata }
+    : {};
+  existingMetadata.sub_agent_context_injected = true;
+  existingMetadata.sub_agent_research_context = existingMetadata.sub_agent_research_context
+    ? `${existingMetadata.sub_agent_research_context}\n\n${contextText}`
+    : contextText;
+  resolvedEntry.metadata = existingMetadata;
 
-  const taskHeading = getSubAgentTaskHeading(
-    String(pendingTrace.entry.task_full || pendingTrace.entry.task || pendingTrace.entry.summary || "Research").trim(),
-  );
-
-  void saveSubAgentResearchToCanvas(
-    resolvedEntry.id,
-    pendingTrace.index,
-    pendingTrace.entry,
-    {
-      openCanvasOnSave: isSubAgentCanvasAutoOpenEnabled(),
-      statusMessage: `${taskHeading} auto-saved to Canvas.`,
-      toastMessage: "Research auto-saved to Canvas.",
-    },
-  ).catch((error) => {
-    clearSubAgentCanvasPromptShown(chatState.currentConvId, resolvedEntry.id, pendingTrace.index);
-    showError(error.message || "Research could not be saved to Canvas.");
-  });
+  showToast("Research findings added to conversation context.", "success");
 }
 
 /* ------------------------------------------------------------------ */

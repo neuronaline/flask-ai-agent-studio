@@ -20,18 +20,15 @@
   const fetchSummarizeModelPreferenceEl = document.getElementById("fetch-summarize-model-preference-select");
   const fixTextModelPreferenceEl = document.getElementById("fix-text-model-preference-select");
   const uploadMetadataModelPreferenceEl = document.getElementById("upload-metadata-model-preference-select");
-  const subAgentModelPreferenceEl = document.getElementById("sub-agent-model-preference-select");
   const chatSummaryModelEl = document.getElementById("chat-summary-model-select");
   const summaryModelFallbackListEl = document.getElementById("summary-model-fallback-list");
   const fetchSummarizeModelFallbackListEl = document.getElementById("fetch-summarize-model-fallback-list");
   const fixTextModelFallbackListEl = document.getElementById("fix-text-model-fallback-list");
   const uploadMetadataModelFallbackListEl = document.getElementById("upload-metadata-model-fallback-list");
-  const subAgentModelFallbackListEl = document.getElementById("sub-agent-model-fallback-list");
   const summaryModelFallbackAddBtn = document.getElementById("summary-model-fallback-add-btn");
   const fetchSummarizeModelFallbackAddBtn = document.getElementById("fetch-summarize-model-fallback-add-btn");
   const fixTextModelFallbackAddBtn = document.getElementById("fix-text-model-fallback-add-btn");
   const uploadMetadataModelFallbackAddBtn = document.getElementById("upload-metadata-model-fallback-add-btn");
-  const subAgentModelFallbackAddBtn = document.getElementById("sub-agent-model-fallback-add-btn");
 
   if (!customModelListEl) return; // panel not in DOM
 

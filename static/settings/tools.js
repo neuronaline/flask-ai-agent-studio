@@ -18,9 +18,9 @@
     });
   }
 
-  // ─── Tool toggles ref (shared with rag.js) ───────────────────────────────────
+  // ─── Tool toggles ref (parent/main-agent checkboxes) ─────────────────────────
   function getToolToggleEls() {
-    return Array.from(document.querySelectorAll("#tool-toggles input[type='checkbox']"));
+    return Array.from(document.querySelectorAll("input[name='parent-tool']"));
   }
 
   function getSelectedTools() {

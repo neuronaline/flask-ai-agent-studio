@@ -57,6 +57,52 @@ from core.db import (
 from utils.token_utils import estimate_text_tokens
 from lib.tool_registry import PARALLEL_SAFE_READ_ONLY_TOOL_NAMES, resolve_runtime_tool_names
 
+# ---------------------------------------------------------------------------
+# Per-Turn Context Cache (envCache)
+#
+# Implements the identity-based envCache pattern described in
+# "How to Build a Cache-Friendly AI Coding Agent" (Section 3.4).
+#
+# The cache survives across all agent loop iterations within the same user
+# turn. It memoizes dynamic context (timestamps, active tools, environment
+# details) by user message ID so that consecutive LLM calls see byte-identical
+# dynamic content in the stable prefix, maximizing prompt cache hit rates.
+#
+# Usage:
+#   cache = EnvContextCache()        # created once per user turn
+#   context = cache.get_or_compute(
+#       user_message_id,
+#       lambda: build_runtime_context_injection(now=prompt_now, ...)
+#   )
+# ---------------------------------------------------------------------------
+class EnvContextCache:
+    """Identity-based per-turn context cache for dynamic prompt content.
+
+    Ensures that repeated LLM calls within the same user turn receive
+    byte-identical dynamic context (timestamps, active tool lists, etc.),
+    preserving the stable prefix for provider-side prompt caching.
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[str, str] = {}
+
+    def get_or_compute(self, user_message_id: str, factory):
+        """Return the cached context for *user_message_id* or compute and store it.
+
+        *factory* is a zero-argument callable invoked only when no cached
+        value exists for the given ID.
+        """
+        cached = self._cache.get(user_message_id)
+        if cached is not None:
+            return cached
+        value = factory() if callable(factory) else ""
+        self._cache[user_message_id] = value
+        return value
+
+    def clear(self) -> None:
+        self._cache.clear()
+
+
 SUMMARY_LABEL = "Conversation summary (generated from deleted messages):"
 MODEL_SUMMARY_LABEL = "Conversation summary:"
 CANVAS_PROMPT_MAX_CHARS = CANVAS_PROMPT_DEFAULT_MAX_CHARS
@@ -2494,6 +2540,28 @@ def _build_runtime_volatile_parts(
     conversation_memory: str = "",
 ):
     parts: list[str] = []
+
+    # Dynamic Status Line (per AI Memory and Context Management doc Section 3.1)
+    # Injected at the start of volatile context so the AI can self-regulate.
+    if context_node_stats and isinstance(context_node_stats, dict):
+        active_tokens = int(context_node_stats.get("active_tokens", 0))
+        model_limit = int(context_node_stats.get("model_limit", 128_000))
+        usage_pct = (active_tokens / model_limit * 100) if model_limit > 0 else 0.0
+        buffer_free = max(0, model_limit - active_tokens)
+        parts.append(
+            f"## Token Usage Status\n"
+            f"**Status:** Token Usage: {active_tokens:,} / {model_limit:,} "
+            f"({usage_pct:.1f}%) | Buffer Free: {buffer_free:,} tokens.\n"
+        )
+        if usage_pct > 90:
+            parts.append(
+                "⚠️ **WARNING**: Token usage exceeds 90%! Consider purging or compressing context nodes to free capacity.\n"
+            )
+        elif usage_pct > 70:
+            parts.append(
+                "💡 **NOTE**: Token usage exceeds 70%. Monitor memory pressure and archive irrelevant nodes if needed.\n"
+            )
+
     parts.append(get_prompt("scratchpad.header", "## Scratchpad (AI Persistent Memory)"))
     scratchpad_intro = get_prompt("scratchpad.intro", "")
     scratchpad_intro = f"*{scratchpad_intro}*\n"
@@ -2659,6 +2727,7 @@ def build_runtime_context_injection(
     include_dynamic_context: bool = False,
     double_check: bool = False,
     double_check_query: str = "",
+    context_node_stats: dict | None = None,
 ) -> str:
     normalized_now = (now or datetime.now().astimezone()).astimezone()
     resolved_tool_names = _normalize_tool_name_list(runtime_tool_names)
@@ -2706,6 +2775,7 @@ def build_runtime_context_injection(
             include_time_context=include_time_context,
             previous_canvas_content_hash=previous_canvas_content_hash,
             runtime_budget_stats=runtime_budget_stats,
+            context_node_stats=context_node_stats,
         )
     )
     return _finalize_prompt_text(parts)

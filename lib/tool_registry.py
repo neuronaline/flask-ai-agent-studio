@@ -1082,6 +1082,138 @@ TOOL_SPECS = [
             "guidance": "Use this when a previous tool result was truncated and you need the complete output to proceed.",
         },
     },
+    # -----------------------------------------------------------------------
+    # Context Management Tools (per AI Memory and Context Management doc)
+    # -----------------------------------------------------------------------
+    {
+        "name": "list_context_summary",
+        "description": (
+            "Provide a lightweight overview of all current context nodes without loading their full payloads. "
+            "Returns node_id, summary, token_count, and timestamp for each node. "
+            "Use this to audit memory footprint before deciding which nodes to purge, merge, or compress."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sort_by": {
+                    "type": "string",
+                    "enum": ["created_at", "token_count"],
+                    "description": "Sort order: 'created_at' (chronological) or 'token_count' (largest first). Default: 'created_at'.",
+                },
+            },
+            "required": [],
+        },
+        "prompt": {
+            "purpose": "Lists all persistent context nodes with summary, token count, and timestamp — no full payloads.",
+            "inputs": {"sort_by": "optional: 'created_at' (default) or 'token_count'"},
+            "guidance": (
+                "Use this first when memory pressure is high to decide which nodes to purge or merge. "
+                "The lightweight overview lets you audit the whole store without paying the cost of reading full payloads."
+            ),
+        },
+    },
+    {
+        "name": "purge_context_nodes",
+        "description": (
+            "Permanently remove specified context nodes from persistent memory. "
+            "Provide a list of node_ids to delete and an optional shared reason. "
+            "If a node contains goal-critical data, extract and condense key content before purging."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nodes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of node_id UUIDs to permanently delete.",
+                    "minItems": 1,
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional shared description for the deletion batch.",
+                },
+            },
+            "required": ["nodes"],
+        },
+        "prompt": {
+            "purpose": "Permanently removes specified context nodes to free token capacity.",
+            "inputs": {
+                "nodes": "list of node_id UUIDs to delete",
+                "reason": "optional shared description",
+            },
+            "guidance": (
+                "Only purge nodes that are entirely irrelevant to the current goal. "
+                "If a node contains goal-critical data, extract key facts first and either append them to another node "
+                "or create a new condensed node via the regular keep_alive mechanism, then purge the original. "
+                "Use list_context_summary first to identify candidates."
+            ),
+        },
+    },
+    {
+        "name": "merge_context_nodes",
+        "description": (
+            "Combine two or more related context nodes into a single node, reducing node count without discarding information. "
+            "The payloads of all listed nodes are concatenated and stored as a single new node. "
+            "The source nodes are purged automatically. The new node inherits the earliest timestamp from the source set."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nodes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of 2+ node_id UUIDs to merge into one.",
+                    "minItems": 2,
+                },
+                "new_summary": {
+                    "type": "string",
+                    "description": "Condensed summary covering all merged nodes (max ~50 tokens).",
+                },
+            },
+            "required": ["nodes", "new_summary"],
+        },
+        "prompt": {
+            "purpose": "Merges multiple related context nodes into one denser node to reduce memory fragmentation.",
+            "inputs": {
+                "nodes": "list of 2+ node_id UUIDs",
+                "new_summary": "condensed summary (max ~50 tokens)",
+            },
+            "guidance": (
+                "Use this when multiple related nodes each hold distinct facts that should be consolidated. "
+                "Merging is an alternative to purging orphaned nodes individually; consolidate related data before eviction. "
+                "The source nodes are purged automatically after merge."
+            ),
+        },
+    },
+    {
+        "name": "compress_context_node",
+        "description": (
+            "Compress the payload of a large context node by truncating its middle bulk while preserving the "
+            "structurally informative head (~35%) and tail (~50%) sections, plus a thin middle sample (~15%). "
+            "This reduces the node's token footprint without discarding it entirely. "
+            "A node can only be compressed once — the compressed flag makes re-compression impossible."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "node_id": {
+                    "type": "string",
+                    "description": "UUID of the node to compress.",
+                },
+            },
+            "required": ["node_id"],
+        },
+        "prompt": {
+            "purpose": "Compresses a context node by keeping head/tail excerpts and discarding the middle bulk.",
+            "inputs": {"node_id": "UUID of the node to compress"},
+            "guidance": (
+                "Only compress nodes that are well above the compression threshold and contain structural value "
+                "in their head/tail but filler in the middle. "
+                "Compression is one-way — once compressed (compressed=true), a node cannot be compressed again. "
+                "If a compressed node still consumes too many tokens, purge it or merge it with others."
+            ),
+        },
+    },
 ]
 
 TOOL_SPEC_BY_NAME = {tool["name"]: tool for tool in TOOL_SPECS}
@@ -1121,6 +1253,12 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "ui_hidden": True,
     },
     "get_context_node_detail": {
+        "ui_hidden": True,
+    },
+    "merge_context_nodes": {
+        "ui_hidden": True,
+    },
+    "compress_context_node": {
         "ui_hidden": True,
     },
     "transcribe_youtube_video": {

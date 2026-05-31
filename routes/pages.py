@@ -10,11 +10,8 @@ from core.config import (
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
     CONTENT_MAX_CHARS,
-    CONTEXT_SELECTION_ALLOWED_STRATEGIES,
     DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
-    ENTROPY_PROFILE_PRESETS,
-    FETCH_HTML_CONVERTER_MODES,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     OCR_SUPPORTED_PROVIDERS,
@@ -63,16 +60,13 @@ from core.db import (
     get_chat_summary_trigger_token_count,
     get_clarification_max_questions,
     get_conversation_memory_enabled,
+    get_conversation_truncation_enabled,
+    get_conversation_max_messages,
+    get_conversation_max_message_chars,
     get_context_compaction_keep_recent_rounds,
     get_context_compaction_threshold,
-    get_context_selection_strategy,
     get_default_persona,
     get_default_persona_id,
-    get_entropy_profile,
-    get_entropy_protect_code_blocks_enabled,
-    get_entropy_protect_tool_results_enabled,
-    get_entropy_rag_budget_ratio,
-    get_entropy_reference_boost_enabled,
     get_fetch_raw_max_text_chars,
     get_fetch_html_converter_mode,
     get_fetch_summary_max_chars,
@@ -528,13 +522,11 @@ def _build_conversation_section(raw: dict) -> dict:
         "summary_retry_min_source_tokens": get_summary_retry_min_source_tokens(raw),
         "context_compaction_threshold": get_context_compaction_threshold(raw),
         "context_compaction_keep_recent_rounds": get_context_compaction_keep_recent_rounds(raw),
-        "context_selection_strategy": get_context_selection_strategy(raw),
-        "entropy_profile": get_entropy_profile(raw),
-        "entropy_rag_budget_ratio": get_entropy_rag_budget_ratio(raw),
-        "entropy_protect_code_blocks": get_entropy_protect_code_blocks_enabled(raw),
-        "entropy_protect_tool_results": get_entropy_protect_tool_results_enabled(raw),
-        "entropy_reference_boost": get_entropy_reference_boost_enabled(raw),
         "reasoning_auto_collapse": get_reasoning_auto_collapse(raw),
+        # Conversation Truncation Policy settings
+        "conversation_truncation_enabled": get_conversation_truncation_enabled(raw),
+        "conversation_max_messages": get_conversation_max_messages(raw),
+        "conversation_max_message_chars": get_conversation_max_message_chars(raw),
     }
 
 
@@ -657,14 +649,9 @@ def register_page_routes(app) -> None:
         default_persona,
     ) -> tuple[None, None] | tuple[dict, int]:
         """Apply persona-related settings. Returns ((None, None) on success, (error_response, status_code) on error)."""
-        user_preferences = data.get("user_preferences")
         general_instructions = data.get("general_instructions")
         ai_personality = data.get("ai_personality")
         default_persona_id_raw = data.get("default_persona_id")
-
-        if general_instructions is None and user_preferences is not None:
-            general_instructions = user_preferences
-            settings["user_preferences"] = user_preferences
 
         if general_instructions is not None and not isinstance(general_instructions, str):
             return jsonify({"error": "Invalid general instructions."}), 400
@@ -755,7 +742,6 @@ def register_page_routes(app) -> None:
     @app.route("/api/settings", methods=["PATCH"])
     def update_settings():
         data = request.get_json(silent=True) or {}
-        user_preferences = data.get("user_preferences")
         general_instructions = data.get("general_instructions")
         ai_personality = data.get("ai_personality")
         default_persona_id_raw = data.get("default_persona_id")
@@ -780,12 +766,6 @@ def register_page_routes(app) -> None:
         chat_summary_trigger_raw = data.get("chat_summary_trigger_token_count")
         summary_skip_first_raw = data.get("summary_skip_first")
         summary_skip_last_raw = data.get("summary_skip_last")
-        context_selection_strategy_raw = data.get("context_selection_strategy")
-        entropy_profile_raw = data.get("entropy_profile")
-        entropy_rag_budget_ratio_raw = data.get("entropy_rag_budget_ratio")
-        entropy_protect_code_blocks_raw = data.get("entropy_protect_code_blocks")
-        entropy_protect_tool_results_raw = data.get("entropy_protect_tool_results")
-        entropy_reference_boost_raw = data.get("entropy_reference_boost")
         prompt_max_input_tokens_raw = data.get("prompt_max_input_tokens")
         prompt_response_token_reserve_raw = data.get("prompt_response_token_reserve")
         prompt_recent_history_max_tokens_raw = data.get("prompt_recent_history_max_tokens")
@@ -800,7 +780,6 @@ def register_page_routes(app) -> None:
         reasoning_auto_collapse_raw = data.get("reasoning_auto_collapse")
         fetch_url_token_threshold_raw = data.get("fetch_url_token_threshold")
         fetch_url_clip_aggressiveness_raw = data.get("fetch_url_clip_aggressiveness")
-        fetch_html_converter_mode_raw = data.get("fetch_html_converter_mode")
         fetch_url_summarized_max_input_chars_raw = data.get("fetch_url_summarized_max_input_chars")
         fetch_url_summarized_max_output_tokens_raw = data.get("fetch_url_summarized_max_output_tokens")
         canvas_prompt_max_lines_raw = data.get("canvas_prompt_max_lines")
@@ -847,7 +826,6 @@ def register_page_routes(app) -> None:
         sub_agent_allowed_tool_names_raw = data.get("sub_agent_allowed_tool_names")
 
         provided_setting_values = (
-            user_preferences,
             general_instructions,
             ai_personality,
             default_persona_id_raw,
@@ -874,12 +852,6 @@ def register_page_routes(app) -> None:
             chat_summary_trigger_raw,
             summary_skip_first_raw,
             summary_skip_last_raw,
-            context_selection_strategy_raw,
-            entropy_profile_raw,
-            entropy_rag_budget_ratio_raw,
-            entropy_protect_code_blocks_raw,
-            entropy_protect_tool_results_raw,
-            entropy_reference_boost_raw,
             prompt_max_input_tokens_raw,
             prompt_response_token_reserve_raw,
             prompt_recent_history_max_tokens_raw,
@@ -894,7 +866,6 @@ def register_page_routes(app) -> None:
             reasoning_auto_collapse_raw,
             fetch_url_token_threshold_raw,
             fetch_url_clip_aggressiveness_raw,
-            fetch_html_converter_mode_raw,
             fetch_url_summarized_max_input_chars_raw,
             fetch_url_summarized_max_output_tokens_raw,
             canvas_prompt_max_lines_raw,
@@ -1223,6 +1194,27 @@ def register_page_routes(app) -> None:
         if conversation_memory_enabled_raw is not None:
             settings["conversation_memory_enabled"] = _normalize_bool_setting_value(conversation_memory_enabled_raw)
 
+        if data.get("conversation_truncation_enabled") is not None:
+            settings["conversation_truncation_enabled"] = _normalize_bool_setting_value(data.get("conversation_truncation_enabled"))
+
+        if data.get("conversation_max_messages") is not None:
+            try:
+                conversation_max_messages = int(data["conversation_max_messages"])
+            except (TypeError, ValueError):
+                return jsonify({"error": "conversation_max_messages must be an integer."}), 400
+            if not (3 <= conversation_max_messages <= 200):
+                return jsonify({"error": "conversation_max_messages must be between 3 and 200."}), 400
+            settings["conversation_max_messages"] = str(conversation_max_messages)
+
+        if data.get("conversation_max_message_chars") is not None:
+            try:
+                conversation_max_message_chars = int(data["conversation_max_message_chars"])
+            except (TypeError, ValueError):
+                return jsonify({"error": "conversation_max_message_chars must be an integer."}), 400
+            if not (100 <= conversation_max_message_chars <= 50_000):
+                return jsonify({"error": "conversation_max_message_chars must be between 100 and 50000."}), 400
+            settings["conversation_max_message_chars"] = str(conversation_max_message_chars)
+
         if ocr_enabled_raw is not None:
             settings["ocr_enabled"] = _normalize_bool_setting_value(ocr_enabled_raw)
 
@@ -1532,59 +1524,6 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "context_compaction_keep_recent_rounds must be between 0 and 6."}), 400
             settings["context_compaction_keep_recent_rounds"] = str(context_compaction_keep_recent_rounds)
 
-        if context_selection_strategy_raw is not None:
-            normalized_context_selection_strategy = str(context_selection_strategy_raw or "").strip().lower()
-            if normalized_context_selection_strategy not in CONTEXT_SELECTION_ALLOWED_STRATEGIES:
-                return jsonify(
-                    {"error": "context_selection_strategy must be one of classic, entropy, or entropy_rag_hybrid."}
-                ), 400
-            settings["context_selection_strategy"] = normalized_context_selection_strategy
-
-        if entropy_profile_raw is not None:
-            normalized_entropy_profile = str(entropy_profile_raw or "").strip().lower()
-            if normalized_entropy_profile not in ENTROPY_PROFILE_PRESETS:
-                return jsonify({"error": "entropy_profile must be one of conservative, balanced, or aggressive."}), 400
-            settings["entropy_profile"] = normalized_entropy_profile
-
-        if entropy_rag_budget_ratio_raw is not None:
-            try:
-                entropy_rag_budget_ratio = int(entropy_rag_budget_ratio_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "entropy_rag_budget_ratio must be an integer."}), 400
-            if not (0 <= entropy_rag_budget_ratio <= 80):
-                return jsonify({"error": "entropy_rag_budget_ratio must be between 0 and 80."}), 400
-            settings["entropy_rag_budget_ratio"] = str(entropy_rag_budget_ratio)
-
-        if entropy_protect_code_blocks_raw is not None:
-            if isinstance(entropy_protect_code_blocks_raw, bool):
-                settings["entropy_protect_code_blocks"] = "true" if entropy_protect_code_blocks_raw else "false"
-            else:
-                settings["entropy_protect_code_blocks"] = (
-                    "true"
-                    if str(entropy_protect_code_blocks_raw).strip().lower() in {"1", "true", "yes", "on"}
-                    else "false"
-                )
-
-        if entropy_protect_tool_results_raw is not None:
-            if isinstance(entropy_protect_tool_results_raw, bool):
-                settings["entropy_protect_tool_results"] = "true" if entropy_protect_tool_results_raw else "false"
-            else:
-                settings["entropy_protect_tool_results"] = (
-                    "true"
-                    if str(entropy_protect_tool_results_raw).strip().lower() in {"1", "true", "yes", "on"}
-                    else "false"
-                )
-
-        if entropy_reference_boost_raw is not None:
-            if isinstance(entropy_reference_boost_raw, bool):
-                settings["entropy_reference_boost"] = "true" if entropy_reference_boost_raw else "false"
-            else:
-                settings["entropy_reference_boost"] = (
-                    "true"
-                    if str(entropy_reference_boost_raw).strip().lower() in {"1", "true", "yes", "on"}
-                    else "false"
-                )
-
         if reasoning_auto_collapse_raw is not None:
             if isinstance(reasoning_auto_collapse_raw, bool):
                 settings["reasoning_auto_collapse"] = "true" if reasoning_auto_collapse_raw else "false"
@@ -1647,14 +1586,6 @@ def register_page_routes(app) -> None:
             if not (0 <= fetch_url_clip_aggressiveness <= 100):
                 return jsonify({"error": "fetch_url_clip_aggressiveness must be between 0 and 100."}), 400
             settings["fetch_url_clip_aggressiveness"] = str(fetch_url_clip_aggressiveness)
-
-        if fetch_html_converter_mode_raw is not None:
-            normalized_fetch_html_converter_mode = str(fetch_html_converter_mode_raw or "").strip().lower()
-            if normalized_fetch_html_converter_mode not in FETCH_HTML_CONVERTER_MODES:
-                return jsonify(
-                    {"error": "fetch_html_converter_mode must be one of internal, external, or hybrid."}
-                ), 400
-            settings["fetch_html_converter_mode"] = normalized_fetch_html_converter_mode
 
         if fetch_url_summarized_max_input_chars_raw is not None:
             try:

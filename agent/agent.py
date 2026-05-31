@@ -234,23 +234,27 @@ MAX_COMPACTION_ATTEMPTS = 3
 EMERGENCY_TRUNCATION_MIN_TOKENS = 1500
 EMERGENCY_TRUNCATION_TARGET_RATIO = 0.60
 
-# Excerpt window scoring weights
-EXCERPT_SCORING_WEIGHTS = {
-    "lexical": 0.38,
-    "structural": 0.24,
-    "density": 0.18,
-    "reference": 0.20,
-}
 
 # Module-level logger for centralized logging
 LOGGER = get_logger(__name__)
 
 
-def _get_default_deepseek_client():
-    return get_provider_client(DEEPSEEK_PROVIDER)
+def _get_default_client():
+    from core import config
+    from lib.model_registry import DEEPSEEK_PROVIDER, MINIMAX_PROVIDER, OPENROUTER_PROVIDER
+
+    if config.DEEPSEEK_API_KEY:
+        provider = DEEPSEEK_PROVIDER
+    elif config.OPENROUTER_API_KEY:
+        provider = OPENROUTER_PROVIDER
+    elif config.MINIMAX_API_KEY:
+        provider = MINIMAX_PROVIDER
+    else:
+        provider = DEEPSEEK_PROVIDER  # Fallback; will fail at runtime if no keys are set
+    return get_provider_client(provider)
 
 
-client = _get_default_deepseek_client()
+client = _get_default_client()
 
 
 def _coerce_usage_int(value) -> int:
@@ -354,6 +358,33 @@ def _extract_usage_metrics(usage) -> dict[str, int]:
         or prompt_cache_miss_present
         or prompt_cache_write_present
     )
+    # Extract OpenRouter-provided cost and cache_discount from response metadata
+    # (per Cache-Friendly AI Coding Agent doc Section 4.3 — OpenRouter includes
+    # cache_discount and detailed cost in the response model_extra).
+    or_cost: float | None = None
+    or_cache_discount: float | None = None
+    if isinstance(payload, dict):
+        # OpenRouter cost may appear in model_extra fields of the usage object.
+        # Check common OpenRouter-reported cost fields.
+        for cost_key in ("cost", "openrouter_cost"):
+            raw_cost = payload.get(cost_key)
+            if raw_cost is not None:
+                try:
+                    or_cost = float(raw_cost)
+                except (TypeError, ValueError):
+                    pass
+                break
+        discount_raw = payload.get("cache_discount")
+        if discount_raw is not None:
+            try:
+                or_cache_discount = float(discount_raw)
+            except (TypeError, ValueError):
+                pass
+    if or_cost is not None:
+        metrics["openrouter_cost"] = or_cost
+    if or_cache_discount is not None:
+        metrics["openrouter_cache_discount"] = or_cache_discount
+
     metrics["raw"] = dict(payload)
     return metrics
 
@@ -1083,78 +1114,6 @@ def _merge_adjacent_user_messages(messages: list[dict]) -> list[dict] | None:
     return merged_messages if merged_any else None
 
 
-def _extract_compaction_assistant_intent(message: dict) -> str:
-    return _clean_tool_text(message.get("content") or "", limit=140)
-
-
-def _extract_compaction_tool_call_preview(tool_call: dict) -> str:
-    function = tool_call.get("function") or {}
-    tool_name = str(function.get("name") or "").strip() or "tool"
-    raw_arguments = function.get("arguments")
-    parsed_arguments = _parse_json_like_value(raw_arguments)
-    arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
-
-    if tool_name in {"search_web", "search_news", "search_news_google"}:
-        queries = _get_search_tool_queries(arguments)
-        if isinstance(queries, list):
-            preview = ", ".join(str(item).strip() for item in queries if str(item).strip())
-            if preview:
-                return f"{tool_name}: {_clean_tool_text(preview, limit=120)}"
-    if tool_name == "fetch_url":
-        url = str(arguments.get("url") or "").strip()
-        if url:
-            return f"{tool_name}: {_clean_tool_text(url, limit=140)}"
-    if tool_name == "fetch_url_summarized":
-        url = str(arguments.get("url") or "").strip()
-        focus = str(arguments.get("focus") or "").strip()
-        if url and focus:
-            return f"{tool_name}: {_clean_tool_text(url, limit=90)} | {_clean_tool_text(focus, limit=45)}"
-        if url:
-            return f"{tool_name}: {_clean_tool_text(url, limit=140)}"
-    if tool_name == "search_knowledge_base":
-        query = str(arguments.get("query") or "").strip()
-        if query:
-            return f"{tool_name}: {_clean_tool_text(query, limit=120)}"
-
-    scalar_parts: list[str] = []
-    for key, value in list(arguments.items())[:3]:
-        if isinstance(value, (str, int, float)):
-            text = _clean_tool_text(value, limit=60)
-            if text:
-                scalar_parts.append(f"{key}={text}")
-    if scalar_parts:
-        return f"{tool_name}: " + ", ".join(scalar_parts)
-    return tool_name
-
-
-def _extract_compaction_tool_result_preview(message: dict) -> str:
-    content = str(message.get("content") or "").strip()
-    if not content:
-        return ""
-
-    parsed = _parse_json_like_value(content)
-    if isinstance(parsed, dict):
-        error = _clean_tool_text(parsed.get("error") or "", limit=120)
-        if error:
-            return f"error: {error}"
-        summary = _clean_tool_text(parsed.get("summary") or parsed.get("title") or "", limit=120)
-        if summary:
-            return summary
-        value = _clean_tool_text(parsed.get("content") or parsed.get("value") or "", limit=120)
-        if value:
-            return value
-
-    normalized = content.replace(TOOL_EXECUTION_RESULTS_MARKER, "").strip()
-    for line in normalized.splitlines():
-        cleaned = _clean_tool_text(line, limit=120)
-        if not cleaned:
-            continue
-        if cleaned.lower().startswith(("url:", "title:")):
-            continue
-        return cleaned
-    return _clean_tool_text(normalized, limit=120)
-
-
 def _count_exchange_blocks(messages: list[dict]) -> int:
     return sum(1 for block in _iter_agent_exchange_blocks(messages) if block.get("type") == "exchange")
 
@@ -1164,21 +1123,12 @@ def _emergency_truncate_to_budget(
     extra_messages: list[dict],
     prompt_max_input_tokens: int,
 ) -> list[dict] | None:
-    """
-    Emergency truncation when normal compaction fails.
+    """Emergency truncation: trim long contents + keep recent exchanges only.
 
-    This is a last-resort mechanism that:
-    1. Keeps system messages and most recent exchanges
-    2. Aggressively compacts oldest exchanges
-    3. Returns None if even this fails (should rarely happen)
-
-    Args:
-        messages: Current message list
-        extra_messages: Additional messages to include (user prompt, etc.)
-        prompt_max_input_tokens: Target budget in tokens
-
-    Returns:
-        Truncated message list, or None if truncation is not possible
+    Simple fallback matching the Conversation Truncation Policy logic:
+    1. Trim all message contents (head+tail)
+    2. Keep system prefix + as many recent exchanges as fit in budget (FIFO)
+    3. Fall back to most recent exchange only if nothing else fits
     """
     blocks = _iter_agent_exchange_blocks(messages)
     exchange_blocks = [b for b in blocks if b.get("type") == "exchange"]
@@ -1186,134 +1136,113 @@ def _emergency_truncate_to_budget(
     if not exchange_blocks:
         return None
 
-    # Estimate non-exchange message tokens (system, scratchpad, etc.)
+    extra_tokens = _estimate_messages_tokens(extra_messages)
     non_exchange_tokens = 0
     for block in blocks:
         if block.get("type") != "exchange":
             non_exchange_tokens += _estimate_messages_tokens(block.get("messages", []))
 
-    # Calculate target for exchange blocks
-    extra_tokens = _estimate_messages_tokens(extra_messages)
-    system_reserve = max(500, int(prompt_max_input_tokens * 0.05))
-    available_for_exchanges = max(
+    available = max(
         EMERGENCY_TRUNCATION_MIN_TOKENS,
-        prompt_max_input_tokens - extra_tokens - non_exchange_tokens - system_reserve,
+        prompt_max_input_tokens - extra_tokens - non_exchange_tokens,
     )
+    target_tokens = int(available * EMERGENCY_TRUNCATION_TARGET_RATIO)
 
-    target_tokens = int(available_for_exchanges * EMERGENCY_TRUNCATION_TARGET_RATIO)
+    # Keep system prefix, then pack recent exchanges from newest to oldest
+    result_blocks: list[dict] = [b for b in blocks if b.get("type") != "exchange"]
+    current_tokens = non_exchange_tokens
 
-    # Build result: keep system prefix, aggressively truncate oldest exchanges
-    result_blocks: list[dict] = []
-    current_tokens = 0
-    skipped_any = False
-
-    for block in blocks:
-        if block.get("type") != "exchange":
-            # Keep system_prefix and passthrough blocks
-            result_blocks.append(block)
-            continue
-
+    for block in reversed(exchange_blocks):
         block_messages = block.get("messages", [])
         block_tokens = _estimate_messages_tokens(block_messages)
-
         if current_tokens + block_tokens <= target_tokens:
-            # Keep this exchange block
-            result_blocks.append(block)
+            result_blocks.insert(
+                len(result_blocks) - len([b for b in result_blocks if b.get("type") == "exchange"]),
+                block,
+            )
             current_tokens += block_tokens
         else:
-            # Try to compact this exchange to a single summary message
-            compacted = [_compact_exchange_to_message(block)]
-            compacted_tokens = _estimate_messages_tokens(compacted)
+            # Try with trimmed content
+            trimmed_block = _trim_exchange_block_content(block)
+            trimmed_tokens = _estimate_messages_tokens(trimmed_block.get("messages", []))
+            if current_tokens + trimmed_tokens <= target_tokens:
+                result_blocks.append(trimmed_block)
+                current_tokens += trimmed_tokens
+            break
 
-            if current_tokens + compacted_tokens <= target_tokens:
-                # Use compacted version
-                result_blocks.append({"type": "exchange", "step_index": block.get("step_index"), "messages": compacted})
-                current_tokens += compacted_tokens
-            else:
-                # Skip this exchange entirely
-                skipped_any = True
+    # Ensure at least one exchange is present
+    if not any(b.get("type") == "exchange" for b in result_blocks) and exchange_blocks:
+        trimmed = _trim_exchange_block_content(exchange_blocks[-1])
+        result_blocks.append(trimmed)
 
-    if not result_blocks or skipped_any and _estimate_messages_tokens(
-        [m for b in result_blocks for m in b.get("messages", [])]
-    ) > prompt_max_input_tokens:
-        # Last resort: only keep the most recent exchange
-        recent_exchanges = [b for b in blocks if b.get("type") == "exchange"][-1:]
-        if not recent_exchanges:
-            return None
+    result = [m for b in result_blocks for m in b.get("messages", [])]
+    result.extend(extra_messages)
 
-        minimal_blocks = [b for b in blocks if b.get("type") == "system_prefix"]
-        minimal_blocks.extend(recent_exchanges)
-
-        result = [m for b in minimal_blocks for m in b.get("messages", [])]
-        result.extend(extra_messages)
-
-        if _estimate_messages_tokens(result) <= prompt_max_input_tokens:
-            return result
-        return None
-
-    # Flatten blocks and add extra_messages
-    flattened = [m for b in result_blocks for m in b.get("messages", [])]
-    flattened.extend(extra_messages)
-
-    return flattened
+    if _estimate_messages_tokens(result) <= prompt_max_input_tokens:
+        return result
+    return None
 
 
-def _compact_exchange_to_message(block: dict) -> dict:
-    tool_previews: list[str] = []
-    result_parts: list[str] = []
-    recovery_hints: list[str] = []
-    assistant_intent = ""
-    for message in block.get("messages") or []:
-        role = str(message.get("role") or "").strip()
-        if role == "assistant":
-            assistant_intent = assistant_intent or _extract_compaction_assistant_intent(message)
-            for tool_call in message.get("tool_calls") or []:
-                preview = _extract_compaction_tool_call_preview(tool_call)
-                if preview and preview not in tool_previews:
-                    tool_previews.append(preview)
-                function = tool_call.get("function") or {}
-                raw_arguments = function.get("arguments")
-                parsed_arguments = _parse_json_like_value(raw_arguments)
-                arguments = parsed_arguments if isinstance(parsed_arguments, dict) else {}
-                recovery_hint = _build_recovery_hint_for_tool(function.get("name") or "", arguments)
-                if recovery_hint and recovery_hint not in recovery_hints:
-                    recovery_hints.append(recovery_hint)
-        elif role == "tool" or _is_tool_execution_result_message(message):
-            content = _extract_compaction_tool_result_preview(message)
-            if content:
-                result_parts.append(content)
+def _trim_exchange_block_content(block: dict, max_chars: int = 2000) -> dict:
+    """Trim the content of all messages in an exchange block (head+tail preservation)."""
+    trimmed_messages = []
+    for msg in block.get("messages") or []:
+        if not isinstance(msg, dict):
+            trimmed_messages.append(msg)
+            continue
+        content = str(msg.get("content") or "")
+        if len(content) > max_chars:
+            trimmed_content, _ = _build_head_tail_excerpt(content, max_chars)
+            trimmed_messages.append({**msg, "content": trimmed_content})
+        else:
+            trimmed_messages.append(msg)
+    return {**block, "messages": trimmed_messages}
 
-    parts = [f"[Context: compacted tool step {block.get('step_index') or '?'}]"]
-    if assistant_intent:
-        parts.append(f"Assistant intent: {assistant_intent}")
-    if tool_previews:
-        parts.append("Actions:\n- " + "\n- ".join(tool_previews[:4]))
-    if result_parts:
-        parts.append("Outcomes:\n- " + "\n- ".join(result_parts[:3]))
-    if recovery_hints:
-        parts.append("Recovery:\n- " + "\n- ".join(recovery_hints[:2]))
-    return {"role": "user", "content": "\n".join(parts)}
+
+def _simple_content_trim_messages(messages: list[dict], max_chars: int = 2000) -> list[dict]:
+    """Trim long message contents using head+tail preservation (matching conversation truncation policy)."""
+    trimmed = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            trimmed.append(msg)
+            continue
+        content = str(msg.get("content") or "")
+        if len(content) > max_chars:
+            trimmed_content, _ = _build_head_tail_excerpt(content, max_chars)
+            trimmed.append({**msg, "content": trimmed_content})
+        else:
+            trimmed.append(msg)
+    return trimmed
 
 
 def _try_compact_messages(messages: list[dict], budget: int, keep_recent: int = 2) -> list[dict] | None:
+    """Simple compaction matching Conversation Truncation Policy logic.
+
+    1. Trim long message contents (head+tail preservation)
+    2. Drop oldest non-system exchange blocks (FIFO) if still over budget
+    """
     if not isinstance(messages, list):
         return None
 
-    blocks = _iter_agent_exchange_blocks(messages)
+    # Step 1: Trim long message contents (>2000 chars)
+    trimmed = _simple_content_trim_messages(messages)
+
+    # Step 2: If still over budget, drop oldest exchange blocks (FIFO)
+    blocks = _iter_agent_exchange_blocks(trimmed)
     exchange_positions = [index for index, block in enumerate(blocks) if block.get("type") == "exchange"]
     if not exchange_positions:
-        return _merge_adjacent_user_messages(messages)
+        return _merge_adjacent_user_messages(trimmed)
 
     keep_recent = max(0, int(keep_recent))
     compactable_positions = exchange_positions[:-keep_recent] if keep_recent else exchange_positions[:]
     if not compactable_positions:
         return None
 
+    # Drop oldest compactable exchanges one by one until budget is met
     working_blocks = [{**block, "messages": list(block.get("messages") or [])} for block in blocks]
     best_messages: list[dict] | None = None
     for position in compactable_positions:
-        block = working_blocks[position]
-        block["messages"] = [_compact_exchange_to_message(block)]
+        working_blocks[position]["messages"] = []  # Drop this exchange
         best_messages = _flatten_agent_exchange_blocks(working_blocks)
         merged_user_messages = _merge_adjacent_user_messages(best_messages)
         if merged_user_messages is not None:
@@ -1453,21 +1382,6 @@ def _normalize_fetch_clip_aggressiveness(value) -> int:
     return max(0, min(100, aggressiveness))
 
 
-def _shrink_excerpt_lengths(lengths: list[int], minimums: list[int], overflow: int) -> list[int]:
-    adjusted = list(lengths)
-    remaining_overflow = max(0, int(overflow or 0))
-    for index in (1, 2, 0):
-        if remaining_overflow <= 0:
-            break
-        reducible = max(0, adjusted[index] - minimums[index])
-        if reducible <= 0:
-            continue
-        delta = min(reducible, remaining_overflow)
-        adjusted[index] -= delta
-        remaining_overflow -= delta
-    return adjusted
-
-
 def _build_head_tail_excerpt(text: str, target_chars: int) -> tuple[str, dict]:
     cleaned = str(text or "")
     normalized_target = max(0, int(target_chars or 0))
@@ -1502,117 +1416,12 @@ def _build_head_tail_excerpt(text: str, target_chars: int) -> tuple[str, dict]:
     return f"{head}{dynamic_marker}{tail}", {"strategy": "head_tail_excerpt", "excerpt_count": 2}
 
 
-def _extract_fetch_entropy_terms(text: str) -> list[str]:
-    return [term.lower() for term in re.findall(r"[A-Za-z0-9_./:-]{3,}", str(text or ""))]
-
-
-def _extract_fetch_anchor_terms(text: str) -> list[str]:
-    unique_terms: list[str] = []
-    seen_terms: set[str] = set()
-    for term in _extract_fetch_entropy_terms(text):
-        if len(term) < 5 or term.isdigit() or term in seen_terms:
-            continue
-        seen_terms.add(term)
-        unique_terms.append(term)
-        if len(unique_terms) >= 8:
-            break
-    return unique_terms
-
-
-def _score_fetch_excerpt_window(window: str, *, anchor_terms: list[str] | None = None) -> float:
-    normalized_window = str(window or "").strip()
-    if not normalized_window:
-        return 0.0
-
-    terms = _extract_fetch_entropy_terms(normalized_window)
-    lexical_score = 0.0
-    if terms:
-        lexical_score = min(1.0, (len(set(terms)) / len(terms)) * 1.4)
-
-    structural_score = 0.0
-    if "```" in normalized_window or re.search(r"^\s{4,}\S", normalized_window, re.MULTILINE):
-        structural_score += 0.24
-    if re.search(r"https?://|www\.", normalized_window):
-        structural_score += 0.18
-    if re.search(r"\b\d[\d.,_:/-]*\b", normalized_window):
-        structural_score += 0.16
-    if re.search(r"^#{1,6}\s+", normalized_window, re.MULTILINE):
-        structural_score += 0.14
-    if re.search(r"^[\-*•]\s+", normalized_window, re.MULTILINE):
-        structural_score += 0.10
-    if "{" in normalized_window and "}" in normalized_window:
-        structural_score += 0.08
-    structural_score = min(1.0, structural_score)
-
-    density_score = min(1.0, max(1, _estimate_text_tokens(normalized_window)) / 220.0)
-
-    reference_score = 0.0
-    normalized_anchor_terms = [term for term in (anchor_terms or []) if term]
-    if normalized_anchor_terms:
-        lowered_window = normalized_window.lower()
-        anchor_hits = sum(1 for term in normalized_anchor_terms if term in lowered_window)
-        reference_score = min(1.0, anchor_hits / max(1, min(4, len(normalized_anchor_terms))))
-
-    return (
-        lexical_score * EXCERPT_SCORING_WEIGHTS["lexical"]
-        + structural_score * EXCERPT_SCORING_WEIGHTS["structural"]
-        + density_score * EXCERPT_SCORING_WEIGHTS["density"]
-        + reference_score * EXCERPT_SCORING_WEIGHTS["reference"]
-    )
-
-
-def _select_entropy_middle_excerpt_start(
-    text: str,
-    *,
-    head_chars: int,
-    middle_chars: int,
-    tail_chars: int,
-    anchor_text: str = "",
-) -> tuple[int | None, dict]:
-    cleaned = str(text or "")
-    if not cleaned or middle_chars <= 0:
-        return None, {"window_selection": "center_window"}
-
-    min_start = max(1, int(head_chars or 0) + 1)
-    max_start = len(cleaned) - max(0, int(tail_chars or 0)) - int(middle_chars or 0) - 1
-    if max_start <= min_start:
-        return None, {"window_selection": "center_window"}
-
-    center_start = max(min_start, min(max_start, (len(cleaned) - middle_chars) // 2))
-    anchor_terms = _extract_fetch_anchor_terms(anchor_text)
-    lowered_text = cleaned.lower()
-
-    candidate_starts: set[int] = {center_start, min_start, max_start}
-    step = max(200, middle_chars // 2)
-    candidate_starts.update(range(min_start, max_start + 1, step))
-
-    for term in anchor_terms[:6]:
-        position = lowered_text.find(term)
-        if position < 0:
-            continue
-        candidate_starts.add(max(min_start, min(max_start, position - middle_chars // 4)))
-
-    best_start = center_start
-    best_score = -1.0
-    best_distance = 1.0
-    for start in sorted(candidate_starts):
-        window = cleaned[start : start + middle_chars]
-        score = _score_fetch_excerpt_window(window, anchor_terms=anchor_terms)
-        distance = abs(start - center_start) / max(1, max_start - min_start)
-        if score > best_score + 1e-9 or (abs(score - best_score) <= 1e-9 and distance < best_distance):
-            best_start = start
-            best_score = score
-            best_distance = distance
-
-    selection = "center_window"
-    if anchor_terms and best_start != center_start:
-        selection = "entropy_anchor_window"
-    elif best_start != center_start:
-        selection = "entropy_window"
-    return best_start, {"window_selection": selection, "window_entropy_score": round(max(0.0, best_score), 4)}
-
-
 def _clip_text_preserving_ends(text: str, target_chars: int, *, anchor_text: str = "") -> tuple[str, dict]:
+    """Clip text by keeping head, middle (center-based), and tail.
+
+    Uses a simple center-based middle excerpt — no entropy scoring.
+    Falls back to head+tail excerpt for small/medium texts.
+    """
     cleaned = str(text or "")
     normalized_target = max(0, int(target_chars or 0))
     if not cleaned or normalized_target <= 0 or len(cleaned) <= normalized_target:
@@ -1624,72 +1433,49 @@ def _clip_text_preserving_ends(text: str, target_chars: int, *, anchor_text: str
     if normalized_target < 2_000:
         return _build_head_tail_excerpt(cleaned, normalized_target)
 
-    base_marker_one = "\n\n[... middle excerpt follows ...]\n\n"
-    base_marker_two = "\n\n[... final excerpt follows ...]\n\n"
-    available = normalized_target - len(base_marker_one) - len(base_marker_two)
+    marker_one = "\n\n[... middle excerpt follows ...]\n\n"
+    marker_two = "\n\n[... final excerpt follows ...]\n\n"
+    marker_len = len(marker_one) + len(marker_two)
+    available = normalized_target - marker_len
     if available < 1_500:
         return _build_head_tail_excerpt(cleaned, normalized_target)
 
-    lengths = [
-        max(520, int(available * 0.42)),
-        max(360, int(available * 0.20)),
-        max(420, available - max(520, int(available * 0.42)) - max(360, int(available * 0.20))),
-    ]
-    minimums = [420, 260, 320]
+    head_chars = max(520, int(available * 0.42))
+    middle_chars = max(360, int(available * 0.20))
+    tail_chars = max(420, available - head_chars - middle_chars)
 
-    def _compose_excerpt(current_lengths: list[int]):
-        head_chars, middle_chars, tail_chars = current_lengths
-        middle_start, selection_details = _select_entropy_middle_excerpt_start(
-            cleaned,
-            head_chars=head_chars,
-            middle_chars=middle_chars,
-            tail_chars=tail_chars,
-            anchor_text=anchor_text,
-        )
-        if middle_start is None:
-            middle_start = max(head_chars, (len(cleaned) - middle_chars) // 2)
-            selection_details = {"window_selection": "center_window"}
-        middle_end = middle_start + middle_chars
-        tail_start = max(middle_end, len(cleaned) - tail_chars)
-        if middle_start <= head_chars or tail_start <= middle_end:
-            return None
-        omitted_before = max(0, middle_start - head_chars)
-        omitted_after = max(0, tail_start - middle_end)
-        marker_one = f"\n\n[... {omitted_before:,} characters omitted before middle excerpt ...]\n\n"
-        marker_two = f"\n\n[... {omitted_after:,} characters omitted before final excerpt ...]\n\n"
-        total_len = head_chars + middle_chars + tail_chars + len(marker_one) + len(marker_two)
-        return {
-            "head_chars": head_chars,
-            "middle_start": middle_start,
-            "middle_end": middle_end,
-            "tail_start": tail_start,
-            "marker_one": marker_one,
-            "marker_two": marker_two,
-            "overflow": max(0, total_len - normalized_target),
-            **selection_details,
-        }
+    # Simple center-based middle excerpt
+    middle_start = max(head_chars, (len(cleaned) - middle_chars) // 2)
+    middle_end = middle_start + middle_chars
+    tail_start = max(middle_end, len(cleaned) - tail_chars)
 
-    composed = _compose_excerpt(lengths)
-    if not composed:
-        return _build_head_tail_excerpt(cleaned, normalized_target)
-    if composed["overflow"] > 0:
-        lengths = _shrink_excerpt_lengths(lengths, minimums, composed["overflow"])
-        composed = _compose_excerpt(lengths)
-    if not composed:
+    if middle_start <= head_chars or tail_start <= middle_end:
         return _build_head_tail_excerpt(cleaned, normalized_target)
 
-    head = cleaned[: composed["head_chars"]].rstrip()
-    middle = cleaned[composed["middle_start"] : composed["middle_end"]].strip()
-    tail = cleaned[composed["tail_start"] :].lstrip()
+    omitted_before = max(0, middle_start - head_chars)
+    omitted_after = max(0, tail_start - middle_end)
+    marker_one_final = f"\n\n[... {omitted_before:,} characters omitted before middle excerpt ...]\n\n"
+    marker_two_final = f"\n\n[... {omitted_after:,} characters omitted before final excerpt ...]\n\n"
+
+    head = cleaned[:head_chars].rstrip()
+    middle = cleaned[middle_start:middle_end].strip()
+    tail = cleaned[tail_start:].lstrip()
+
     if not head or not middle or not tail:
         return _build_head_tail_excerpt(cleaned, normalized_target)
+
     return (
-        f"{head}{composed['marker_one']}{middle}{composed['marker_two']}{tail}",
+        f"{head}{marker_one_final}{middle}{marker_two_final}{tail}",
         {"strategy": "head_middle_tail_excerpt", "excerpt_count": 3},
     )
 
 
 def _build_fetch_clipped_text(result: dict, token_threshold: int, clip_aggressiveness: int) -> tuple[str, int, dict]:
+    """Clip fetched content to fit within token threshold using simple proportional clipping.
+
+    Uses head+middle+tail preservation with center-based middle excerpt.
+    clip_aggressiveness is accepted for API compatibility but no longer used.
+    """
     raw_content = _clean_tool_text(result.get("content") or "")
     token_estimate = _estimate_text_tokens(raw_content)
     if not raw_content:
@@ -1699,23 +1485,8 @@ def _build_fetch_clipped_text(result: dict, token_threshold: int, clip_aggressiv
         return raw_content, token_estimate, {"strategy": "full_text", "excerpt_count": 1}
 
     clip_ratio = min(1.0, token_threshold / max(token_estimate, 1))
-    preserve_multiplier = min(1.0, 1.8 - (_normalize_fetch_clip_aggressiveness(clip_aggressiveness) / 100) * 1.0)
-    target_chars = max(2000, min(FETCH_SUMMARY_MAX_CHARS, int(len(raw_content) * clip_ratio * preserve_multiplier)))
-    anchor_parts: list[str] = []
-    for field_name in ("title", "meta_description", "structured_data", "content_source_element"):
-        field_value = _clean_tool_text(result.get(field_name) or "", limit=600)
-        if field_value:
-            anchor_parts.append(field_value)
-    outline = result.get("outline") if isinstance(result.get("outline"), list) else []
-    if outline:
-        anchor_parts.extend(
-            _clean_tool_text(item, limit=120) for item in outline[:12] if _clean_tool_text(item, limit=120)
-        )
-    clipped_content, clip_details = _clip_text_preserving_ends(
-        raw_content,
-        target_chars,
-        anchor_text=" ".join(anchor_parts),
-    )
+    target_chars = max(2000, min(FETCH_SUMMARY_MAX_CHARS, int(len(raw_content) * clip_ratio)))
+    clipped_content, clip_details = _clip_text_preserving_ends(raw_content, target_chars)
     result_text = clipped_content or raw_content
     return result_text, _estimate_text_tokens(result_text), clip_details
 
@@ -2248,8 +2019,6 @@ def _prepare_fetch_result_for_model(
         if clip_strategy == "head_middle_tail_excerpt"
         else "The leading and trailing excerpts are preserved; the middle portion is omitted."
     )
-    if clip_details.get("window_selection") in {"entropy_window", "entropy_anchor_window"}:
-        coverage_note += " The middle excerpt is chosen from a higher-signal region instead of always using the literal center of the page."
     prepared["content"] = clipped_text
     prepared["content_mode"] = "clipped_text"
     prepared["clip_strategy"] = clip_strategy
@@ -4254,6 +4023,197 @@ def _generate_conversation_title_with_dedicated_model(conversation_id: int, fall
     return _normalize_conversation_title_for_tool(result.get("content") or "")
 
 
+# ---------------------------------------------------------------------------
+# Context Management Tool Handlers
+# (per AI Memory and Context Management doc)
+# ---------------------------------------------------------------------------
+from core.db import (
+    list_context_summary as _db_list_context_summary,
+    purge_context_nodes as _db_purge_context_nodes,
+    merge_context_nodes as _db_merge_context_nodes,
+    get_context_node as _db_get_context_node,
+    update_context_node as _db_update_context_node,
+)
+from core.config import CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS
+
+
+def _run_list_context_summary(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
+    """Handler for list_context_summary tool.
+
+    Per Section 2.1: Lightweight overview of all context nodes without full payloads.
+    """
+    conversation_id = runtime_state.get("conversation_id") if isinstance(runtime_state, dict) else None
+    if not conversation_id:
+        return {"error": "No active conversation."}, "list_context_summary: no active conversation"
+
+    sort_by = str(tool_args.get("sort_by") or "created_at").strip()
+    if sort_by not in ("created_at", "token_count"):
+        sort_by = "created_at"
+
+    nodes = _db_list_context_summary(conversation_id=int(conversation_id), sort_by=sort_by)
+    total_tokens = sum(node.get("token_count", 0) for node in nodes)
+    result = {
+        "nodes": nodes,
+        "total_nodes": len(nodes),
+        "total_tokens": total_tokens,
+        "sort_by": sort_by,
+    }
+    return result, f"list_context_summary: {len(nodes)} nodes, ~{total_tokens} tokens"
+
+
+def _run_purge_context_nodes(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
+    """Handler for purge_context_nodes tool.
+
+    Per Section 2.2: Permanently remove specified context nodes.
+    """
+    conversation_id = runtime_state.get("conversation_id") if isinstance(runtime_state, dict) else None
+    if not conversation_id:
+        return {"error": "No active conversation."}, "purge_context_nodes: no active conversation"
+
+    node_ids = tool_args.get("nodes") if isinstance(tool_args.get("nodes"), list) else []
+    if not node_ids:
+        return {"error": "No node_ids provided."}, "purge_context_nodes: no node_ids provided"
+
+    reason = str(tool_args.get("reason") or "").strip() or "Purged by AI via purge_context_nodes tool"
+
+    result = _db_purge_context_nodes(node_ids, reason)
+    return result, f"purge_context_nodes: {result.get('purged', 0)} nodes purged ({result.get('archived', 0)} archived, {result.get('active', 0)} active)"
+
+
+def _run_merge_context_nodes(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
+    """Handler for merge_context_nodes tool.
+
+    Per Section 2.3: Combine related nodes into one, purging originals.
+    """
+    conversation_id = runtime_state.get("conversation_id") if isinstance(runtime_state, dict) else None
+    if not conversation_id:
+        return {"error": "No active conversation."}, "merge_context_nodes: no active conversation"
+
+    node_ids = tool_args.get("nodes") if isinstance(tool_args.get("nodes"), list) else []
+    if len(node_ids) < 2:
+        return {"error": "At least 2 node_ids required."}, "merge_context_nodes: need >= 2 nodes"
+
+    new_summary = str(tool_args.get("new_summary") or "").strip() or "Merged context nodes"
+
+    merged_node = _db_merge_context_nodes(
+        conversation_id=int(conversation_id),
+        node_ids=node_ids,
+        new_summary=new_summary,
+    )
+    if not merged_node:
+        return {"error": "Merge failed — nodes not found or already deleted."}, "merge_context_nodes: failed"
+
+    return {
+        "merged_node_id": merged_node.get("node_id"),
+        "token_count": merged_node.get("token_count", 0),
+        "summary": merged_node.get("summary"),
+        "source_count": len(node_ids),
+    }, f"merge_context_nodes: merged {len(node_ids)} nodes into {merged_node.get('node_id')}"
+
+
+def _run_compress_context_node(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
+    """Handler for compress_context_node tool.
+
+    Per Section 2.4: Compress a node's payload by truncating middle bulk,
+    preserving head (~35%), middle sample (~15%), and tail (~50%).
+    """
+    conversation_id = runtime_state.get("conversation_id") if isinstance(runtime_state, dict) else None
+    if not conversation_id:
+        return {"error": "No active conversation."}, "compress_context_node: no active conversation"
+
+    node_id = str(tool_args.get("node_id") or "").strip()
+    if not node_id:
+        return {"error": "node_id is required."}, "compress_context_node: missing node_id"
+
+    node = _db_get_context_node(node_id)
+    if not node:
+        return {"error": f"Node {node_id} not found."}, f"compress_context_node: node {node_id} not found"
+
+    # Reject re-compression (Section 4.3.1)
+    if node.get("compressed"):
+        return {
+            "error": f"Node {node_id} is already compressed and cannot be compressed again. "
+                     "Use purge_context_nodes to remove it or merge_context_nodes to consolidate."
+        }, f"compress_context_node: node {node_id} already compressed"
+
+    full_content = node.get("full_content") or ""
+    original_length = len(full_content)
+
+    # Threshold check (Section 2.4 Behaviour step 1)
+    if original_length <= CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS:
+        return {
+            "node_id": node_id,
+            "original_length": original_length,
+            "compressed_length": original_length,
+            "truncated_chars": 0,
+            "was_truncated": False,
+            "message": "Node content is below the compression threshold; no compression applied.",
+        }, f"compress_context_node: node {node_id} below compression threshold ({original_length} chars)"
+
+    # Three-part retention (Section 2.4 Behaviour step 2):
+    # Head ~35%, Middle ~15%, Tail ~50% of target
+    target_length = max(CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS, int(original_length * 0.3))
+    head_chars = max(200, int(target_length * 0.35))
+    middle_chars = max(100, int(target_length * 0.15))
+    tail_chars = max(200, target_length - head_chars - middle_chars)
+
+    if head_chars + middle_chars + tail_chars >= original_length:
+        return {
+            "node_id": node_id,
+            "original_length": original_length,
+            "compressed_length": original_length,
+            "truncated_chars": 0,
+            "was_truncated": False,
+            "message": "Compression target exceeds original length; no compression applied.",
+        }, f"compress_context_node: node {node_id} already fits"
+
+    # Extract segments
+    head = full_content[:head_chars].rstrip()
+
+    middle_start = max(head_chars, min(len(full_content) - tail_chars - middle_chars, len(full_content) // 2 - middle_chars // 2))
+    middle_end = min(middle_start + middle_chars, len(full_content) - tail_chars)
+    middle = full_content[middle_start:middle_end].strip()
+
+    tail = full_content[-tail_chars:].lstrip()
+
+    # Truncation marker (Section 2.4 Behaviour step 3)
+    omitted_before = max(0, middle_start - head_chars)
+    if omitted_before > 0:
+        truncation_marker = f"\n\n-- {omitted_before:,} chars truncated --\n\n"
+        compressed_payload = f"{head}{truncation_marker}{middle}" if middle else head
+    else:
+        # No gap between head and middle; use a simple separator
+        compressed_payload = f"{head}\n\n{middle}" if middle else head
+
+    if tail:
+        compressed_payload += (
+            f"\n\n-- {max(0, len(full_content) - middle_end - tail_chars):,}"
+            f" chars truncated before tail --\n\n{tail}"
+        )
+
+    compressed_token_count = _estimate_text_tokens(compressed_payload)
+
+    # Update node (Section 2.4 Behaviour step 4)
+    updated = _db_update_context_node(
+        node_id,
+        full_content=compressed_payload,
+        token_count=compressed_token_count,
+        summary=node.get("summary"),
+        compressed=True,
+    )
+    if not updated:
+        return {"error": "Failed to update node after compression."}, f"compress_context_node: update failed for {node_id}"
+
+    truncated_chars = original_length - len(compressed_payload)
+    return {
+        "node_id": node_id,
+        "original_length": original_length,
+        "compressed_length": len(compressed_payload),
+        "truncated_chars": max(0, truncated_chars),
+        "was_truncated": True,
+    }, f"compress_context_node: node {node_id} compressed from {original_length:,} to {len(compressed_payload):,} chars"
+
+
 _TOOL_EXECUTORS = {
     "append_scratchpad": _run_append_scratchpad,
     "replace_scratchpad": _run_replace_scratchpad,
@@ -4277,6 +4237,11 @@ _TOOL_EXECUTORS = {
     "clear_canvas_viewport": _run_clear_canvas_viewport,
     "batch_canvas_edits": _run_batch_canvas_edits,
     "delete_canvas_document": _run_delete_canvas_document,
+    # Context management tools (per AI Memory and Context Management doc)
+    "list_context_summary": _run_list_context_summary,
+    "purge_context_nodes": _run_purge_context_nodes,
+    "merge_context_nodes": _run_merge_context_nodes,
+    "compress_context_node": _run_compress_context_node,
 }
 
 
@@ -5835,25 +5800,19 @@ def run_agent_stream(
                 request_kwargs["tools"] = turn_tools
                 request_kwargs["tool_choice"] = "auto"
         request_kwargs = apply_chat_parameter_overrides(request_kwargs, request_parameter_overrides)
-        request_kwargs = apply_model_target_request_options(request_kwargs, model_target)
-
         # Inject session-scoped cache key for provider-side prompt caching.
         # This enables DeepSeek's automatic disk caching (prefix matching) and
         # OpenRouter's prompt_cache_key mechanism, achieving 70-90% cache hit rates.
         # The key is stable per conversation: all LLM calls within the same conversation
         # share the same key, enabling the provider to deduplicate identical prefixes.
-        cache_key = str(
+        # apply_model_target_request_options maps the key to the correct provider key
+        # (snake_case prompt_cache_key for OpenRouter, camelCase promptCacheKey for DeepSeek).
+        _cache_key = str(
             (runtime_state.get("agent_context") or {}).get("conversation_id") or trace_id or ""
         )
-        if cache_key:
-            existing_extra_body = request_kwargs.get("extra_body")
-            if not isinstance(existing_extra_body, dict):
-                existing_extra_body = {}
-            # OpenRouter uses snake_case prompt_cache_key; DeepSeek-compatible
-            # providers accept it as an extra_body field for session alignment.
-            if "prompt_cache_key" not in existing_extra_body:
-                existing_extra_body["prompt_cache_key"] = cache_key
-            request_kwargs["extra_body"] = existing_extra_body
+        request_kwargs = apply_model_target_request_options(
+            request_kwargs, model_target, prompt_cache_key=_cache_key or None,
+        )
 
         cache_estimate_context = build_openrouter_cache_estimate_context(
             request_kwargs.get("messages"),

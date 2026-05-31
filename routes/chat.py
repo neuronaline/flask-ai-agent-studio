@@ -88,13 +88,7 @@ from core.db import (
     get_conversation_memory,
     get_conversation_messages,
     get_effective_conversation_persona,
-    get_context_selection_strategy,
     get_db,
-    get_entropy_profile,
-    get_entropy_protect_code_blocks_enabled,
-    get_entropy_protect_tool_results_enabled,
-    get_entropy_rag_budget_ratio,
-    get_entropy_reference_boost_enabled,
     get_fetch_url_clip_aggressiveness,
     get_fetch_url_token_threshold,
     get_file_asset,
@@ -135,6 +129,7 @@ from core.db import (
     update_image_asset,
     update_video_asset,
     update_message_metadata,
+    apply_conversation_truncation,
 )
 from services.doc_service import (
     build_canvas_markdown,
@@ -2308,240 +2303,6 @@ def _select_recent_prompt_window_classic(
     return selected_messages
 
 
-def _extract_entropy_terms(text: str) -> list[str]:
-    return [term.lower() for term in re.findall(r"[A-Za-z0-9_./:-]{3,}", text or "")]
-
-
-def _extract_entropy_reference_terms(text: str) -> list[str]:
-    unique_terms: list[str] = []
-    seen_terms: set[str] = set()
-    for term in _extract_entropy_terms(text):
-        if len(term) < 5 or term.isdigit() or term in seen_terms:
-            continue
-        seen_terms.add(term)
-        unique_terms.append(term)
-        if len(unique_terms) >= 8:
-            break
-    return unique_terms
-
-
-def _block_contains_code_signal(block_messages: list[dict]) -> bool:
-    return any(
-        isinstance(message, dict)
-        and (
-            "```" in str(message.get("content") or "")
-            or bool(re.search(r"^\s{4,}\S", str(message.get("content") or ""), re.MULTILINE))
-        )
-        for message in block_messages
-    )
-
-
-def _block_contains_tool_signal(block_messages: list[dict]) -> bool:
-    return any(
-        isinstance(message, dict) and (_get_message_role(message) == "tool" or _is_tool_call_assistant_message(message))
-        for message in block_messages
-    )
-
-
-def _get_entropy_profile_settings(settings: dict | None) -> dict[str, float]:
-    profile = get_entropy_profile(settings)
-    if profile == "conservative":
-        return {
-            "threshold": 0.85,
-            "lexical_weight": 0.45,
-            "structural_weight": 0.45,
-            "recency_weight": 0.9,
-            "reference_weight": 0.45,
-        }
-    if profile == "aggressive":
-        return {
-            "threshold": 1.15,
-            "lexical_weight": 0.45,
-            "structural_weight": 0.8,
-            "recency_weight": 0.55,
-            "reference_weight": 0.65,
-        }
-    return {
-        "threshold": 1.0,
-        "lexical_weight": 0.5,
-        "structural_weight": 0.65,
-        "recency_weight": 0.75,
-        "reference_weight": 0.55,
-    }
-
-
-def _score_prompt_block_entropy(
-    block_messages: list[dict],
-    *,
-    recency_rank: int,
-    total_blocks: int,
-    later_text: str,
-    settings: dict | None,
-) -> float:
-    joined_text = "\n".join(
-        str(message.get("content") or "") for message in block_messages if isinstance(message, dict)
-    )
-    block_tokens = max(1, estimate_text_tokens(joined_text))
-    terms = _extract_entropy_terms(joined_text)
-    lexical_score = 0.0
-    if terms:
-        lexical_score = min(1.0, (len(set(terms)) / len(terms)) * 1.4)
-
-    structural_score = 0.0
-    if _block_contains_code_signal(block_messages):
-        structural_score += 0.7
-    if _block_contains_tool_signal(block_messages):
-        structural_score += 0.45
-    if re.search(r"https?://|www\.", joined_text):
-        structural_score += 0.25
-    if re.search(r"\b\d[\d.,_:/-]*\b", joined_text):
-        structural_score += 0.2
-    if "{" in joined_text and "}" in joined_text:
-        structural_score += 0.15
-    structural_score = min(1.0, structural_score)
-
-    density_score = min(1.0, block_tokens / 220.0)
-    recency_score = 1.0 if total_blocks <= 1 else 1.0 - (recency_rank / max(1, total_blocks - 1))
-
-    reference_score = 0.0
-    if get_entropy_reference_boost_enabled(settings):
-        reference_terms = _extract_entropy_reference_terms(joined_text)
-        lowered_later_text = later_text.lower()
-        if reference_terms and any(term in lowered_later_text for term in reference_terms):
-            reference_score = 1.0
-
-    profile_settings = _get_entropy_profile_settings(settings)
-    score = (
-        density_score * 0.3
-        + lexical_score * profile_settings["lexical_weight"]
-        + structural_score * profile_settings["structural_weight"]
-        + recency_score * profile_settings["recency_weight"]
-        + reference_score * profile_settings["reference_weight"]
-    )
-
-    if get_entropy_protect_code_blocks_enabled(settings) and _block_contains_code_signal(block_messages):
-        score = max(score, profile_settings["threshold"] + 0.35)
-    if get_entropy_protect_tool_results_enabled(settings) and _block_contains_tool_signal(block_messages):
-        score = max(score, profile_settings["threshold"] + 0.2)
-    return score
-
-
-def _select_recent_prompt_window_entropy(
-    messages: list[dict],
-    max_tokens: int,
-    min_user_messages: int = 2,
-    *,
-    canvas_documents: list[dict] | None = None,
-    settings: dict | None = None,
-) -> list[dict]:
-    if max_tokens <= 0:
-        return []
-
-    current_turn_start_key = _get_last_user_message_key(messages)
-    blocks = _iter_message_blocks(messages)
-    candidates: list[dict] = []
-    for block_index, block in enumerate(blocks):
-        block_messages = block.get("messages") or []
-        if not block_messages or not block.get("valid_for_prompt"):
-            continue
-        if _historical_tool_block_is_resolved(blocks, block_index, current_turn_start_key):
-            continue
-
-        prompt_block_messages = _redact_old_tool_messages(block_messages, current_turn_start_key)
-        if not prompt_block_messages:
-            continue
-
-        block_api_messages = build_api_messages(prompt_block_messages, canvas_documents=canvas_documents)
-        block_tokens = _estimate_prompt_tokens(block_api_messages)
-        if block_tokens <= 0:
-            continue
-        candidates.append(
-            {
-                "candidate_index": len(candidates),
-                "index": block_index,
-                "messages": prompt_block_messages,
-                "tokens": block_tokens,
-                "user_count": sum(1 for message in prompt_block_messages if _get_message_role(message) == "user"),
-                "text": "\n".join(
-                    str(message.get("content") or "") for message in prompt_block_messages if isinstance(message, dict)
-                ),
-            }
-        )
-
-    if not candidates:
-        return []
-
-    later_text = ""
-    total_candidates = len(candidates)
-    for reversed_offset, candidate in enumerate(reversed(candidates)):
-        candidate["recency_rank"] = reversed_offset
-        candidate["score"] = _score_prompt_block_entropy(
-            candidate["messages"],
-            recency_rank=reversed_offset,
-            total_blocks=total_candidates,
-            later_text=later_text,
-            settings=settings,
-        )
-        later_text = f"{candidate['text']}\n{later_text}".strip()
-
-    forced_indices: set[int] = set()
-    protected_user_messages = 0
-    for candidate_index in range(len(candidates) - 1, -1, -1):
-        candidate = candidates[candidate_index]
-        if candidate["user_count"] <= 0:
-            continue
-        forced_indices.add(candidate_index)
-        protected_user_messages += candidate["user_count"]
-        if protected_user_messages >= min_user_messages:
-            break
-
-    selected_indices: set[int] = set()
-    used_tokens = 0
-    for candidate_index in sorted(forced_indices, reverse=True):
-        candidate = candidates[candidate_index]
-        if used_tokens + candidate["tokens"] > max_tokens:
-            continue
-        selected_indices.add(candidate_index)
-        used_tokens += candidate["tokens"]
-
-    profile_settings = _get_entropy_profile_settings(settings)
-    remaining_candidates = [
-        candidate
-        for candidate_index, candidate in enumerate(candidates)
-        if candidate_index not in selected_indices and candidate["score"] >= profile_settings["threshold"]
-    ]
-    remaining_candidates.sort(
-        key=lambda candidate: (
-            candidate["score"] / max(1, candidate["tokens"]),
-            candidate["score"],
-            -candidate["recency_rank"],
-        ),
-        reverse=True,
-    )
-
-    for candidate in remaining_candidates:
-        if used_tokens + candidate["tokens"] > max_tokens:
-            continue
-        selected_indices.add(candidate["candidate_index"])
-        used_tokens += candidate["tokens"]
-
-    if not selected_indices:
-        return _select_recent_prompt_window_classic(
-            messages,
-            max_tokens,
-            min_user_messages=min_user_messages,
-            canvas_documents=canvas_documents,
-        )
-
-    selected_messages: list[dict] = []
-    for candidate_index, candidate in enumerate(candidates):
-        if candidate_index not in selected_indices:
-            continue
-        selected_messages.extend(candidate["messages"])
-
-    return selected_messages
-
-
 def _select_recent_prompt_window(
     messages: list[dict],
     max_tokens: int,
@@ -2550,15 +2311,10 @@ def _select_recent_prompt_window(
     canvas_documents: list[dict] | None = None,
     settings: dict | None = None,
 ) -> list[dict]:
-    strategy = get_context_selection_strategy(settings) if settings is not None else "classic"
-    if strategy in {"entropy", "entropy_rag_hybrid"}:
-        return _select_recent_prompt_window_entropy(
-            messages,
-            max_tokens,
-            min_user_messages=min_user_messages,
-            canvas_documents=canvas_documents,
-            settings=settings,
-        )
+    """Select recent messages for prompt window using simple recency-first (classic) strategy.
+
+    Always uses classic recency window — entropy and hybrid modes removed.
+    """
     return _select_recent_prompt_window_classic(
         messages,
         max_tokens,
@@ -2853,6 +2609,18 @@ def _build_budgeted_prompt_messages(
     )
     prompt_budget = max(2_000, get_prompt_max_input_tokens(settings) - get_prompt_response_token_reserve(settings))
     prompt_now = datetime.now(timezone.utc).astimezone()
+
+    # Build context node stats for Dynamic Status Line (per AI Memory doc Section 3.1)
+    from core.db import get_context_node_stats as _get_context_node_stats
+    _raw_stats = _get_context_node_stats(conversation_id) if conversation_id else {}
+    context_node_stats = {
+        "active_nodes": _raw_stats.get("active_nodes", 0),
+        "active_tokens": _raw_stats.get("active_tokens", 0),
+        "total_nodes": _raw_stats.get("total_nodes", 0),
+        "total_tokens": _raw_stats.get("total_tokens", 0),
+        "model_limit": get_prompt_max_input_tokens(settings),
+    } if _raw_stats else None
+
     stable_runtime_message = build_runtime_system_message(
         assistant_behavior,
         runtime_tool_names,
@@ -2881,6 +2649,7 @@ def _build_budgeted_prompt_messages(
         include_dynamic_context=False,
         runtime_tool_names=runtime_tool_names,
         now=prompt_now,
+        context_node_stats=context_node_stats,
     )
     base_runtime_messages = [stable_runtime_message]
     base_context_injection = build_runtime_context_injection(
@@ -2912,22 +2681,14 @@ def _build_budgeted_prompt_messages(
         now=prompt_now,
         previous_canvas_content_hash=previous_canvas_content_hash,
         include_dynamic_context=True,
+        context_node_stats=context_node_stats,
     )
     if base_context_injection:
         base_runtime_messages.append({"role": "system", "content": base_context_injection})
     base_system_tokens = _estimate_prompt_tokens(base_runtime_messages)
-    context_selection_strategy = get_context_selection_strategy(settings)
+    # RAG budget reserve — always 0 since entropy_rag_hybrid mode is removed.
+    # RAG context is included from remaining_context_budget after history.
     rag_budget_reserve = 0
-    if (
-        context_selection_strategy == "entropy_rag_hybrid"
-        and isinstance(retrieved_context, dict)
-        and retrieved_context.get("matches")
-    ):
-        rag_budget_reserve = min(
-            get_prompt_rag_max_tokens(settings),
-            PROMPT_RAG_AUTO_MAX_TOKENS,
-            max(0, int((prompt_budget - base_system_tokens) * (get_entropy_rag_budget_ratio(settings) / 100.0))),
-        )
     history_budget = max(1_000, prompt_budget - base_system_tokens - rag_budget_reserve)
 
     prefix_anchor_budget = 0
@@ -3122,8 +2883,7 @@ def _build_budgeted_prompt_messages(
     stats = {
         "prompt_budget": prompt_budget,
         "base_system_tokens": base_system_tokens,
-        "context_selection_strategy": context_selection_strategy,
-        "entropy_profile": get_entropy_profile(settings),
+        "context_selection_strategy": "classic",
         "rag_budget_reserve": rag_budget_reserve,
         "prefix_tokens": prefix_tokens,
         "cache_friendly_prefix": cache_friendly_prefix,
@@ -5081,6 +4841,13 @@ def register_chat_routes(app) -> None:
                         (model, conv_id),
                     )
 
+            # Apply Conversation Truncation Policy after user message is persisted
+            if conv_id:
+                try:
+                    apply_conversation_truncation(conv_id, settings)
+                except Exception:
+                    pass
+
             attachments = extract_message_attachments(latest_user_message.get("metadata"))
             if persisted_user_message_id is not None:
                 for attachment in attachments:
@@ -5341,6 +5108,12 @@ def register_chat_routes(app) -> None:
                     pending_clarification=pending_clarification,
                 )
                 last_persisted_response_length = len(full_response)
+                # Apply Conversation Truncation Policy after assistant message persists
+                if conv_id:
+                    try:
+                        apply_conversation_truncation(conv_id, settings)
+                    except Exception:
+                        pass
 
             def persist_model_invocations(assistant_message_id: int | None) -> None:
                 nonlocal model_invocations_persisted
@@ -5661,30 +5434,22 @@ def register_chat_routes(app) -> None:
                         pending_clarification=pending_clarification,
                     )
                     persist_model_invocations(cancelled_assistant_message_id)
+                    if conv_id:
+                        try:
+                            apply_conversation_truncation(conv_id, settings)
+                        except Exception:
+                            pass
                 yield (
                     json.dumps(
                         {
-                            "type": "tool_error",
-                            "step": max(1, int((tool_trace_entries[-1].get("step") if tool_trace_entries else 1) or 1)),
-                            "tool": "chat",
-                            "error": interruption_message,
+                            "type": "message_ids",
+                            "user_message_id": persisted_user_message_id,
+                            "assistant_message_id": cancelled_assistant_message_id,
                         },
                         ensure_ascii=False,
                     )
                     + "\n"
                 )
-                if cancelled_assistant_message_id is not None or persisted_user_message_id is not None:
-                    yield (
-                        json.dumps(
-                            {
-                                "type": "message_ids",
-                                "user_message_id": persisted_user_message_id,
-                                "assistant_message_id": cancelled_assistant_message_id,
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
                 if conv_id:
                     yield (
                         json.dumps(
@@ -5727,6 +5492,11 @@ def register_chat_routes(app) -> None:
                             pending_clarification=pending_clarification,
                         )
                         persist_model_invocations(cancelled_assistant_message_id)
+                        if conv_id:
+                            try:
+                                apply_conversation_truncation(conv_id, settings)
+                            except Exception:
+                                pass
                     yield (
                         json.dumps(
                             {
@@ -5821,6 +5591,11 @@ def register_chat_routes(app) -> None:
                             pending_clarification=pending_clarification,
                         )
                         persist_model_invocations(aborted_assistant_message_id)
+                        if conv_id:
+                            try:
+                                apply_conversation_truncation(conv_id, settings)
+                            except Exception:
+                                pass
                 try:
                     agent_stream.close()
                 except Exception:
@@ -5849,6 +5624,12 @@ def register_chat_routes(app) -> None:
                     pending_clarification=pending_clarification,
                 )
                 persist_model_invocations(persisted_assistant_message_id)
+
+                if conv_id:
+                    try:
+                        apply_conversation_truncation(conv_id, settings)
+                    except Exception:
+                        pass
 
                 if persisted_user_message_id is not None or persisted_assistant_message_id is not None:
                     yield (

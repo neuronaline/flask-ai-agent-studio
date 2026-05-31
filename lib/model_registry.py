@@ -1934,7 +1934,28 @@ def build_model_request_extra_body(
     return extra_body
 
 
-def apply_model_target_request_options(request_kwargs: dict[str, Any], target: dict[str, Any] | None) -> dict[str, Any]:
+def apply_model_target_request_options(
+    request_kwargs: dict[str, Any],
+    target: dict[str, Any] | None,
+    *,
+    prompt_cache_key: str | None = None,
+) -> dict[str, Any]:
+    """Apply model target request options, including prompt caching keys.
+
+    Per How to Build a Cache-Friendly AI Coding Agent doc:
+    - OpenRouter non-Anthropic: sends ``prompt_cache_key`` (snake_case) in extra_body
+    - DeepSeek direct: sends ``promptCacheKey`` (camelCase) in extra_body
+    - Anthropic via OpenRouter: uses ``cache_control`` markers in messages (already handled)
+
+    Args:
+        request_kwargs: Base request kwargs.
+        target: Model target dict from resolve_model_target().
+        prompt_cache_key: Optional session/conversation cache key. When set and
+            the provider supports session-based caching, it is added to extra_body.
+
+    Returns:
+        Updated request kwargs with caching options applied.
+    """
     merged_request_kwargs = dict(request_kwargs)
     record = target.get("record") if isinstance(target, dict) else None
     settings = target.get("settings") if isinstance(target, dict) else None
@@ -1952,6 +1973,28 @@ def apply_model_target_request_options(request_kwargs: dict[str, Any], target: d
         if not isinstance(existing_extra_body, dict):
             existing_extra_body = {}
         merged_request_kwargs["extra_body"] = _merge_nested_dicts(existing_extra_body, extra_body)
+
+    # Add session-based prompt cache key for providers that support it.
+    # This enables the server to associate requests from the same conversation
+    # and serve cached prefixes across consecutive LLM calls within the same turn.
+    if prompt_cache_key:
+        provider = str(record.get("provider") or "").strip() if isinstance(record, dict) else ""
+        existing_extra = merged_request_kwargs.get("extra_body")
+        if not isinstance(existing_extra, dict):
+            existing_extra = {}
+        updated_extra = dict(existing_extra)
+        if provider == OPENROUTER_PROVIDER:
+            # OpenRouter non-Anthropic: snake_case prompt_cache_key
+            updated_extra.setdefault("prompt_cache_key", prompt_cache_key)
+        elif provider == DEEPSEEK_PROVIDER:
+            # DeepSeek direct: camelCase promptCacheKey for session alignment
+            updated_extra.setdefault("promptCacheKey", prompt_cache_key)
+        else:
+            # Fallback for other OpenAI-compatible providers
+            updated_extra.setdefault("promptCacheKey", prompt_cache_key)
+        if updated_extra != existing_extra:
+            merged_request_kwargs["extra_body"] = updated_extra
+
     return merged_request_kwargs
 
 

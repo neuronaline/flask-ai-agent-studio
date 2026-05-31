@@ -30,7 +30,7 @@ Unlike basic prompt/response wrappers, this app persists deep conversation state
 
 ### Quick Start
 ```bash
-bash install.sh
+bash scripts/install.sh
 ```
 *The interactive installer configures your environment, selects hardware profiles (CPU/CUDA), and downloads required models (like BGE-M3 for RAG).*
 
@@ -130,16 +130,30 @@ The backend provides a comprehensive REST API.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET/POST`| `/chat` | Main streamed chat endpoint (NDJSON format). |
+| `POST` | `/chat` | Main streamed chat endpoint (NDJSON format). |
 | `POST` | `/api/chat-runs/<id>/cancel` | Gracefully halt streaming generation. |
+| `POST` | `/api/fix-text` | Fix/improve selected text via LLM. |
 | `GET` | `/api/conversations` | List all conversations. |
 | `GET` | `/api/conversations/<id>` | Load specific conversation history. |
+| `POST` | `/api/conversations` | Create a new conversation. |
+| `PATCH` | `/api/conversations/<id>` | Update conversation metadata. |
+| `DELETE` | `/api/conversations/<id>` | Delete a conversation. |
 | `POST` | `/api/conversations/<id>/summarize` | Force history summarization. |
-| `POST` | `/api/messages/<id>/prune` | Prune specific messages from history. |
-| `GET` | `/api/conversations/<id>/export` | Export chat (MD, JSON, DOCX, PDF). |
+| `GET,POST` | `/api/conversations/<id>/export` | Export chat (MD, JSON, DOCX, PDF). |
+| `PATCH` | `/api/messages/<id>` | Edit/rewrite a message. |
+| `DELETE` | `/api/messages/<id>` | Delete a message. |
+| `GET,POST` | `/login` | PIN-based authentication page. |
+| `POST` | `/logout` | End authenticated session. |
+| `GET` | `/api/settings` | Read all runtime settings. |
+| `PATCH` | `/api/settings` | Update runtime settings. |
+| `GET` | `/api/personas` | List all personas. |
+| `POST` | `/api/personas` | Create a new persona. |
 | `GET` | `/api/rag/search` | Search ChromaDB via REST. |
 | `POST` | `/api/rag/ingest` | Upload external documents to RAG. |
+| `GET` | `/api/rag/documents` | List ingested RAG documents. |
+| `DELETE` | `/api/rag/documents/<key>` | Delete a RAG document. |
 | `GET` | `/api/activity` | Paginated audit logs of LLM invocations. |
+| `POST` | `/api/activity/purge-expired` | Remove expired activity records. |
 
 ---
 

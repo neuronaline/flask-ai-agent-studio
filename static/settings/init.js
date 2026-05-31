@@ -11,6 +11,9 @@
   const loginLockoutSecondsEl = document.getElementById("login-lockout-seconds-input");
   const loginRememberSessionDaysEl = document.getElementById("login-remember-session-days-input");
   const conversationMemoryEnabledEl = document.getElementById("conversation-memory-enabled-toggle");
+  const conversationTruncationEnabledEl = document.getElementById("conversation-truncation-enabled-toggle");
+  const conversationMaxMessagesEl = document.getElementById("conversation-max-messages-input");
+  const conversationMaxMessageCharsEl = document.getElementById("conversation-max-message-chars-input");
   const ocrEnabledEl = document.getElementById("ocr-enabled-toggle");
   const ragEnabledEl = document.getElementById("rag-enabled-toggle");
   const youtubeTranscriptsEnabledEl = document.getElementById("youtube-transcripts-enabled-toggle");
@@ -45,6 +48,9 @@
     loginLockoutSecondsEl?.addEventListener("input", getMarkDirty());
     loginRememberSessionDaysEl?.addEventListener("input", getMarkDirty());
     conversationMemoryEnabledEl?.addEventListener("change", getMarkDirty());
+    conversationTruncationEnabledEl?.addEventListener("change", getMarkDirty());
+    conversationMaxMessagesEl?.addEventListener("input", getMarkDirty());
+    conversationMaxMessageCharsEl?.addEventListener("input", getMarkDirty());
     ocrEnabledEl?.addEventListener("change", getMarkDirty());
     ragEnabledEl?.addEventListener("change", getMarkDirty());
     youtubeTranscriptsEnabledEl?.addEventListener("change", getMarkDirty());
