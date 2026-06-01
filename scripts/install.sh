@@ -407,20 +407,21 @@ install_requirements() {
   install_requirements_file "${ROOT_DIR}/requirements.txt"
 
   if [[ "${RAG_ENABLED_VALUE}" == "true" ]]; then
-    install_requirements_file "${ROOT_DIR}/requirements-rag.txt"
+    info "Installing RAG dependencies (chromadb, sentence-transformers, torch)..."
+    "${VENV_DIR}/bin/python" -m pip install chromadb>=0.5 sentence-transformers>=3.0 torch>=2.3
   fi
 
   if [[ "${OCR_ENABLED_VALUE}" == "true" ]]; then
     if [[ "${OCR_PROVIDER_VALUE}" == "paddleocr" ]]; then
       install_paddle_runtime
-      install_requirements_file "${ROOT_DIR}/requirements-ocr-paddle.txt"
-    else
-      install_requirements_file "${ROOT_DIR}/requirements-ocr-easy.txt"
+      info "Installing PaddleOCR dependencies..."
+      "${VENV_DIR}/bin/python" -m pip install "numpy>=1.26" "paddlepaddle==3.2.2" "paddleocr==3.4.0"
     fi
   fi
 
   if [[ "${YOUTUBE_TRANSCRIPTS_VALUE}" == "true" ]]; then
-    install_requirements_file "${ROOT_DIR}/requirements-youtube-transcript.txt"
+    info "Installing YouTube transcript dependency..."
+    "${VENV_DIR}/bin/python" -m pip install "youtube-transcript-api>=0.6.2"
   fi
 
   mark_step_done "DEPS"

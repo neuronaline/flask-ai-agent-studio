@@ -1,5 +1,5 @@
 # Development dependencies
+# Install with:  pip install -r requirements-dev.txt
 -r requirements.txt
--r requirements-rag.txt
 ruff>=0.11,<0.12
 pytest>=9.0.2

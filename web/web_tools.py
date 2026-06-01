@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import hashlib
 import httpx
 import ipaddress
@@ -10,7 +8,6 @@ import logging
 import os
 import re
 import socket
-import threading
 import unicodedata
 from urllib.parse import urlparse
 from defusedxml import ElementTree as ET
@@ -20,120 +17,75 @@ from core.config import (
     SEARCH_MAX_RESULTS,
 )
 from core.db import cache_get, cache_set, get_search_tool_query_limit as load_search_tool_query_limit
-from serp import (
-    SerpClient,
-    SerpConfig,
-    GoogleNewsClient,
-    ScholarClient,
-    SearchResult,
-    NewsResult,
-    ScholarResult,
+
+
+# ---------------------------------------------------------------------------
+# SERP API configuration
+# ---------------------------------------------------------------------------
+SERP_API_BASE_URL = os.environ.get(
+    "SERP_API_BASE_URL", "https://serp.signalique.com"
+).rstrip("/")
+SERP_API_KEY = os.environ.get(
+    "SERP_API_KEY", "Vy1UtOKTi77P1QkWxchm9rqxR1kBflzz8hO_Z-Fqe54"
 )
-from serp.utils import require_virtual_display
 
 
-# ---------------------------------------------------------------------------
-# Monkey-patch serp-scraper: _setup_proxy_auth hiç çağrılmıyor, bu yüzden
-# Chrome proxy auth popup'ı gösteriyor. CDP auth handler'ı sayfaya gitmeden
-# önce kaydedecek şekilde _fetch_browser_impl ve _search_impl'i yamalıyoruz.
-# ---------------------------------------------------------------------------
-def _patch_serp_proxy_auth():
-    """Apply proxy auth monkey-patches to serp.parsers (safe to call multiple times)."""
-    if _patch_serp_proxy_auth._applied:
-        return
+def _serp_api_request(endpoint: str, payload: dict) -> dict:
+    """Make a request to the SERP REST API and return the parsed response.
+
+    Args:
+        endpoint: API path, e.g. "/api/v1/search"
+        payload: JSON body to send
+
+    Returns:
+        The ``data`` field from the API response on success.
+
+    Raises:
+        RuntimeError: On API error (non-200, or ``success`` is false).
+    """
+    url = f"{SERP_API_BASE_URL}{endpoint}"
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-Key": SERP_API_KEY,
+    }
+    LOGGER.debug("SERP API POST %s (payload keys=%s)", endpoint, list(payload.keys()))
     try:
-        import serp.parsers as _p
-        import markdownify as _md
+        with httpx.Client(timeout=60, follow_redirects=True) as client:
+            resp = client.post(url, json=payload, headers=headers)
+    except httpx.RequestError as exc:
+        LOGGER.error("SERP API connection error %s: %s", endpoint, exc)
+        raise RuntimeError(f"SERP API connection failed: {exc}") from exc
 
-        async def _patched_fetch(url, proxy=None, headless=False):
-            browser = await _p._create_browser(proxy, headless)
-            if browser is None:
-                raise _p.ParseError("Failed to start browser")
-            tab = None
-            try:
-                tab = await browser.get("about:blank")
-                if proxy:
-                    _p._setup_proxy_auth(tab, proxy)
-                await tab.get(url)
-                await tab.wait("load")
-                await asyncio.sleep(1)
-                if not tab.url or tab.url == "about:blank":
-                    raise _p.PageTimeoutError("Page did not load")
-                content = await tab.get_content()
-                if _p._check_captcha(tab.url, content):
-                    raise _p.CaptchaError("Captcha detected")
-                markdown = _md.markdownify(_p.clean_html(content), heading_style="ATX")
-                return _p.clean_markdown(markdown)
-            finally:
-                if tab:
-                    try:
-                        await tab.close()
-                    except Exception:
-                        pass
-                try:
-                    await _p._cleanup_browser(browser)
-                except Exception:
-                    pass
+    if resp.status_code == 401:
+        LOGGER.error("SERP API 401 Unauthorized — check SERP_API_KEY")
+        raise RuntimeError("SERP API authentication failed (401)")
+    if resp.status_code == 429:
+        LOGGER.warning("SERP API rate limited (429) on %s", endpoint)
+        raise RuntimeError("SERP API rate limit exceeded (429)")
 
-        async def _patched_search(query, page_num=1, proxy=None, headless=False, source="google"):
-            url = (
-                f"https://www.google.com/search?q={query}&start={(page_num-1)*10}&hl=en&gl=us&lr=lang_en"
-                if source == "google"
-                else f"https://www.bing.com/search?q={query}&first={(page_num-1)*10+1}&FORM=PERE"
-            )
-            captcha_msg = f"CAPTCHA detected on {source.capitalize()}"
-            browser = await _p._create_browser(proxy, headless)
-            if browser is None:
-                raise _p.ParseError("Failed to start browser")
-            tab = None
-            try:
-                tab = await browser.get("about:blank")
-                if proxy:
-                    _p._setup_proxy_auth(tab, proxy)
-                await tab.get(url)
-                for sel in ([
-                    "li.b_algo", "#b_results", "ol#b_results"
-                ] if source == "bing" else [
-                    "div.g", "div#rso > div", "div.MjjYud", "div[data-hveid]"
-                ]):
-                    try:
-                        await tab.select(sel, timeout=8)
-                        break
-                    except Exception:
-                        continue
-                if "sorry/app" in (tab.url or "").lower() or "/captcha/" in (tab.url or "").lower():
-                    raise _p.CaptchaError(captcha_msg)
-                if not tab.url or tab.url == "about:blank":
-                    raise _p.PageTimeoutError("Failed to navigate")
-                html = await tab.get_content()
-                if _p._check_captcha(tab.url, html):
-                    raise _p.CaptchaError(captcha_msg)
-                return await (
-                    _p._parse_bing_results(tab, page_num)
-                    if source == "bing"
-                    else _p._parse_google_results(tab, page_num)
-                )
-            finally:
-                if tab:
-                    try:
-                        await tab.close()
-                    except Exception:
-                        pass
-                try:
-                    await _p._cleanup_browser(browser)
-                except Exception:
-                    pass
+    try:
+        body = resp.json()
+    except json.JSONDecodeError as exc:
+        LOGGER.error("SERP API non-JSON response %s (status=%d): %.200s", endpoint, resp.status_code, resp.text)
+        raise RuntimeError(f"SERP API returned non-JSON (status {resp.status_code})") from exc
 
-        _p._fetch_browser_impl = _patched_fetch
-        _p._search_impl = _patched_search
-        _patch_serp_proxy_auth._applied = True
-        LOGGER.info("serp-scraper proxy auth patch applied inline")
-    except Exception as exc:
-        LOGGER.warning("serp proxy auth patch failed: %s", exc)
+    if not body.get("success"):
+        err = body.get("error") or {}
+        code = err.get("code", "UNKNOWN")
+        msg = err.get("message", resp.text[:200])
+        LOGGER.error("SERP API error on %s: [%s] %s", endpoint, code, msg)
+        raise RuntimeError(f"SERP API error [{code}]: {msg}")
+
+    data = body.get("data")
+    if data is None:
+        LOGGER.error("SERP API %s returned success but data is None", endpoint)
+        raise RuntimeError("SERP API returned empty data")
+    return data
 
 
-_NEWS_TIMELIMIT = {"d": "d", "w": "w", "m": "m", "y": "y"}
-_NEWS_REGION = {"tr": "tr-tr", "en": "us-en"}
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 _GN_LANG = {
     "tr": {"hl": "tr", "gl": "TR", "ceid": "TR:tr"},
     "en": {"hl": "en", "gl": "US", "ceid": "US:en"},
@@ -141,13 +93,11 @@ _GN_LANG = {
 _THIN_CONTENT_MIN_CHARS = 80
 _ZERO_WIDTH_TRANSLATION = dict.fromkeys(map(ord, "\u200b\u200c\u200d\ufeff"), None)
 LOGGER = logging.getLogger(__name__)
-_ASYNC_LOOP_LOCAL = threading.local()
-
-# Apply serp-scraper proxy auth fix (LOGGER must be defined first)
-_patch_serp_proxy_auth._applied = False
-_patch_serp_proxy_auth()
 
 
+# ---------------------------------------------------------------------------
+# URL / SSRF safety
+# ---------------------------------------------------------------------------
 def _is_safe_url(url: str) -> tuple[bool, str]:
     """Validate URL for safety: scheme, hostname, and private-IP checks."""
     try:
@@ -185,36 +135,9 @@ def _validate_resolved_ip_address(address: str) -> None:
         raise socket.gaierror(f"Resolution blocked for non-public address: {address}")
 
 
-@contextlib.contextmanager
-def _guarded_dns_resolution(enabled: bool = True):
-    """Context manager that wraps socket.getaddrinfo to validate resolved IPs.
-
-    When enabled, temporarily replaces socket.getaddrinfo with a version that
-    calls _validate_resolved_ip_address on every resolved IP address, blocking
-    DNS rebinding / SSRF attacks that resolve public hostnames to private IPs.
-    Restores the original socket.getaddrinfo on exit, even on exception.
-    """
-    if not enabled:
-        yield
-        return
-
-    original_getaddrinfo = socket.getaddrinfo
-
-    def guarded_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-        results = original_getaddrinfo(host, port, family, type, proto, flags)
-        for result in results:
-            addr = result[4][0] if len(result) >= 5 else None
-            if addr:
-                _validate_resolved_ip_address(addr)
-        return results
-
-    try:
-        socket.getaddrinfo = guarded_getaddrinfo
-        yield
-    finally:
-        socket.getaddrinfo = original_getaddrinfo
-
-
+# ---------------------------------------------------------------------------
+# Text cleaning helpers
+# ---------------------------------------------------------------------------
 def _clean_extracted_text(text: str) -> str:
     cleaned = unicodedata.normalize("NFKC", str(text or ""))
     cleaned = cleaned.translate(_ZERO_WIDTH_TRANSLATION)
@@ -272,60 +195,20 @@ def _iter_limited_search_queries(queries: list):
         yield raw_query
 
 
-def _run_async(coro):
-    """Run an async coroutine in a synchronous context.
-
-    Uses a thread-local event loop to avoid race conditions when
-    multiple threads call search/fetch tools concurrently.
-    """
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Already inside an async context; create a temporary loop
-            temp_loop = asyncio.new_event_loop()
-            try:
-                return temp_loop.run_until_complete(coro)
-            finally:
-                temp_loop.close()
-    except RuntimeError:
-        pass
-    # Use thread-local loop singleton
-    loop = getattr(_ASYNC_LOOP_LOCAL, "loop", None)
-    if loop is None or loop.is_closed():
-        loop = asyncio.new_event_loop()
-        _ASYNC_LOOP_LOCAL.loop = loop
-    return loop.run_until_complete(coro)
+def _extract_title_from_markdown(markdown: str) -> str:
+    """Extract the first H1 heading from Markdown content."""
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# ") and not stripped.startswith("## "):
+            return stripped[2:].strip()
+    return ""
 
 
-def _get_serp_config():
-    """Get SerpClient configuration from environment/proxy settings.
-
-    Respects SERP_HEADLESS, SERP_LOG_LEVEL, and SERP_DEBUG env vars.
-    Uses headless=False by default with virtual display check when not
-    headless. To override, set SERP_HEADLESS=true in .env.
-    """
-    headless = os.environ.get("SERP_HEADLESS", "false").strip().lower() in {"1", "true", "yes", "on"}
-    log_level = (os.environ.get("SERP_LOG_LEVEL") or "WARNING").strip().upper()
-    serp_debug = os.environ.get("SERP_DEBUG", "false").strip().lower() in {"1", "true", "yes", "on"}
-
-    if serp_debug and log_level == "WARNING":
-        log_level = "DEBUG"
-
-    if not headless:
-        # Non-headless mode requires a virtual display (xvfb)
-        require_virtual_display()
-
-    config = SerpConfig(
-        headless=headless,
-        cache_enabled=True,
-        log_level=log_level,
-    )
-    LOGGER.info("SerpConfig created: headless=%s, log_level=%s, debug=%s", headless, log_level, serp_debug)
-    return config
-
-
+# ---------------------------------------------------------------------------
+# Web search
+# ---------------------------------------------------------------------------
 def search_web_tool(queries: list) -> list:
-    """Web search using serp-scraper SerpClient.
+    """Web search using the SERP REST API.
 
     Args:
         queries: List of search query strings
@@ -339,9 +222,7 @@ def search_web_tool(queries: list) -> list:
 
     results = []
     seen_urls = set()
-
-    config = _get_serp_config()
-    LOGGER.info("search_web_tool: starting %d query(s), headless=%s", len(queries), config.headless)
+    LOGGER.info("search_web_tool: starting %d query(s)", len(queries))
 
     for raw_query in _iter_limited_search_queries(queries):
         query = str(raw_query).strip()
@@ -358,24 +239,14 @@ def search_web_tool(queries: list) -> list:
                     results.append(row)
             continue
 
-        LOGGER.debug("search_web_tool: cache MISS for query='%.60s' — calling SerpClient.search()", query)
+        LOGGER.debug("search_web_tool: cache MISS for query='%.60s' — calling SERP API", query)
         try:
-            async def _do_search():
-                async with SerpClient(config) as client:
-                    return await client.search(query)
-
-            search_results = _run_async(_do_search())
-            LOGGER.info("search_web_tool: query='%.60s' returned %d raw results", query, len(search_results))
+            api_data = _serp_api_request("/api/v1/search", {"query": query, "page": 1})
+            LOGGER.info("search_web_tool: query='%.60s' returned %d raw results", query, len(api_data))
 
             normalized = []
-            for r in search_results[:SEARCH_MAX_RESULTS]:
-                if isinstance(r, SearchResult):
-                    normalized.append({
-                        "title": r.title,
-                        "url": r.url,
-                        "snippet": r.description,
-                    })
-                elif isinstance(r, dict):
+            for r in api_data[:SEARCH_MAX_RESULTS]:
+                if isinstance(r, dict):
                     normalized.append({
                         "title": r.get("title", ""),
                         "url": r.get("url", ""),
@@ -383,9 +254,9 @@ def search_web_tool(queries: list) -> list:
                     })
                 else:
                     normalized.append({
-                        "title": r.title,
-                        "url": r.url,
-                        "snippet": r.description,
+                        "title": getattr(r, "title", ""),
+                        "url": getattr(r, "url", ""),
+                        "snippet": getattr(r, "description", ""),
                     })
 
             cache_set(cache_key, normalized)
@@ -402,6 +273,9 @@ def search_web_tool(queries: list) -> list:
     return results
 
 
+# ---------------------------------------------------------------------------
+# News search
+# ---------------------------------------------------------------------------
 def _search_news_internal(
     queries: list,
     lang: str,
@@ -414,10 +288,9 @@ def _search_news_internal(
         LOGGER.debug("_search_news_internal[%s]: empty query list, returning []", cache_prefix)
         return []
 
-    time_range = _NEWS_TIMELIMIT.get(when) if when else None
     results = []
     seen_urls = set()
-    LOGGER.info("_search_news_internal[%s]: starting %d query(s), lang=%s, when=%s", cache_prefix, len(queries), lang, when)
+    LOGGER.info("_search_news_internal[%s]: starting %d query(s), lang=%s", cache_prefix, len(queries), lang)
 
     for raw_query in _iter_limited_search_queries(queries):
         query = str(raw_query).strip()
@@ -434,41 +307,39 @@ def _search_news_internal(
                     results.append(row)
             continue
 
-        LOGGER.debug("_search_news_internal[%s]: cache MISS for query='%.60s' — calling GoogleNewsClient.get_news()", cache_prefix, query)
+        LOGGER.debug("_search_news_internal[%s]: cache MISS for query='%.60s' — calling SERP API", cache_prefix, query)
         try:
-            async def _do_news():
-                async with GoogleNewsClient(
-                    language=lang,
-                    country=country,
-                    time_range=time_range,
-                ) as client:
-                    return await client.get_news(query, max_results=SEARCH_MAX_RESULTS)
+            # Build payload; include when for forward-compatibility (SERP API
+            # silently ignores unknown fields; the old serp-scraper client
+            # supported timelimit via DuckDuckGo's API, but the hosted SERP API
+            # (Google News RSS) currently does not support time filtering).
+            payload: dict[str, object] = {
+                "query": query,
+                "max_results": SEARCH_MAX_RESULTS,
+                "language": lang,
+                "country": country,
+            }
+            if when:
+                payload["time_range"] = when
 
-            news_results = _run_async(_do_news())
-            LOGGER.info("_search_news_internal[%s]: query='%.60s' returned %d raw news results", cache_prefix, query, len(news_results))
+            api_data = _serp_api_request("/api/v1/news", payload)
+            LOGGER.info("_search_news_internal[%s]: query='%.60s' returned %d raw news results", cache_prefix, query, len(api_data))
 
             normalized = []
-            for r in news_results:
-                if isinstance(r, NewsResult):
-                    normalized.append({
-                        "title": r.title,
-                        "link": r.original_url or r.url,
-                        "time": r.published.isoformat() if r.published else "",
-                        "source": r.source,
-                    })
-                elif isinstance(r, dict):
+            for r in api_data:
+                if isinstance(r, dict):
                     normalized.append({
                         "title": r.get("title", ""),
-                        "link": r.get("original_url") or r.get("url", ""),
+                        "link": r.get("url", ""),
                         "time": r.get("published", ""),
                         "source": r.get("source", ""),
                     })
                 else:
                     normalized.append({
-                        "title": r.title,
-                        "link": r.original_url or r.url,
-                        "time": r.published.isoformat() if r.published else "",
-                        "source": r.source,
+                        "title": getattr(r, "title", ""),
+                        "link": getattr(r, "url", ""),
+                        "time": getattr(r, "published", ""),
+                        "source": getattr(r, "source", ""),
                     })
 
             cache_set(cache_key, normalized)
@@ -486,28 +357,28 @@ def _search_news_internal(
 
 
 def search_news_tool(queries: list, lang: str = "tr", when: str | None = None) -> list:
-    """News search using serp-scraper GoogleNewsClient (DuckDuckGo region codes).
+    """News search using the SERP REST API.
 
     Args:
         queries: List of search query strings
         lang: Language code (tr, en, etc.)
-        when: Time range (d, w, m, y)
+        when: Time range (d, w, m, y) — passed to API but may be ignored
 
     Returns:
         List of dicts with keys: title, link, time, source (or error, query on failure)
     """
-    region = _NEWS_REGION.get(lang, "tr-tr")
-    country = region.upper().replace("-", "_")
+    geo = _GN_LANG.get(lang, _GN_LANG["tr"])
+    country = geo["gl"]  # "TR", "US" — proper ISO country code for SERP API
     return _search_news_internal(queries, lang, when, country, cache_prefix="news")
 
 
 def search_news_google_tool(queries: list, lang: str = "tr", when: str | None = None) -> list:
-    """News search using Google News RSS via serp-scraper (Google hl/gl/ceid params).
+    """News search using the SERP REST API (Google hl/gl/ceid params).
 
     Args:
         queries: List of search query strings
         lang: Language code (tr, en, etc.)
-        when: Time range (d, w, m, y)
+        when: Time range (d, w, m, y) — passed to API but may be ignored
 
     Returns:
         List of dicts with keys: title, link, time, source (or error, query on failure)
@@ -516,6 +387,10 @@ def search_news_google_tool(queries: list, lang: str = "tr", when: str | None = 
     country = geo["gl"]
     return _search_news_internal(queries, lang, when, country, cache_prefix="news_google")
 
+
+# ---------------------------------------------------------------------------
+# Scholar search
+# ---------------------------------------------------------------------------
 def search_scholar_tool(
     queries: list,
     lang: str = "en",
@@ -523,7 +398,7 @@ def search_scholar_tool(
     year_to: int | None = None,
     sort_by: str = "relevance",
 ) -> list:
-    """Academic paper search using serp-scraper ScholarClient.
+    """Academic paper search using the SERP REST API.
 
     Args:
         queries: List of search query strings
@@ -543,7 +418,8 @@ def search_scholar_tool(
     scholar_language = lang if lang in ("en", "tr") else "en"
     results = []
     seen_urls = set()
-    LOGGER.info("search_scholar_tool: starting %d query(s), lang=%s, year_from=%s, year_to=%s, sort=%s", len(queries), lang, year_from, year_to, sort_by)
+    LOGGER.info("search_scholar_tool: starting %d query(s), lang=%s, year_from=%s, year_to=%s, sort=%s",
+                len(queries), lang, year_from, year_to, sort_by)
 
     for raw_query in _iter_limited_search_queries(queries):
         query = str(raw_query).strip()
@@ -562,51 +438,43 @@ def search_scholar_tool(
                     results.append(row)
             continue
 
-        LOGGER.debug("search_scholar_tool: cache MISS for query='%.60s' — calling ScholarClient.search_scholar()", query)
+        LOGGER.debug("search_scholar_tool: cache MISS for query='%.60s' — calling SERP API", query)
         try:
-            async def _do_scholar():
-                async with ScholarClient(
-                    language=scholar_language,
-                    year_from=year_from,
-                    year_to=year_to,
-                    sort_by=sort_by,
-                ) as client:
-                    return await client.search_scholar(query, max_results=SEARCH_MAX_RESULTS)
-
-            scholar_results = _run_async(_do_scholar())
-            LOGGER.info("search_scholar_tool: query='%.60s' returned %d raw scholar results", query, len(scholar_results))
+            api_data = _serp_api_request("/api/v1/scholar", {
+                "query": query,
+                "max_results": SEARCH_MAX_RESULTS,
+                "language": scholar_language,
+                "year_from": year_from,
+                "year_to": year_to,
+                "sort_by": sort_by,
+            })
+            LOGGER.info("search_scholar_tool: query='%.60s' returned %d raw scholar results", query, len(api_data))
 
             normalized = []
-            for r in scholar_results:
-                if isinstance(r, ScholarResult):
-                    normalized.append({
-                        "title": r.title,
-                        "url": r.url,
-                        "snippet": r.snippet,
-                        "authors": ", ".join(r.authors) if r.authors else "",
-                        "year": r.publication_year,
-                        "venue": r.venue,
-                        "citations": r.citation_count,
-                    })
-                elif isinstance(r, dict):
+            for r in api_data:
+                if isinstance(r, dict):
+                    authors = r.get("authors")
+                    if isinstance(authors, list):
+                        authors = ", ".join(authors)
                     normalized.append({
                         "title": r.get("title", ""),
                         "url": r.get("url", ""),
                         "snippet": r.get("snippet", ""),
-                        "authors": r.get("authors", ""),
+                        "authors": authors or "",
                         "year": r.get("publication_year"),
                         "venue": r.get("venue", ""),
                         "citations": r.get("citation_count", 0),
                     })
                 else:
+                    a = getattr(r, "authors", None) or []
                     normalized.append({
-                        "title": r.title,
-                        "url": r.url,
-                        "snippet": r.snippet,
-                        "authors": ", ".join(r.authors) if r.authors else "",
-                        "year": r.publication_year,
-                        "venue": r.venue,
-                        "citations": r.citation_count,
+                        "title": getattr(r, "title", ""),
+                        "url": getattr(r, "url", ""),
+                        "snippet": getattr(r, "snippet", ""),
+                        "authors": ", ".join(a) if isinstance(a, list) else str(a or ""),
+                        "year": getattr(r, "publication_year", None),
+                        "venue": getattr(r, "venue", ""),
+                        "citations": getattr(r, "citation_count", 0),
                     })
 
             cache_set(cache_key, normalized)
@@ -623,21 +491,15 @@ def search_scholar_tool(
     return results
 
 
-def _extract_title_from_markdown(markdown: str) -> str:
-    """Extract the first H1 heading from Markdown content."""
-    for line in markdown.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("# ") and not stripped.startswith("## "):
-            return stripped[2:].strip()
-    return ""
-
-
+# ---------------------------------------------------------------------------
+# URL fetch helpers
+# ---------------------------------------------------------------------------
 def _fetch_url_direct(url: str, timeout: int = 30) -> tuple[bytes | None, str, Exception | None]:
     """Detect content type and optionally fetch content via httpx.
 
     Uses HEAD first for content-type detection. Only downloads the full
     body for non-HTML types (PDF, JSON, XML, plain text) so that HTML
-    pages are fetched only once (serp-scraper handles them separately).
+    pages are fetched once by the SERP API.
 
     Returns (raw_bytes, content_type, error).
       raw_bytes=None  on connection/HTTP failure
@@ -652,9 +514,9 @@ def _fetch_url_direct(url: str, timeout: int = 30) -> tuple[bytes | None, str, E
             content_type = (head_resp.headers.get("content-type") or "").lower()
             LOGGER.debug("_fetch_url_direct: HEAD %s -> %s (status=%d)", url, content_type, head_resp.status_code)
 
-            # HTML and unknown types → return content-type only; serp-scraper does the fetch
+            # HTML and unknown types → return content-type only; SERP API performs the fetch
             if "html" in content_type or not content_type:
-                LOGGER.debug("_fetch_url_direct: HTML/unknown type -> serp-scraper will handle fetch for %s", url)
+                LOGGER.debug("_fetch_url_direct: HTML/unknown type -> SERP API will handle fetch for %s", url)
                 return b"", content_type, None
 
             # Non-HTML → download full body
@@ -670,6 +532,9 @@ def _fetch_url_direct(url: str, timeout: int = 30) -> tuple[bytes | None, str, E
         return None, "", exc
 
 
+# ---------------------------------------------------------------------------
+# URL fetch (main entry point)
+# ---------------------------------------------------------------------------
 def fetch_url_tool(
     url: str,
     *,
@@ -677,7 +542,8 @@ def fetch_url_tool(
     content_max_chars: int = CONTENT_MAX_CHARS,
     cache_namespace: str = "fetch",
 ) -> dict:
-    """Fetch URL content using serp-scraper (with type detection).
+    """Fetch URL content using the SERP REST API (with local type detection for non-HTML).
+
     Args:
         url: Target URL to fetch
         compress: When true (default), auto-compress by keeping head/middle/tail
@@ -816,23 +682,21 @@ def fetch_url_tool(
             cache_set(cache_key, result)
             return result
 
-    # --- Default: use serp-scraper SerpClient for HTML pages ---
-    LOGGER.info("fetch_url_tool: delegating to SerpClient.fetch() for HTML: %s", url)
-    config = _get_serp_config()
-    config.cache_enabled = False
-
+    # --- Default: use SERP API for HTML pages ---
+    LOGGER.info("fetch_url_tool: delegating to SERP API for HTML: %s", url)
     try:
-        async def _do_fetch():
-            async with SerpClient(config) as client:
-                return await client.fetch(url, compress=compress)
+        api_data = _serp_api_request("/api/v1/fetch", {
+            "url": url,
+            "prefer_browser": False,
+            "compress": compress,
+        })
 
-        content = _run_async(_do_fetch())
-
+        content = api_data.get("content", "")
         if not content:
-            LOGGER.warning("fetch_url_tool: SerpClient returned empty content for %s", url)
+            LOGGER.warning("fetch_url_tool: SERP API returned empty content for %s", url)
             return {"url": url, "error": "Empty content returned", "content": ""}
 
-        LOGGER.info("fetch_url_tool: SerpClient fetch succeeded for %s (%d chars)", url, len(content))
+        LOGGER.info("fetch_url_tool: SERP API fetch succeeded for %s (%d chars)", url, len(content))
         title = _extract_title_from_markdown(content)
         result = {
             "url": url,
@@ -848,10 +712,13 @@ def fetch_url_tool(
         return result
 
     except Exception as exc:
-        LOGGER.error("fetch_url_tool: SerpClient.fetch FAILED for %s: %s", url, exc)
+        LOGGER.error("fetch_url_tool: SERP API fetch FAILED for %s: %s", url, exc)
         return {"url": url, "error": str(exc), "content": ""}
 
 
+# ---------------------------------------------------------------------------
+# Proxy stubs (proxy management delegated to SERP API)
+# ---------------------------------------------------------------------------
 def get_proxy_candidates_for_operation(
     operation: str,
     *,
@@ -860,7 +727,7 @@ def get_proxy_candidates_for_operation(
 ) -> list[str | None]:
     """Return proxy candidates for a given operation.
 
-    Proxy management is delegated to serp-scraper (via environment variables).
+    Proxy management is delegated to the SERP API (server-side).
     This function always returns [None] (direct connection) and exists only for
     backward compatibility with callers that still iterate proxy candidates.
     """
@@ -868,10 +735,10 @@ def get_proxy_candidates_for_operation(
 
 
 def load_proxies() -> list[str]:
-    """Load proxies from file (stub — serp-scraper handles proxy configuration)."""
+    """Load proxies from file (stub — proxy management is handled by SERP API)."""
     return []
 
 
 def get_proxy_candidates(include_direct_fallback: bool = False) -> list[str | None]:
-    """Return proxy candidates (stub — serp-scraper handles proxy configuration)."""
+    """Return proxy candidates (stub — proxy management is handled by SERP API)."""
     return [None]

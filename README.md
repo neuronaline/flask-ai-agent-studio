@@ -15,8 +15,8 @@ Unlike basic prompt/response wrappers, this app persists deep conversation state
 *   **Multimodal & Attachments:** Document extraction (PDF, DOCX, CSV, Code) and Image processing via local OCR (PaddleOCR), Vision LLMs, or direct multimodal injection.
 *   **Canvas & Workspace:** An interactive UI panel for the model to create, edit, search, and manage markdown or code documents. Includes project-mode for local file sandbox execution.
 *   **Advanced Chat Controls:** Slash commands (`/check`), message editing/branching, automatic summarization, and entropy-aware context selection.
+*   **SERP API Backend:** Web search, news, scholar, and URL fetching are now powered by a hosted [SERP REST API](https://github.com/neuronaline/serp-scraper) — no local Chrome browser or proxy configuration required. The API is free for anyone to use.
 *   **Observability:** Detailed usage panels, provider vs. local token estimates, caching diagnostics, and rotating agent trace logs.
-
 ## 📸 Screenshots
 
 * [Tool execution](screenshots/Screenshot_2026-04-09_18-04-09.png)
@@ -41,11 +41,10 @@ bash scripts/install.sh
    source .venv/bin/activate
    ```
 2. **Dependencies:**
-   ```bash
-   pip install -r requirements.txt           # Core
-   pip install -r requirements-rag.txt       # Optional: RAG features
-   pip install -r requirements-ocr-paddle.txt # Optional: Local OCR
-   ```
+   \`\`\`bash
+   pip install -r requirements.txt
+   \`\`\`
+   *Optional features (RAG, OCR, YouTube): edit requirements.txt and uncomment the relevant section, then re-run pip install.*
 3. **Configuration:**
    Copy `.env.example` to `.env` and add at least one API key:
    ```env
@@ -97,30 +96,28 @@ Most app settings can be dynamically changed via the `/settings` UI and are stor
 ## 🛠️ Available Tools (Agent Capabilities)
 
 The LLM is equipped with a vast array of tools. Schemas are strictly validated before execution.
-
-**Memory & Personalization**
+### Memory & Personalization
 *   `save_to_conversation_memory` / `delete_conversation_memory_entry`: Manage short-term chat facts.
 *   `save_to_persona_memory` / `delete_persona_memory_entry`: Manage cross-chat persona facts.
 *   `append_scratchpad` / `replace_scratchpad` / `read_scratchpad`: Manage long-term durable user facts.
 *   `ask_clarifying_question`: Halts execution to ask the user a structured question.
 *   `image_explain`: Queries follow-up details about uploaded images.
 
-**Knowledge Base & Search**
+### Knowledge Base & Search
 *   `search_knowledge_base`: Semantic search over chats, docs, and tool results (RAG).
-*   `search_tool_memory`: Search successfully cached past web results.
-*   `search_web` / `search_news_ddgs` / `search_news_google`: Web discovery.
+*   `search_web` / `search_news` / `search_news_google` / `search_scholar`: Web discovery and academic research — powered by the [SERP API](https://github.com/neuronaline/serp-scraper) (hosted backend, no local Chrome needed).
 *   `fetch_url` / `fetch_url_summarized`: Fetch, clean, and summarize web pages.
-*   `fetch_url` with `compress`: Built-in content compression (head/middle/tail) for long pages.
+*   `scroll_fetched_content` / `grep_fetched_content`: Browse and search previously fetched page content.
 
-**Canvas & Document Editing**
-*   `create_canvas_document` / `delete_canvas_document` / `clear_canvas`: File management.
-*   `rewrite_canvas_document` / `batch_canvas_edits`: Edit file contents.
-*   `search_canvas_document` / `scroll_canvas_document` / `expand_canvas_document`: Read operations.
+### Canvas & Document Editing
+*   `create_canvas_document` / `delete_canvas_document` / `clear_canvas_viewport`: Document lifecycle.
+*   `batch_canvas_edits` / `batch_read_canvas_documents`: Batch content and read operations.
+*   `search_canvas_document`: Full-text search within canvas documents.
 *   `set_canvas_viewport`: Pin a line range to the context window.
-*   `validate_canvas_document` / `preview_canvas_changes`: Non-mutating checks.
 
-**Workspace (Local Sandbox)**
-*   `write_project_tree`, `create_directory`, `create_file`, `update_file`, `read_file`, `search_files`: Full filesystem operations isolated to the workspace root.
+### Context & Memory Management
+*   `list_context_summary` / `purge_context_nodes` / `merge_context_nodes` / `compress_context_node`: Inspect and manage the AI's context memory.
+*   `expand_truncated_tool_result`: Request the full text of a truncated tool output.
 
 ---
 

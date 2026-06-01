@@ -1,4 +1,0 @@
-# Optional PaddleOCR stack (CPU-friendly default)
-numpy>=1.26
-paddlepaddle==3.2.2
-paddleocr==3.4.0

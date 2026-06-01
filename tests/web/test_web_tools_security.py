@@ -61,14 +61,13 @@ def test_fetch_url_tool_rejects_localhost_without_network_access():
     assert result["error"] == "Local addresses are prohibited"
 
 
-
 def test_search_web_tool_uses_cached_results_without_hitting_provider(monkeypatch):
     cached_rows = [{"title": "Cached", "url": "https://example.com", "snippet": "From cache"}]
     monkeypatch.setattr(web_tools, "cache_get", lambda key: cached_rows)
     monkeypatch.setattr(web_tools, "cache_set", lambda *args, **kwargs: None)
 
-    # _run_async should NOT be called when cache hits (search returns early)
-    monkeypatch.setattr(web_tools, "_run_async", Mock(side_effect=AssertionError("_run_async should not be called on cache hit")))
+    # _serp_api_request should NOT be called when cache hits (search returns early)
+    monkeypatch.setattr(web_tools, "_serp_api_request", Mock(side_effect=AssertionError("_serp_api_request should not be called on cache hit")))
 
     results = web_tools.search_web_tool(["cached query"])
 
@@ -95,8 +94,8 @@ def test_search_web_tool_deduplicates_urls_across_cached_queries(monkeypatch):
     monkeypatch.setattr(web_tools, "cache_get", fake_cache_get)
     monkeypatch.setattr(web_tools, "cache_set", lambda *args, **kwargs: None)
 
-    # _run_async should NOT be called when cache hits (search returns early for each query)
-    monkeypatch.setattr(web_tools, "_run_async", Mock(side_effect=AssertionError("_run_async should not run")))
+    # _serp_api_request should NOT be called when cache hits (search returns early for each query)
+    monkeypatch.setattr(web_tools, "_serp_api_request", Mock(side_effect=AssertionError("_serp_api_request should not run")))
 
     results = web_tools.search_web_tool(["first", "second"])
 
