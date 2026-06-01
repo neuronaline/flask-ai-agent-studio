@@ -188,7 +188,6 @@ TOOL_PERMISSION_LABELS = {
     "clear_canvas_viewport": "Clear canvas viewport",
     "delete_canvas_document": "Delete canvas document",
     "expand_truncated_tool_result": "Expand truncated tool result",
-    "delete_tool_result": "Delete tool result",
 }
 
 TOOL_PERMISSION_DESCRIPTIONS = {
@@ -212,9 +211,7 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "clear_canvas_viewport": "Remove the pinned viewport so the full canvas is shown.",
     "delete_canvas_document": "Permanently remove a canvas document from the conversation.",
     "expand_truncated_tool_result": "Retrieve the full uncropped content of a previously executed tool call that was truncated in the conversation history.",
-    "delete_tool_result": "Delete a tool result from the current context and store a preview in tool memory for future reference.",
 }
-
 
 def validate_tool_catalog_sync() -> tuple[list[str], list[str], list[str]]:
     """Check synchronization between TOOL_SPEC_BY_NAME and UI tool catalog.

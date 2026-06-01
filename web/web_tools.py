@@ -7,13 +7,13 @@ import httpx
 import ipaddress
 import json
 import logging
+import os
 import re
 import socket
 import threading
 import unicodedata
 from urllib.parse import urlparse
 from defusedxml import ElementTree as ET
-
 from core.config import (
     CONTENT_MAX_CHARS,
     DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
@@ -32,6 +32,106 @@ from serp import (
 from serp.utils import require_virtual_display
 
 
+# ---------------------------------------------------------------------------
+# Monkey-patch serp-scraper: _setup_proxy_auth hiç çağrılmıyor, bu yüzden
+# Chrome proxy auth popup'ı gösteriyor. CDP auth handler'ı sayfaya gitmeden
+# önce kaydedecek şekilde _fetch_browser_impl ve _search_impl'i yamalıyoruz.
+# ---------------------------------------------------------------------------
+def _patch_serp_proxy_auth():
+    """Apply proxy auth monkey-patches to serp.parsers (safe to call multiple times)."""
+    if _patch_serp_proxy_auth._applied:
+        return
+    try:
+        import serp.parsers as _p
+        import markdownify as _md
+
+        async def _patched_fetch(url, proxy=None, headless=False):
+            browser = await _p._create_browser(proxy, headless)
+            if browser is None:
+                raise _p.ParseError("Failed to start browser")
+            tab = None
+            try:
+                tab = await browser.get("about:blank")
+                if proxy:
+                    _p._setup_proxy_auth(tab, proxy)
+                await tab.get(url)
+                await tab.wait("load")
+                await asyncio.sleep(1)
+                if not tab.url or tab.url == "about:blank":
+                    raise _p.PageTimeoutError("Page did not load")
+                content = await tab.get_content()
+                if _p._check_captcha(tab.url, content):
+                    raise _p.CaptchaError("Captcha detected")
+                markdown = _md.markdownify(_p.clean_html(content), heading_style="ATX")
+                return _p.clean_markdown(markdown)
+            finally:
+                if tab:
+                    try:
+                        await tab.close()
+                    except Exception:
+                        pass
+                try:
+                    await _p._cleanup_browser(browser)
+                except Exception:
+                    pass
+
+        async def _patched_search(query, page_num=1, proxy=None, headless=False, source="google"):
+            url = (
+                f"https://www.google.com/search?q={query}&start={(page_num-1)*10}&hl=en&gl=us&lr=lang_en"
+                if source == "google"
+                else f"https://www.bing.com/search?q={query}&first={(page_num-1)*10+1}&FORM=PERE"
+            )
+            captcha_msg = f"CAPTCHA detected on {source.capitalize()}"
+            browser = await _p._create_browser(proxy, headless)
+            if browser is None:
+                raise _p.ParseError("Failed to start browser")
+            tab = None
+            try:
+                tab = await browser.get("about:blank")
+                if proxy:
+                    _p._setup_proxy_auth(tab, proxy)
+                await tab.get(url)
+                for sel in ([
+                    "li.b_algo", "#b_results", "ol#b_results"
+                ] if source == "bing" else [
+                    "div.g", "div#rso > div", "div.MjjYud", "div[data-hveid]"
+                ]):
+                    try:
+                        await tab.select(sel, timeout=8)
+                        break
+                    except Exception:
+                        continue
+                if "sorry/app" in (tab.url or "").lower() or "/captcha/" in (tab.url or "").lower():
+                    raise _p.CaptchaError(captcha_msg)
+                if not tab.url or tab.url == "about:blank":
+                    raise _p.PageTimeoutError("Failed to navigate")
+                html = await tab.get_content()
+                if _p._check_captcha(tab.url, html):
+                    raise _p.CaptchaError(captcha_msg)
+                return await (
+                    _p._parse_bing_results(tab, page_num)
+                    if source == "bing"
+                    else _p._parse_google_results(tab, page_num)
+                )
+            finally:
+                if tab:
+                    try:
+                        await tab.close()
+                    except Exception:
+                        pass
+                try:
+                    await _p._cleanup_browser(browser)
+                except Exception:
+                    pass
+
+        _p._fetch_browser_impl = _patched_fetch
+        _p._search_impl = _patched_search
+        _patch_serp_proxy_auth._applied = True
+        LOGGER.info("serp-scraper proxy auth patch applied inline")
+    except Exception as exc:
+        LOGGER.warning("serp proxy auth patch failed: %s", exc)
+
+
 _NEWS_TIMELIMIT = {"d": "d", "w": "w", "m": "m", "y": "y"}
 _NEWS_REGION = {"tr": "tr-tr", "en": "us-en"}
 _GN_LANG = {
@@ -42,6 +142,10 @@ _THIN_CONTENT_MIN_CHARS = 80
 _ZERO_WIDTH_TRANSLATION = dict.fromkeys(map(ord, "\u200b\u200c\u200d\ufeff"), None)
 LOGGER = logging.getLogger(__name__)
 _ASYNC_LOOP_LOCAL = threading.local()
+
+# Apply serp-scraper proxy auth fix (LOGGER must be defined first)
+_patch_serp_proxy_auth._applied = False
+_patch_serp_proxy_auth()
 
 
 def _is_safe_url(url: str) -> tuple[bool, str]:
@@ -196,15 +300,27 @@ def _run_async(coro):
 def _get_serp_config():
     """Get SerpClient configuration from environment/proxy settings.
 
-    Uses headless=False (visible browser) by default with virtual display
-    check. To override, set SERP_HEADLESS=true in environment.
+    Respects SERP_HEADLESS, SERP_LOG_LEVEL, and SERP_DEBUG env vars.
+    Uses headless=False by default with virtual display check when not
+    headless. To override, set SERP_HEADLESS=true in .env.
     """
-    require_virtual_display()
+    headless = os.environ.get("SERP_HEADLESS", "false").strip().lower() in {"1", "true", "yes", "on"}
+    log_level = (os.environ.get("SERP_LOG_LEVEL") or "WARNING").strip().upper()
+    serp_debug = os.environ.get("SERP_DEBUG", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+    if serp_debug and log_level == "WARNING":
+        log_level = "DEBUG"
+
+    if not headless:
+        # Non-headless mode requires a virtual display (xvfb)
+        require_virtual_display()
+
     config = SerpConfig(
-        headless=False,
+        headless=headless,
         cache_enabled=True,
-        log_level="WARNING",
+        log_level=log_level,
     )
+    LOGGER.info("SerpConfig created: headless=%s, log_level=%s, debug=%s", headless, log_level, serp_debug)
     return config
 
 
@@ -218,12 +334,14 @@ def search_web_tool(queries: list) -> list:
         List of dicts with keys: title, url, snippet (or error, query on failure)
     """
     if not queries:
+        LOGGER.debug("search_web_tool: empty query list, returning []")
         return []
 
     results = []
     seen_urls = set()
 
     config = _get_serp_config()
+    LOGGER.info("search_web_tool: starting %d query(s), headless=%s", len(queries), config.headless)
 
     for raw_query in _iter_limited_search_queries(queries):
         query = str(raw_query).strip()
@@ -233,18 +351,21 @@ def search_web_tool(queries: list) -> list:
         cache_key = f"search:{hashlib.md5(query.lower().encode()).hexdigest()}"
         cached = cache_get(cache_key)
         if cached is not None:
+            LOGGER.debug("search_web_tool: cache HIT for query='%.60s' (%d cached results)", query, len(cached))
             for row in cached:
                 if row.get("url") not in seen_urls:
                     seen_urls.add(row["url"])
                     results.append(row)
             continue
 
+        LOGGER.debug("search_web_tool: cache MISS for query='%.60s' — calling SerpClient.search()", query)
         try:
             async def _do_search():
                 async with SerpClient(config) as client:
                     return await client.search(query)
 
             search_results = _run_async(_do_search())
+            LOGGER.info("search_web_tool: query='%.60s' returned %d raw results", query, len(search_results))
 
             normalized = []
             for r in search_results[:SEARCH_MAX_RESULTS]:
@@ -268,13 +389,16 @@ def search_web_tool(queries: list) -> list:
                     })
 
             cache_set(cache_key, normalized)
+            LOGGER.debug("search_web_tool: cached %d normalized results for query='%.60s'", len(normalized), query)
             for row in normalized:
                 if row["url"] not in seen_urls:
                     seen_urls.add(row["url"])
                     results.append(row)
         except Exception as exc:
+            LOGGER.error("search_web_tool: query='%.60s' FAILED: %s", query, exc)
             results.append({"error": str(exc), "query": query})
 
+    LOGGER.info("search_web_tool: total %d unique results for %d query(s)", len(results), len(queries))
     return results
 
 
@@ -287,11 +411,13 @@ def _search_news_internal(
 ) -> list:
     """Internal news search helper shared by search_news_tool and search_news_google_tool."""
     if not queries:
+        LOGGER.debug("_search_news_internal[%s]: empty query list, returning []", cache_prefix)
         return []
 
     time_range = _NEWS_TIMELIMIT.get(when) if when else None
     results = []
     seen_urls = set()
+    LOGGER.info("_search_news_internal[%s]: starting %d query(s), lang=%s, when=%s", cache_prefix, len(queries), lang, when)
 
     for raw_query in _iter_limited_search_queries(queries):
         query = str(raw_query).strip()
@@ -301,12 +427,14 @@ def _search_news_internal(
         cache_key = f"{cache_prefix}:{hashlib.md5((query + lang + (when or '')).lower().encode()).hexdigest()}"
         cached = cache_get(cache_key)
         if cached is not None:
+            LOGGER.debug("_search_news_internal[%s]: cache HIT for query='%.60s'", cache_prefix, query)
             for row in cached:
                 if row.get("link") not in seen_urls:
                     seen_urls.add(row["link"])
                     results.append(row)
             continue
 
+        LOGGER.debug("_search_news_internal[%s]: cache MISS for query='%.60s' — calling GoogleNewsClient.get_news()", cache_prefix, query)
         try:
             async def _do_news():
                 async with GoogleNewsClient(
@@ -317,6 +445,7 @@ def _search_news_internal(
                     return await client.get_news(query, max_results=SEARCH_MAX_RESULTS)
 
             news_results = _run_async(_do_news())
+            LOGGER.info("_search_news_internal[%s]: query='%.60s' returned %d raw news results", cache_prefix, query, len(news_results))
 
             normalized = []
             for r in news_results:
@@ -343,13 +472,16 @@ def _search_news_internal(
                     })
 
             cache_set(cache_key, normalized)
+            LOGGER.debug("_search_news_internal[%s]: cached %d normalized results for query='%.60s'", cache_prefix, len(normalized), query)
             for row in normalized:
                 if row.get("link") not in seen_urls:
                     seen_urls.add(row["link"])
                     results.append(row)
         except Exception as exc:
+            LOGGER.error("_search_news_internal[%s]: query='%.60s' FAILED: %s", cache_prefix, query, exc)
             results.append({"error": str(exc), "query": query})
 
+    LOGGER.info("_search_news_internal[%s]: total %d unique results for %d query(s)", cache_prefix, len(results), len(queries))
     return results
 
 
@@ -384,7 +516,6 @@ def search_news_google_tool(queries: list, lang: str = "tr", when: str | None = 
     country = geo["gl"]
     return _search_news_internal(queries, lang, when, country, cache_prefix="news_google")
 
-
 def search_scholar_tool(
     queries: list,
     lang: str = "en",
@@ -406,11 +537,13 @@ def search_scholar_tool(
         (or error, query on failure)
     """
     if not queries:
+        LOGGER.debug("search_scholar_tool: empty query list, returning []")
         return []
 
     scholar_language = lang if lang in ("en", "tr") else "en"
     results = []
     seen_urls = set()
+    LOGGER.info("search_scholar_tool: starting %d query(s), lang=%s, year_from=%s, year_to=%s, sort=%s", len(queries), lang, year_from, year_to, sort_by)
 
     for raw_query in _iter_limited_search_queries(queries):
         query = str(raw_query).strip()
@@ -422,12 +555,14 @@ def search_scholar_tool(
         )
         cached = cache_get(cache_key)
         if cached is not None:
+            LOGGER.debug("search_scholar_tool: cache HIT for query='%.60s' (%d results)", query, len(cached))
             for row in cached:
                 if row.get("url") not in seen_urls:
                     seen_urls.add(row["url"])
                     results.append(row)
             continue
 
+        LOGGER.debug("search_scholar_tool: cache MISS for query='%.60s' — calling ScholarClient.search_scholar()", query)
         try:
             async def _do_scholar():
                 async with ScholarClient(
@@ -439,6 +574,7 @@ def search_scholar_tool(
                     return await client.search_scholar(query, max_results=SEARCH_MAX_RESULTS)
 
             scholar_results = _run_async(_do_scholar())
+            LOGGER.info("search_scholar_tool: query='%.60s' returned %d raw scholar results", query, len(scholar_results))
 
             normalized = []
             for r in scholar_results:
@@ -474,13 +610,16 @@ def search_scholar_tool(
                     })
 
             cache_set(cache_key, normalized)
+            LOGGER.debug("search_scholar_tool: cached %d normalized results for query='%.60s'", len(normalized), query)
             for row in normalized:
                 if row["url"] not in seen_urls:
                     seen_urls.add(row["url"])
                     results.append(row)
         except Exception as exc:
+            LOGGER.error("search_scholar_tool: query='%.60s' FAILED: %s", query, exc)
             results.append({"error": str(exc), "query": query})
 
+    LOGGER.info("search_scholar_tool: total %d unique results for %d query(s)", len(results), len(queries))
     return results
 
 
@@ -507,21 +646,27 @@ def _fetch_url_direct(url: str, timeout: int = 30) -> tuple[bytes | None, str, E
     """
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            LOGGER.debug("_fetch_url_direct: HEAD %s", url)
             head_resp = client.head(url)
             head_resp.raise_for_status()
             content_type = (head_resp.headers.get("content-type") or "").lower()
+            LOGGER.debug("_fetch_url_direct: HEAD %s -> %s (status=%d)", url, content_type, head_resp.status_code)
 
             # HTML and unknown types → return content-type only; serp-scraper does the fetch
             if "html" in content_type or not content_type:
+                LOGGER.debug("_fetch_url_direct: HTML/unknown type -> serp-scraper will handle fetch for %s", url)
                 return b"", content_type, None
 
             # Non-HTML → download full body
+            LOGGER.debug("_fetch_url_direct: GET %s (non-HTML: %s)", url, content_type)
             get_resp = client.get(url)
             get_resp.raise_for_status()
             raw = get_resp.content
             content_type = (get_resp.headers.get("content-type") or "").lower()
+            LOGGER.info("_fetch_url_direct: fetched %d bytes from %s (type=%s)", len(raw), url, content_type)
             return raw, content_type, None
     except Exception as exc:
+        LOGGER.error("_fetch_url_direct: FAILED for %s: %s", url, exc)
         return None, "", exc
 
 
@@ -533,7 +678,6 @@ def fetch_url_tool(
     cache_namespace: str = "fetch",
 ) -> dict:
     """Fetch URL content using serp-scraper (with type detection).
-
     Args:
         url: Target URL to fetch
         compress: When true (default), auto-compress by keeping head/middle/tail
@@ -546,6 +690,7 @@ def fetch_url_tool(
     """
     safe, reason = _is_safe_url(url)
     if not safe:
+        LOGGER.warning("fetch_url_tool: BLOCKED unsafe URL %s: %s", url, reason)
         return {"url": url, "error": reason, "content": ""}
 
     normalized_content_max_chars = _normalize_fetch_content_max_chars(content_max_chars)
@@ -559,13 +704,17 @@ def fetch_url_tool(
 
     cached = cache_get(cache_key)
     if cached is not None:
+        LOGGER.debug("fetch_url_tool: cache HIT for %s", url)
         return cached
+
+    LOGGER.info("fetch_url_tool: fetching %s (compress=%s, max_chars=%d)", url, compress, normalized_content_max_chars)
 
     # --- Content-type detection (and download for non-HTML) ---
     raw_bytes, content_type, head_error = _fetch_url_direct(url)
 
     # PDF handling
     if (raw_bytes is not None and "pdf" in (content_type or "")) or (url.lower().endswith(".pdf") and head_error is None):
+        LOGGER.info("fetch_url_tool: detected PDF for %s", url)
         try:
             from services.doc_service import _extract_text_from_pdf
 
@@ -580,6 +729,7 @@ def fetch_url_tool(
                 total_pages = None
 
             text = _clean_extracted_text(_extract_text_from_pdf(raw_bytes))
+            LOGGER.info("fetch_url_tool: extracted %d chars from PDF %s (pages=%s)", len(text), url, total_pages)
             result = {
                 "url": url,
                 "title": f"PDF: {url.rstrip('/').split('/')[-1]}",
@@ -595,17 +745,20 @@ def fetch_url_tool(
             cache_set(cache_key, result)
             return result
         except Exception as exc:
+            LOGGER.error("fetch_url_tool: PDF extraction FAILED for %s: %s", url, exc)
             return {"url": url, "error": f"Could not read PDF: {exc}", "content": ""}
 
     # JSON / XML / plain text handling
     if raw_bytes is not None and head_error is None:
         ct = content_type or ""
         if "json" in ct:
+            LOGGER.info("fetch_url_tool: detected JSON for %s", url)
             try:
                 parsed = json.loads(raw_bytes)
                 text = json.dumps(parsed, ensure_ascii=False, indent=2)
             except Exception:
                 text = raw_bytes.decode("utf-8", errors="replace")
+            LOGGER.debug("fetch_url_tool: JSON %s -> %d chars", url, len(text))
             title = _extract_title_from_markdown(text) or ""
             result = {
                 "url": url,
@@ -620,6 +773,7 @@ def fetch_url_tool(
             return result
 
         if "xml" in ct and "html" not in ct:
+            LOGGER.info("fetch_url_tool: detected XML for %s", url)
             try:
                 decoded = raw_bytes.decode("utf-8", errors="replace")
                 root = ET.fromstring(decoded)
@@ -633,6 +787,7 @@ def fetch_url_tool(
                 text = "\n".join(text_fragments) or decoded
             except Exception:
                 text = raw_bytes.decode("utf-8", errors="replace")
+            LOGGER.debug("fetch_url_tool: XML %s -> %d chars", url, len(text))
             result = {
                 "url": url,
                 "title": _extract_title_from_markdown(text) or "",
@@ -646,7 +801,9 @@ def fetch_url_tool(
             return result
 
         if "text/plain" in ct:
+            LOGGER.info("fetch_url_tool: detected plain text for %s", url)
             text = raw_bytes.decode("utf-8", errors="replace")
+            LOGGER.debug("fetch_url_tool: text %s -> %d chars", url, len(text))
             result = {
                 "url": url,
                 "title": _extract_title_from_markdown(text) or "",
@@ -660,6 +817,7 @@ def fetch_url_tool(
             return result
 
     # --- Default: use serp-scraper SerpClient for HTML pages ---
+    LOGGER.info("fetch_url_tool: delegating to SerpClient.fetch() for HTML: %s", url)
     config = _get_serp_config()
     config.cache_enabled = False
 
@@ -671,8 +829,10 @@ def fetch_url_tool(
         content = _run_async(_do_fetch())
 
         if not content:
+            LOGGER.warning("fetch_url_tool: SerpClient returned empty content for %s", url)
             return {"url": url, "error": "Empty content returned", "content": ""}
 
+        LOGGER.info("fetch_url_tool: SerpClient fetch succeeded for %s (%d chars)", url, len(content))
         title = _extract_title_from_markdown(content)
         result = {
             "url": url,
@@ -688,6 +848,7 @@ def fetch_url_tool(
         return result
 
     except Exception as exc:
+        LOGGER.error("fetch_url_tool: SerpClient.fetch FAILED for %s: %s", url, exc)
         return {"url": url, "error": str(exc), "content": ""}
 
 

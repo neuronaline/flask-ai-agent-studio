@@ -802,87 +802,137 @@
 
         <section class="settings-tab-panel" data-settings-panel="tools" aria-labelledby="tools-tab">
           <div class="settings-page-grid settings-page-grid--two">
+
+            <!-- ── LEFT COLUMN ──────────────────────────────────────────── -->
+
+            <!-- Card: Tool Budgets -->
             <div class="settings-page-section-card">
               <div class="settings-page-section-card__header">
                 <div>
-                  <span class="settings-section-kicker">Tool execution</span>
-                  <h3>Tool budgets</h3>
+                  <span class="settings-section-kicker">Execution limits</span>
+                  <h3>Tool &amp; fetch budgets</h3>
                 </div>
-                <p>Limits for tool execution, fetched content, and sub-agent work.</p>
+                <p>Step counts, parallelism, and content-fetch thresholds.</p>
               </div>
-              <section class="settings-subsection settings-subsection--full">
-                <div class="settings-subsection__header">
-                  <span class="settings-subsection__eyebrow">Execution limits</span>
-                  <h4 class="settings-subsection__title">Tool &amp; agent budgets</h4>
-                </div>
 
-                <div class="settings-context-toggles">
-                  <label class="settings-context-toggle">
-                    <input type="checkbox" id="context-filter-parent" checked />
-                    <span>Parent (main) model?</span>
-                  </label>
-                  <label class="settings-context-toggle">
-                    <input type="checkbox" id="context-filter-sub-agent" checked />
-                    <span>Sub agent?</span>
-                  </label>
-                </div>
-
-                <div class="settings-budget-grid">
-                  <div class="settings-budget-item" data-context="parent">
+              <div class="settings-form-cluster settings-form-cluster--tool-budgets">
+                <div class="settings-form-cluster__column">
+                  <div class="settings-form-cluster__group-label">Parent model</div>
+                  <div class="settings-budget-item">
                     <label class="settings-label" for="max-steps-input">Tool step limit (1–50)</label>
                     <input type="number" class="settings-number" id="max-steps-input" min="1" max="50" value="5" />
-                    <span class="settings-context-badge">Parent model</span>
                   </div>
-                  <div class="settings-budget-item" data-context="sub-agent">
-                    <label class="settings-label" for="sub-agent-max-steps-input">Max steps (1–12)</label>
-                    <input type="number" class="settings-number" id="sub-agent-max-steps-input" min="1" max="12" value="6" />
-                    <span class="settings-context-badge settings-context-badge--sub">Sub-agent</span>
-                  </div>
-                  <div class="settings-budget-item" data-context="parent">
+                  <div class="settings-budget-item">
                     <label class="settings-label" for="max-parallel-tools-input">Max parallel tools (1–12)</label>
                     <input type="number" class="settings-number" id="max-parallel-tools-input" min="1" max="12" value="4" />
-                    <span class="settings-context-badge">Parent model</span>
                   </div>
-                  <div class="settings-budget-item" data-context="parent">
+                  <div class="settings-budget-item">
                     <label class="settings-label" for="search-tool-query-limit-input">Search queries per call (1–20)</label>
                     <input type="number" class="settings-number" id="search-tool-query-limit-input" min="1" max="20" value="5" />
-                    <span class="settings-context-badge">Parent model</span>
-                  </div>
-                  <div class="settings-budget-item" data-context="sub-agent">
-                    <label class="settings-label" for="fetch-threshold-input">Fetch content clip threshold (400–20000 tokens)</label>
-                    <input type="number" class="settings-number" id="fetch-threshold-input" min="400" max="20000" value="3500" />
-                    <span class="settings-context-badge settings-context-badge--sub">Sub-agent</span>
-                  </div>
-                  <div class="settings-budget-item" data-context="sub-agent">
-                    <label class="settings-label" for="fetch-aggressiveness-input">Fetch clip aggressiveness (0–100)</label>
-                    <input type="number" class="settings-number" id="fetch-aggressiveness-input" min="0" max="100" value="50" />
-                    <span class="settings-context-badge settings-context-badge--sub">Sub-agent</span>
                   </div>
                 </div>
-                <p class="settings-copy">When fetching a page, content above the threshold is clipped (middle removed, start/end kept). Higher aggressiveness removes more content.</p>
-              </section>
+                <div class="settings-form-cluster__column">
+                  <div class="settings-form-cluster__group-label">Sub-agent fetch</div>
+                  <div class="settings-budget-item">
+                    <label class="settings-label" for="fetch-threshold-input">Clip threshold (400–20000&nbsp;tokens)</label>
+                    <input type="number" class="settings-number" id="fetch-threshold-input" min="400" max="20000" value="3500" />
+                  </div>
+                  <div class="settings-budget-item">
+                    <label class="settings-label" for="fetch-aggressiveness-input">Clip aggressiveness (0–100)</label>
+                    <input type="number" class="settings-number" id="fetch-aggressiveness-input" min="0" max="100" value="50" />
+                  </div>
+                  <p class="settings-copy">Content above the threshold is clipped (middle removed, start/end kept). Higher aggressiveness removes more.</p>
+                </div>
+              </div>
+
               <details class="settings-collapsible settings-collapsible--soft">
                 <summary class="settings-collapsible__summary">
                   <div>
                     <span class="settings-subsection__eyebrow">Advanced</span>
-                    <strong>Summarized fetch budgets</strong>
+                    <strong>Summarized fetch &amp; HTML conversion</strong>
                   </div>
-                  <span class="settings-collapsible__meta">Fine-tune fetch summary limits</span>
+                  <span class="settings-collapsible__meta">Token budgets + converter mode</span>
                 </summary>
                 <div class="settings-collapsible__content">
-                  <label class="settings-label" for="fetch-summarize-max-input-chars-input">Source max chars (4000–100000)</label>
-                  <input type="number" class="settings-number" id="fetch-summarize-max-input-chars-input" min="4000" max="100000" value="80000" />
-                  <label class="settings-label" for="fetch-summarize-max-output-tokens-input">Output token budget (200–4000)</label>
-                  <input type="number" class="settings-number" id="fetch-summarize-max-output-tokens-input" min="200" max="4000" value="2400" />
+                  <div class="settings-inline-grid settings-inline-grid--two">
+                    <div>
+                      <label class="settings-mini-label" for="fetch-summarize-max-input-chars-input">Source max chars (4000–100000)</label>
+                      <input type="number" class="settings-number" id="fetch-summarize-max-input-chars-input" min="4000" max="100000" value="80000" />
+                    </div>
+                    <div>
+                      <label class="settings-mini-label" for="fetch-summarize-max-output-tokens-input">Output token budget (200–4000)</label>
+                      <input type="number" class="settings-number" id="fetch-summarize-max-output-tokens-input" min="200" max="4000" value="2400" />
+                    </div>
+                  </div>
+                  <div>
+                    <label class="settings-mini-label" for="fetch-html-converter-select">HTML converter mode</label>
+                    <select id="fetch-html-converter-select" class="settings-select">
+                      <option value="hybrid">Hybrid (default)</option>
+                      <option value="internal">Internal only</option>
+                      <option value="external">External only</option>
+                    </select>
+                    <p class="settings-copy">'hybrid' tries internal converter first and falls back to browser for JS-heavy pages. 'internal' uses only BS4. 'external' always uses browser automation.</p>
+                  </div>
                 </div>
               </details>
             </div>
 
+            <!-- Card: Sub-agent -->
+            <div class="settings-page-section-card">
+              <div class="settings-page-section-card__header">
+                <div>
+                  <span class="settings-section-kicker">Sub-agent</span>
+                  <h3>Runtime limits &amp; automation</h3>
+                </div>
+                <p>Timeout, retries, parallelism, and canvas behaviour for the sub-agent.</p>
+              </div>
+
+              <div class="settings-form-cluster settings-form-cluster--sub-agent">
+                <div class="settings-form-cluster__column">
+                  <div class="settings-form-cluster__group-label">Execution</div>
+                  <div class="settings-budget-item">
+                    <label class="settings-label" for="sub-agent-timeout-seconds-input">Timeout (5–900s)</label>
+                    <input type="number" class="settings-number" id="sub-agent-timeout-seconds-input" min="5" max="900" value="240" />
+                  </div>
+                  <div class="settings-budget-item">
+                    <label class="settings-label" for="sub-agent-retry-attempts-input">Retry attempts (0–5)</label>
+                    <input type="number" class="settings-number" id="sub-agent-retry-attempts-input" min="0" max="5" value="2" />
+                  </div>
+                  <div class="settings-budget-item">
+                    <label class="settings-label" for="sub-agent-retry-delay-seconds-input">Retry delay (0–60s)</label>
+                    <input type="number" class="settings-number" id="sub-agent-retry-delay-seconds-input" min="0" max="60" value="5" />
+                  </div>
+                  <div class="settings-budget-item">
+                    <label class="settings-label" for="sub-agent-max-steps-input">Max steps (1–12)</label>
+                    <input type="number" class="settings-number" id="sub-agent-max-steps-input" min="1" max="12" value="6" />
+                  </div>
+                  <div class="settings-budget-item">
+                    <label class="settings-label" for="sub-agent-max-parallel-tools-input">Max parallel tools (1–12)</label>
+                    <input type="number" class="settings-number" id="sub-agent-max-parallel-tools-input" min="1" max="12" value="2" />
+                  </div>
+                </div>
+                <div class="settings-form-cluster__column">
+                  <div class="settings-form-cluster__group-label">Canvas automation</div>
+                  <label class="tool-toggle">
+                    <input type="checkbox" id="sub-agent-canvas-auto-save-toggle" />
+                    <span>Auto-save documents on completion</span>
+                  </label>
+                  <label class="tool-toggle">
+                    <input type="checkbox" id="sub-agent-canvas-auto-open-toggle" />
+                    <span>Auto-open created documents</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── RIGHT COLUMN ─────────────────────────────────────────── -->
+
+            <!-- Card: Web Cache -->
             <div class="settings-page-section-card">
               <div class="settings-page-section-card__header">
                 <div>
                   <span class="settings-section-kicker">Cache</span>
-                  <h3>Cache settings</h3>
+                  <h3>Content retention</h3>
                 </div>
                 <p>TTL for fetched web content and OpenRouter prompt caching.</p>
               </div>
@@ -890,7 +940,7 @@
                 <section class="settings-subsection">
                   <div class="settings-subsection__header">
                     <span class="settings-subsection__eyebrow">Web cache</span>
-                    <h4 class="settings-subsection__title">Content retention</h4>
+                    <h4 class="settings-subsection__title">Page content TTL</h4>
                   </div>
                   <label class="settings-label" for="web-cache-ttl-hours-input">Cache TTL in hours (0–168)</label>
                   <input type="number" class="settings-number" id="web-cache-ttl-hours-input" min="0" max="168" value="24" />
@@ -899,7 +949,7 @@
                 <div class="settings-toggle-panel">
                   <label class="tool-toggle"><input type="checkbox" id="openrouter-prompt-cache-enabled-toggle" /> <span>Enable OpenRouter prompt caching</span></label>
                   <div id="openrouter-anthropic-cache-ttl-row" class="settings-cache-ttl-row">
-                    <span class="settings-label">Anthropic cache TTL</span>
+                    <span class="settings-mini-label">Anthropic cache TTL</span>
                     <label class="settings-cache-ttl-option"><input type="radio" name="openrouter-anthropic-cache-ttl" value="5m" /> 5 min <span class="settings-copy settings-copy--inline">(1.25× write cost)</span></label>
                     <label class="settings-cache-ttl-option"><input type="radio" name="openrouter-anthropic-cache-ttl" value="1h" /> 1 hour <span class="settings-copy settings-copy--inline">(2× write cost)</span></label>
                   </div>
@@ -907,11 +957,12 @@
               </div>
             </div>
 
+            <!-- Card: Provider & Auth -->
             <div class="settings-page-section-card">
               <div class="settings-page-section-card__header">
                 <div>
                   <span class="settings-section-kicker">Provider &amp; auth</span>
-                  <h3>Runtime identity and session policy <span class="settings-restart-badge">Restart</span></h3>
+                  <h3>Runtime identity &amp; session policy <span class="settings-restart-badge">Restart</span></h3>
                 </div>
                 <p>OpenRouter HTTP headers and login session policy.</p>
               </div>
@@ -953,45 +1004,9 @@
                 </section>
               </div>
             </div>
-
-            <div class="settings-page-section-card">
-              <div class="settings-page-section-card__header">
-                <div>
-                  <span class="settings-section-kicker">Sub-agent</span>
-                  <h3>Runtime limits</h3>
-                </div>
-                <p>Timeout, retries, and parallelism for the sub-agent.</p>
-              </div>
-              <div class="settings-subsection-grid settings-subsection-grid--two">
-                <section class="settings-subsection settings-subsection--full">
-                  <div class="settings-subsection__header">
-                    <span class="settings-subsection__eyebrow">Runtime knobs</span>
-                    <h4 class="settings-subsection__title">Timeout, retries, parallelism</h4>
-                  </div>
-                  <div class="settings-page-grid settings-page-grid--two settings-page-grid--compact">
-                    <div>
-                      <label class="settings-label" for="sub-agent-timeout-seconds-input">Timeout (5–900s)</label>
-                      <input type="number" class="settings-number" id="sub-agent-timeout-seconds-input" min="5" max="900" value="240" />
-                    </div>
-                    <div>
-                      <label class="settings-label" for="sub-agent-retry-attempts-input">Retry attempts (0–5)</label>
-                      <input type="number" class="settings-number" id="sub-agent-retry-attempts-input" min="0" max="5" value="2" />
-                    </div>
-                    <div>
-                      <label class="settings-label" for="sub-agent-retry-delay-seconds-input">Retry delay (0–60s)</label>
-                      <input type="number" class="settings-number" id="sub-agent-retry-delay-seconds-input" min="0" max="60" value="5" />
-                    </div>
-                    <div>
-                      <label class="settings-label" for="sub-agent-max-parallel-tools-input">Max parallel tools (1–12)</label>
-                      <input type="number" class="settings-number" id="sub-agent-max-parallel-tools-input" min="1" max="12" value="2" />
-                    </div>
-                  </div>
-                </section>
-
-              </div>
-            </div>
           </div>
 
+          <!-- ── FULL-WIDTH SECTION ─────────────────────────────────────── -->
           <div class="settings-page-section-card">
             <div class="settings-page-section-card__header">
               <div>
@@ -1005,10 +1020,10 @@
               <section class="tool-permission-section">
                 <div class="tool-permission-section__header">
                   <div>
-                    <div class="settings-label">{{ section.title }}</div>
+                    <span class="settings-label">{{ section.title }}</span>
                     <p class="settings-copy">{{ section.description }}</p>
                   </div>
-                  <p class="settings-copy">{{ section.note }}</p>
+                  <span class="tool-permission-section__note">{{ section.note }}</span>
                 </div>
                 <div class="tool-toggles tool-toggles--page tool-permission-section__tools">
                   {% for tool in section.tools %}
@@ -1034,6 +1049,7 @@
               {% endfor %}
             </div>
           </div>
+        </section>
         </section>
 
         <section class="settings-tab-panel" data-settings-panel="knowledge" aria-labelledby="knowledge-tab">

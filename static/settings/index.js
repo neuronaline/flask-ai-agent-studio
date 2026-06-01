@@ -194,6 +194,7 @@
     // Tool / RAG — delegate to modules
     window.__settingsTools?.applySelectedTools?.(appSettings.active_tools || []);
     window.__settingsTools?.applySelectedSubAgentTools?.(appSettings.sub_agent_allowed_tool_names || []);
+    window.__settingsTools?.syncSubAgentCanvasSettings?.(appSettings);
 
     if (ragSensitivityEl) ragSensitivityEl.value = appSettings.rag_sensitivity || "normal";
     if (ragContextSizeEl) ragContextSizeEl.value = appSettings.rag_context_size || "medium";
@@ -353,6 +354,8 @@
     appSettings.fetch_raw_max_text_chars = data.fetch_raw_max_text_chars ?? 24000;
     appSettings.fetch_summary_max_chars = data.fetch_summary_max_chars ?? 8000;
     appSettings.sub_agent_allowed_tool_names = Array.isArray(data.sub_agent_allowed_tool_names) ? data.sub_agent_allowed_tool_names : [];
+    appSettings.sub_agent_canvas_auto_save = Boolean(data.sub_agent_canvas_auto_save ?? true);
+    appSettings.sub_agent_canvas_auto_open = Boolean(data.sub_agent_canvas_auto_open ?? false);
     appSettings.active_tools = Array.isArray(data.active_tools) ? data.active_tools : [];
     appSettings.rag_auto_inject = Boolean(data.rag_auto_inject);
     appSettings.rag_sensitivity = data.rag_sensitivity || "normal";
@@ -463,6 +466,7 @@
       // Tools / RAG
       active_tools: window.__settingsTools?.getSelectedTools?.() ?? [],
       sub_agent_allowed_tool_names: window.__settingsTools?.getSelectedSubAgentTools?.() ?? [],
+      ...(window.__settingsTools?.readSubAgentCanvasPayload?.() ?? {}),
       rag_auto_inject: isRagEnabledDraft && ragAutoInjectEnabledEl ? ragAutoInjectEnabledEl.checked : false,
       rag_sensitivity: ragSensitivityEl?.value || "normal",
       rag_context_size: ragContextSizeEl?.value || "medium",
@@ -546,33 +550,6 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════════════════
-  // Context filter toggles (parent model / sub-agent visibility)
-  // ═══════════════════════════════════════════════════════════════════════════════
-  function initContextFilters() {
-    const parentFilter = document.getElementById("context-filter-parent");
-    const subAgentFilter = document.getElementById("context-filter-sub-agent");
-    if (!parentFilter || !subAgentFilter) return;
-
-    function applyContextFilters() {
-      const showParent = parentFilter.checked;
-      const showSubAgent = subAgentFilter.checked;
-
-      document.querySelectorAll(".settings-budget-item").forEach((item) => {
-        const context = item.getAttribute("data-context");
-        if (context === "parent") {
-          item.style.display = showParent ? "" : "none";
-        } else if (context === "sub-agent") {
-          item.style.display = showSubAgent ? "" : "none";
-        }
-      });
-    }
-
-    parentFilter.addEventListener("change", applyContextFilters);
-    subAgentFilter.addEventListener("change", applyContextFilters);
-    applyContextFilters();
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════════
   // Public API (for backward compatibility and init.js)
   // ═══════════════════════════════════════════════════════════════════════════════
   window.saveAllSettings = saveAllSettings;
@@ -593,9 +570,6 @@
 
     // Apply feature availability constraints
     applyFeatureAvailability();
-
-    // Init context filter toggles
-    initContextFilters();
 
     // Initial status
     window.__settingsCore?.setSettingsStatus?.("Ready");

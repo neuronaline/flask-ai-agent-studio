@@ -5746,11 +5746,54 @@ kbd {
   flex-direction: column;
   gap: 8px;
 }
-
 .settings-form-cluster--split {
   grid-column: 1 / -1;
 }
 
+/* ── 2-column budget clusters (tools tab) ──────────────────────────── */
+.settings-form-cluster--tool-budgets,
+.settings-form-cluster--sub-agent {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.settings-form-cluster__column {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-form-cluster__group-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #b8c3f2;
+  padding-bottom: 2px;
+}
+
+/* Clean up budget-item inside clusters (no extra border inside) */
+.settings-form-cluster .settings-budget-item {
+  padding: 12px 14px;
+  border-radius: 12px;
+  gap: 5px;
+}
+
+.settings-form-cluster .settings-budget-item .settings-label {
+  font-size: 0.76rem;
+}
+
+/* ── Tool permission section note ─────────────────────────────────── */
+.tool-permission-section__note {
+  flex-shrink: 0;
+  max-width: 28ch;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  text-align: right;
+}
 .settings-inline-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -7040,12 +7083,6 @@ body[data-page="settings"] .settings-stat-card {
   margin: 10px 0 0;
   padding-left: 18px;
   color: var(--text-secondary);
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-
-.model-management-list--spaced {
-  margin-top: 1rem;
 }
 
 .settings-block-start {
@@ -7085,47 +7122,6 @@ body[data-page="settings"] .settings-stat-card {
   grid-column: 1 / -1;
 }
 
-/* ── Context filter toggles ───────────────────────────────────────── */
-.settings-context-toggles {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.settings-context-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.025);
-  font-size: 0.81rem;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
-  user-select: none;
-}
-
-.settings-context-toggle:hover {
-  border-color: rgba(79, 110, 247, 0.3);
-  background: rgba(79, 110, 247, 0.05);
-}
-
-.settings-context-toggle input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  accent-color: #4f6ef7;
-  cursor: pointer;
-}
-
-.settings-context-toggle:has(input:checked) {
-  border-color: rgba(79, 110, 247, 0.35);
-  background: rgba(79, 110, 247, 0.08);
-  color: var(--text-primary);
-}
-
-/* ── Budget grid (2-column inside merged box) ─────────────────────── */
 .settings-budget-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

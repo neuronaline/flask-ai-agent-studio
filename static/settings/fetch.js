@@ -9,6 +9,7 @@
   const fetchSummarizeMaxOutputTokensEl = document.getElementById("fetch-summarize-max-output-tokens-input");
   const fetchRawMaxTextCharsEl = document.getElementById("fetch-raw-max-text-chars-input");
   const fetchSummaryMaxCharsEl = document.getElementById("fetch-summary-max-chars-input");
+  const fetchHtmlConverterEl = document.getElementById("fetch-html-converter-select");
 
   // ─── Fetch settings apply ─────────────────────────────────────────────────────
   function syncFetchSettingsToForm(appSettings) {
@@ -18,6 +19,7 @@
     if (fetchSummarizeMaxOutputTokensEl) fetchSummarizeMaxOutputTokensEl.value = String(appSettings.fetch_url_summarized_max_output_tokens || 2400);
     if (fetchRawMaxTextCharsEl) fetchRawMaxTextCharsEl.value = String(appSettings.fetch_raw_max_text_chars || 24000);
     if (fetchSummaryMaxCharsEl) fetchSummaryMaxCharsEl.value = String(appSettings.fetch_summary_max_chars || 8000);
+    if (fetchHtmlConverterEl) fetchHtmlConverterEl.value = appSettings.fetch_html_converter_mode || "hybrid";
   }
 
   // ─── Fetch payload helpers ───────────────────────────────────────────────────
@@ -29,6 +31,7 @@
       fetch_url_summarized_max_output_tokens: window.__settingsCore.readNumericSetting(fetchSummarizeMaxOutputTokensEl, 2400, { allowZero: false, min: 200, max: 4000 }),
       fetch_raw_max_text_chars: window.__settingsCore.readNumericSetting(fetchRawMaxTextCharsEl, 24000, { allowZero: false, min: 1000 }),
       fetch_summary_max_chars: window.__settingsCore.readNumericSetting(fetchSummaryMaxCharsEl, 8000, { allowZero: false, min: 500 }),
+      fetch_html_converter_mode: fetchHtmlConverterEl ? fetchHtmlConverterEl.value : "hybrid",
     };
   }
 
@@ -38,3 +41,4 @@
     readFetchSettingsPayload,
   };
 })();
+

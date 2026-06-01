@@ -1,9 +1,11 @@
-// Settings tools — tool toggles and sub-agent tools
+// Settings tools — tool toggles, sub-agent tools, and sub-agent canvas automation
 (function () {
   "use strict";
 
   // ─── DOM refs ────────────────────────────────────────────────────────────────
   const subAgentToolToggleEls = Array.from(document.querySelectorAll("input[name='sub-agent-allowed-tool']"));
+  const subAgentCanvasAutoSaveEl = document.getElementById("sub-agent-canvas-auto-save-toggle");
+  const subAgentCanvasAutoOpenEl = document.getElementById("sub-agent-canvas-auto-open-toggle");
 
   // ─── Tool selection ─────────────────────────────────────────────────────────
   function getSelectedSubAgentTools() {
@@ -34,6 +36,19 @@
     });
   }
 
+  // ─── Sub-agent canvas automation ────────────────────────────────────────────
+  function syncSubAgentCanvasSettings(appSettings) {
+    if (subAgentCanvasAutoSaveEl) subAgentCanvasAutoSaveEl.checked = Boolean(appSettings.sub_agent_canvas_auto_save ?? true);
+    if (subAgentCanvasAutoOpenEl) subAgentCanvasAutoOpenEl.checked = Boolean(appSettings.sub_agent_canvas_auto_open ?? false);
+  }
+
+  function readSubAgentCanvasPayload() {
+    return {
+      sub_agent_canvas_auto_save: subAgentCanvasAutoSaveEl ? subAgentCanvasAutoSaveEl.checked : true,
+      sub_agent_canvas_auto_open: subAgentCanvasAutoOpenEl ? subAgentCanvasAutoOpenEl.checked : false,
+    };
+  }
+
   // ─── Overview stats ──────────────────────────────────────────────────────────
   function syncOverviewStats() {
     const statToolsEl = document.getElementById("settings-stat-tools");
@@ -43,12 +58,23 @@
     }
   }
 
+  // ─── Mark dirty on sub-agent canvas toggle change ────────────────────────────
+  function initDirtyListeners() {
+    [subAgentCanvasAutoSaveEl, subAgentCanvasAutoOpenEl].forEach((el) => {
+      if (el) el.addEventListener("change", () => window.__settingsCore?.markDirty?.());
+    });
+  }
+
+  initDirtyListeners();
+
   // ─── Export ──────────────────────────────────────────────────────────────────
   window.__settingsTools = {
     getSelectedSubAgentTools,
     applySelectedSubAgentTools,
     getSelectedTools,
     applySelectedTools,
+    syncSubAgentCanvasSettings,
+    readSubAgentCanvasPayload,
     syncOverviewStats,
   };
 })();
