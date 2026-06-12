@@ -1,22 +1,20 @@
-# ruff: noqa: I001
 from __future__ import annotations
 
 import ast
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 import hashlib
 import html
 import json
 import logging
 import math
 import os
-import threading
-import time
-from typing import Any
-
 import re
 import string
+import threading
+import time
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -24,6 +22,7 @@ import jsonschema
 import ijson
 from jsonschema import Draft7Validator
 
+from utils.shared_extract import extract_chat_completion_text as _extract_chat_completion_text
 from utils.logging_config import get_logger
 
 from services.canvas import (
@@ -252,7 +251,20 @@ def _get_default_client():
     return get_provider_client(provider)
 
 
-client = _get_default_client()
+_default_client = None
+
+
+def _get_lazy_client():
+    """Lazy-initialize the default client to avoid import-time side effects."""
+    global _default_client
+    if _default_client is None:
+        _default_client = _get_default_client()
+    return _default_client
+
+
+# Backward-compatible alias for tests and external callers.
+# Use _get_lazy_client() for new code.
+client = _get_lazy_client
 
 
 def _coerce_usage_int(value) -> int:
@@ -408,6 +420,9 @@ def _estimate_serialized_tokens(value) -> int:
 def _shared_prefix_char_count(left: str, right: str) -> int:
     if not left or not right:
         return 0
+    # Find the length of the common character prefix.
+    # Must compare characters (not bytes) because multi-byte characters
+    # (e.g. CJK) would produce incorrect byte-aligned boundaries.
     limit = min(len(left), len(right))
     index = 0
     while index < limit and left[index] == right[index]:
@@ -854,8 +869,7 @@ def _coerce_int_range(value, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, normalized))
 
 
-def _tool_result_has_error(tool_name: str, result) -> bool:
-    del tool_name
+def _tool_result_has_error(_tool_name: str, result) -> bool:
     if not isinstance(result, dict):
         return False
 
@@ -1674,25 +1688,6 @@ def _summarize_fetch_result(result: dict, fallback_url: str = "") -> str:
     return f"No extractable page content: {title or url or 'page'}"
 
 
-def _extract_chat_completion_text(response) -> str:
-    choices = getattr(response, "choices", None) or []
-    if not choices:
-        return ""
-    message = getattr(choices[0], "message", None)
-    content = getattr(message, "content", "")
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                text = str(item.get("text") or "")
-                if text:
-                    parts.append(text)
-        return "".join(parts).strip()
-    return str(content or "").strip()
-
-
 def _snapshot_model_invocation_value(value):
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -2418,7 +2413,7 @@ def _close_model_response(response) -> None:
         try:
             close_response()
         except Exception:
-            pass
+            LOGGER.debug("Failed to close model response", exc_info=True)
 
 
 def _read_api_field(value, key: str, default=None):
@@ -5166,8 +5161,7 @@ def _build_working_state_instruction(working_state: dict) -> dict | None:
     return {"role": "system", "content": "\n\n".join(parts)}
 
 
-def _get_tool_step_limit(tool_name: str, max_steps: int = 5) -> int:
-    del tool_name
+def _get_tool_step_limit(_tool_name: str, max_steps: int = 5) -> int:
     try:
         limit = int(max_steps)
     except (TypeError, ValueError):
@@ -5564,8 +5558,8 @@ def run_agent_stream(
                     message_id=None,
                 )
         except Exception:
-            # Context node creation should not break tool execution
-            pass
+            # Context node creation is best-effort and should not break tool execution
+            LOGGER.debug("Context node creation skipped for tool %s", tool_name, exc_info=True)
 
     def emit_reasoning(reasoning_text: str):
         nonlocal reasoning_started
@@ -6964,7 +6958,7 @@ def run_agent_stream(
                                 message_id=None,
                             )
                     except Exception:
-                        pass
+                        LOGGER.debug("Context node creation skipped for tool %s", tool_name, exc_info=True)
                     _trace_agent_event(
                         "tool_call_completed",
                         trace_id=trace_id,

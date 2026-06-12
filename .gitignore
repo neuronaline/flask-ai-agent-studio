@@ -56,3 +56,4 @@ logs/
 list_files.py
 project_files.md
 .cache/
+.forge/

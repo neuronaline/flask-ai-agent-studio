@@ -50,7 +50,6 @@ def block_external_network(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def isolate_test_state(monkeypatch):
-    import agent.agent
     import core.config as config
     import lib.model_registry as model_registry
     import rag.store as rag_store
@@ -80,9 +79,12 @@ def isolate_test_state(monkeypatch):
     monkeypatch.setattr(rag_store, "get_client", lambda: fake_client)
     monkeypatch.setattr(rag_store, "embed_texts", fake_embed_texts)
     model_registry.get_provider_client.cache_clear()
-    deepseek_client = model_registry.get_provider_client(model_registry.DEEPSEEK_PROVIDER)
-    monkeypatch.setattr(agent.agent, "client", deepseek_client)
-    monkeypatch.setattr(routes.conversations, "client", deepseek_client)
+    # Populate the LRU cache with a test client so that resolve_model_target()
+    # (used by agent/agent.py and routes/conversations.py) returns a real client
+    # object without network access.  The module-level `client` aliases in
+    # agent.agent and routes.conversations are legacy and no longer referenced
+    # by production code paths, so we do NOT patch them.
+    model_registry.get_provider_client(model_registry.DEEPSEEK_PROVIDER)
     yield
     rag_store._client = None
     rag_store._collection_cache = {}

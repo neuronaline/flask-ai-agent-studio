@@ -174,6 +174,7 @@ from services.rag_service import (
 from services.rag_service import sync_conversations_to_rag_background, sync_conversations_to_rag_safe
 from routes.request_utils import is_valid_model_id, normalize_model_id, parse_messages_payload, parse_optional_int
 from routes.conversations import normalize_title_source
+from utils.shared_extract import extract_chat_completion_text
 from utils.token_utils import estimate_text_tokens
 from lib.tool_registry import get_prompt_visible_tool_names, get_ui_hidden_tool_names, resolve_runtime_tool_names
 from services.video_transcript_service import (
@@ -1948,22 +1949,11 @@ def _estimate_prompt_tokens(messages: list[dict]) -> int:
 
 
 def _extract_chat_completion_text(response) -> str:
-    choices = getattr(response, "choices", None) or []
-    if not choices:
-        return ""
-    message = getattr(choices[0], "message", None)
-    content = getattr(message, "content", "")
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                text = str(item.get("text") or "")
-                if text:
-                    parts.append(text)
-        return "".join(parts).strip()
-    return str(content or "").strip()
+    """Extract text from a chat completion response.
+
+    Delegates to the shared utility in utils.shared_extract.
+    """
+    return extract_chat_completion_text(response)
 
 
 def _reformat_summary_response_as_json(
@@ -4846,7 +4836,7 @@ def register_chat_routes(app) -> None:
                 try:
                     apply_conversation_truncation(conv_id, settings)
                 except Exception:
-                    pass
+                    LOGGER.debug("Conversation truncation failed for conv_id=%s", conv_id, exc_info=True)
 
             attachments = extract_message_attachments(latest_user_message.get("metadata"))
             if persisted_user_message_id is not None:
@@ -5113,7 +5103,7 @@ def register_chat_routes(app) -> None:
                     try:
                         apply_conversation_truncation(conv_id, settings)
                     except Exception:
-                        pass
+                        LOGGER.debug("Conversation truncation failed for conv_id=%s", conv_id, exc_info=True)
 
             def persist_model_invocations(assistant_message_id: int | None) -> None:
                 nonlocal model_invocations_persisted
@@ -5438,7 +5428,7 @@ def register_chat_routes(app) -> None:
                         try:
                             apply_conversation_truncation(conv_id, settings)
                         except Exception:
-                            pass
+                            LOGGER.debug("Conversation truncation failed for conv_id=%s", conv_id, exc_info=True)
                 yield (
                     json.dumps(
                         {
@@ -5496,7 +5486,7 @@ def register_chat_routes(app) -> None:
                             try:
                                 apply_conversation_truncation(conv_id, settings)
                             except Exception:
-                                pass
+                                LOGGER.debug("Conversation truncation failed for conv_id=%s", conv_id, exc_info=True)
                     yield (
                         json.dumps(
                             {
@@ -5595,11 +5585,11 @@ def register_chat_routes(app) -> None:
                             try:
                                 apply_conversation_truncation(conv_id, settings)
                             except Exception:
-                                pass
+                                LOGGER.debug("Conversation truncation failed for conv_id=%s", conv_id, exc_info=True)
                 try:
                     agent_stream.close()
                 except Exception:
-                    pass
+                    LOGGER.debug("Failed to close agent stream", exc_info=True)
 
             with app_obj.app_context():
                 if conv_id and persisted_tool_history:
@@ -5629,7 +5619,7 @@ def register_chat_routes(app) -> None:
                     try:
                         apply_conversation_truncation(conv_id, settings)
                     except Exception:
-                        pass
+                        LOGGER.debug("Conversation truncation failed for conv_id=%s", conv_id, exc_info=True)
 
                 if persisted_user_message_id is not None or persisted_assistant_message_id is not None:
                     yield (

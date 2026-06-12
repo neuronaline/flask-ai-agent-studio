@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 from pathlib import Path
@@ -121,6 +122,8 @@ from lib.tool_registry import TOOL_SPEC_BY_NAME, get_tool_runtime_metadata
 from lib.model_registry import get_all_models, normalize_chat_parameter_overrides
 from utils.token_utils import estimate_text_tokens
 
+LOGGER = logging.getLogger(__name__)
+
 _db_path = DB_PATH
 _APP_CONTEXT_DB_CONNECTION_KEY = "_sqlite_connection"
 MESSAGE_USAGE_BREAKDOWN_KEYS = (
@@ -233,7 +236,7 @@ def close_db_connection() -> None:
     try:
         conn.close()
     except Exception:
-        return
+        LOGGER.debug("Failed to close database connection", exc_info=True)
 
 
 def _open_sqlite_connection(db_path: str):
@@ -6077,7 +6080,7 @@ def get_message_tool_result_content(message_id: int, tool_call_id: str) -> str |
                             return result_content
                         return json.dumps(result_content, ensure_ascii=False)
             except Exception:
-                pass
+                LOGGER.debug("Failed to parse tool result content for tool_call_id=%s", normalized_tool_call_id, exc_info=True)
 
         return None
 
