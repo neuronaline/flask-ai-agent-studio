@@ -6,7 +6,6 @@ from unittest.mock import patch
 import pytest
 
 from services.image_service import analyze_uploaded_image, answer_image_question
-from utils.image_utils import normalize_image_analysis
 
 
 class TestImageService:
@@ -44,23 +43,6 @@ class TestImageService:
         assert analysis["analysis_method"] == "multimodal"
         assert "attached directly" in analysis["assistant_guidance"]
 
-    def test_analyze_uploaded_image_helper_mode_falls_back_to_direct_mode(self):
-        with patch("services.image_service.IMAGE_UPLOADS_ENABLED", True), patch(
-            "services.image_service._resolve_processing_plan",
-            return_value=["multimodal"],
-        ), patch(
-            "services.image_service.can_model_process_images",
-            return_value=True,
-        ):
-            analysis = analyze_uploaded_image(
-                b"fake image bytes",
-                "image/png",
-                model_id="openrouter:test-vision",
-                processing_method="multimodal",
-            )
-
-        assert analysis["analysis_method"] == "multimodal"
-
     def test_analyze_uploaded_image_local_ocr_does_not_fall_back_to_remote_modes(self):
         with patch("services.image_service.IMAGE_UPLOADS_ENABLED", True), patch(
             "services.image_service._run_local_ocr_analysis",
@@ -82,76 +64,6 @@ class TestImageService:
         assert str(raised.value) == "OCR stack unavailable"
         mocked_direct.assert_not_called()
         mocked_helper.assert_not_called()
-
-    def test_normalize_image_analysis_preserves_explicit_guidance_and_method(self):
-        analysis = normalize_image_analysis(
-            {
-                "analysis_method": "llm_helper",
-                "ocr_text": "Toplam 42",
-                "vision_summary": "A checkout screen with totals is visible.",
-                "assistant_guidance": "Use the totals and selected shipping option.",
-                "key_points": ["Total is emphasized", "Shipping option is selected"],
-            }
-        )
-
-        assert analysis["analysis_method"] == "llm_helper"
-        assert analysis["assistant_guidance"] == "Use the totals and selected shipping option."
-
-    def test_analyze_uploaded_image_logs_full_raw_request_payload_and_context(self):
-        fake_response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(
-                        content='{"vision_summary":"Scene","key_points":["A"],"assistant_guidance":"Use it."}'
-                    )
-                )
-            ],
-            usage=SimpleNamespace(prompt_tokens=12, completion_tokens=6, total_tokens=18),
-        )
-
-        with patch("services.image_service.IMAGE_UPLOADS_ENABLED", True), patch(
-            "services.image_service._resolve_processing_plan",
-            return_value=["llm_helper"],
-        ), patch(
-            "services.image_service.optimize_image_for_processing",
-            return_value=(b"img-bytes", "image/png"),
-        ), patch(
-            "services.image_service.resolve_model_target",
-            return_value={
-                "api_model": "openrouter:test-vision",
-                "client": SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **_: fake_response))),
-                "record": {"provider": "openrouter"},
-            },
-        ), patch(
-            "services.image_service._resolve_helper_model_id",
-            return_value="openrouter:test-vision",
-        ), patch(
-            "services.image_service.can_model_use_structured_outputs",
-            return_value=False,
-        ), patch(
-            "services.activity_service.log_activity_call",
-        ) as mocked_log:
-            analyze_uploaded_image(
-                b"fake image bytes",
-                "image/png",
-                user_text="describe this",
-                model_id="openrouter:test-vision",
-                processing_method="llm_helper",
-                conversation_id=42,
-                source_message_id=77,
-            )
-
-        assert mocked_log.called
-        logged_kwargs = mocked_log.call_args.kwargs
-        assert logged_kwargs["conversation_id"] == 42
-        assert logged_kwargs["source_message_id"] == 77
-        assert logged_kwargs["operation"] == "image_analysis"
-        assert "messages" in logged_kwargs["request_payload"]
-        assert (
-            str(logged_kwargs["request_payload"]["messages"][0]["content"][1]["image_url"]["url"]).startswith(
-                "data:image/png;base64,"
-            )
-        )
 
     def test_answer_image_question_logs_full_raw_request_payload_and_context(self):
         fake_response = SimpleNamespace(

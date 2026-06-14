@@ -447,7 +447,7 @@ class TestOpenRouterModelRegistry:
         assert isinstance(merged["messages"][0]["content"], list)
         assert merged["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
 
-    def test_apply_model_target_request_options_skips_anthropic_breakpoint_for_volatile_runtime_block(self):
+    def test_apply_model_target_request_options_skips_breakpoint_for_volatile_runtime_block(self):
         request_kwargs = {
             "messages": [
                 {"role": "system", "content": "Short stable prefix."},
@@ -468,7 +468,7 @@ class TestOpenRouterModelRegistry:
         assert merged["messages"][0]["content"] == request_kwargs["messages"][0]["content"]
         assert merged["messages"][1]["content"] == request_kwargs["messages"][1]["content"]
 
-    def test_apply_model_target_request_options_avoids_second_anthropic_breakpoint_on_volatile_runtime_block(self):
+    def test_apply_model_target_request_options_avoids_second_breakpoint_on_volatile_runtime_block(self):
         request_kwargs = {
             "messages": [
                 {"role": "system", "content": "Stable prefix. " * 1000},
@@ -532,7 +532,7 @@ class TestOpenRouterModelRegistry:
         assert merged["messages"][0]["content"] == request_kwargs["messages"][0]["content"]
         assert merged["extra_body"] == {"provider": {"sort": "throughput"}}
 
-    def test_apply_model_target_request_options_skips_gemini_cache_breakpoint_when_setting_is_off(self):
+    def test_apply_model_target_request_options_skips_cache_breakpoint_when_setting_is_off(self):
         request_kwargs = {
             "messages": [
                 {"role": "system", "content": "Reference context. " * 1000},

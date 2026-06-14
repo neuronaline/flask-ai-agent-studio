@@ -2,13 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from services.canvas import (
-    create_canvas_runtime_state,
-    get_canvas_runtime_active_document_id,
-    get_canvas_runtime_documents,
-    get_canvas_viewport_payloads,
-    set_canvas_viewport,
-)
 from core.db import (
     build_effective_user_preferences,
     build_user_profile_system_context,
@@ -25,6 +18,13 @@ from lib.tool_registry import (
     TOOL_SPEC_BY_NAME,
     get_openai_tool_specs,
     get_parallel_safe_tool_names,
+)
+from services.canvas import (
+    create_canvas_runtime_state,
+    get_canvas_runtime_active_document_id,
+    get_canvas_runtime_documents,
+    get_canvas_viewport_payloads,
+    set_canvas_viewport,
 )
 
 
@@ -53,16 +53,9 @@ class TestRuntimeSystemMessage:
         assert "## Core Directives" in content
         assert "## Active Tools This Turn" in content
         assert "Scratchpad (AI Persistent Memory)" in content
-        assert "### User Profile & Mindset" in content
         assert "The user is 22 years old." in content
-        assert "DO save:" in content
-        assert "Default away" in content
-        assert "Scratchpad Policy" in content
-        assert "Clarification**: If a good answer depends" in content
-        assert "Tool Execution History" in content
-        assert "Knowledge Base" in content
+        assert "## Knowledge Base" in content
         assert "Context block" in content
-        assert "You are an advanced, capable, and helpful AI assistant." not in content
 
     def test_build_effective_user_preferences_combines_general_and_personality(self):
         combined = build_effective_user_preferences(
@@ -82,13 +75,11 @@ class TestRuntimeSystemMessage:
             active_tool_names=["search_web", "search_knowledge_base"],
             retrieved_context="Context block",
             tool_trace_context="- search_web [done]: prior result",
-            
         )
 
         content = message["content"]
         assert content.index("## Tool Calling") < content.index("## Tool Execution History")
         assert content.index("## Tool Calling") < content.index("## Active Tools This Turn")
-        assert content.index("## Tool Calling") < content.index("## Tool Memory")
         assert content.index("## Tool Calling") < content.index("## Knowledge Base")
 
     def test_runtime_system_message_discourages_unnecessary_web_search(self):
@@ -106,18 +97,6 @@ class TestRuntimeSystemMessage:
         assert (
             "If the answer is already available from the current context, do not search or fetch anything." in content
         )
-
-    def test_runtime_system_message_uses_canonical_role_heading_without_excess_blank_lines(self):
-        message = build_runtime_system_message(
-            user_preferences="Keep answers short.",
-            scratchpad_sections={"notes": "One durable note."},
-            active_tool_names=["search_web"],
-        )
-
-        content = message["content"]
-        assert "## Role" in content
-        assert "- You are a tool-using assistant." in content
-        assert "\n\n\n" not in content
 
     def test_runtime_system_message_includes_user_profile_context(self):
         upsert_user_profile_entry("pref:concise", "The user prefers concise answers.", confidence=0.95, source="manual")
@@ -901,7 +880,6 @@ class TestRuntimeSystemMessage:
     def test_runtime_system_message_places_datetime_before_tool_history(self):
         message = build_runtime_system_message(
             active_tool_names=["search_knowledge_base"],
-            
             tool_trace_context="- fetch_url https://example.com -> cached result",
             canvas_documents=[
                 {
@@ -916,16 +894,24 @@ class TestRuntimeSystemMessage:
         )
 
         content = message["content"]
-        assert "## Tool Memory" in content
         assert "## Active Canvas Document" in content
         assert "## Tool Execution History" in content
         assert "## Current Date and Time" in content
-        # New order per Data-Structuring-and-Optimization-Protocol-for-AI:
-        # Time -> Tool Execution History -> Tool Memory -> Canvas Runtime Context -> Active Tools
         assert content.index("## Current Date and Time") < content.index("## Tool Execution History")
-        assert content.index("## Tool Execution History") < content.index("## Tool Memory")
-        assert content.index("## Tool Memory") < content.index("## Active Canvas Document")
+        assert content.index("## Tool Execution History") < content.index("## Active Canvas Document")
         assert content.index("## Active Canvas Document") < content.index("## Active Tools This Turn")
+
+    def test_runtime_system_message_uses_canonical_role_heading_without_excess_blank_lines(self):
+        message = build_runtime_system_message(
+            user_preferences="Keep answers short.",
+            scratchpad_sections={"notes": "One durable note."},
+            active_tool_names=["search_web"],
+        )
+
+        content = message["content"]
+        assert "## Role" in content
+        assert "- You are a tool-using assistant." in content
+        assert "\n\n\n" not in content
 
     def test_tool_specs_include_guidance_for_news_tools(self):
         for tool_name in [

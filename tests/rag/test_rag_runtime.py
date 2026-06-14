@@ -765,21 +765,17 @@ class TestRagRuntime:
         }
         assert mocked_search.call_args.kwargs["metadata_filter_mode"] == "or"
 
-    def test_rag_search_route_rejects_invalid_metadata_filter_mode(self):
-        response = self.client.get("/api/rag/search?q=memory&metadata_filter_mode=xor")
+    @pytest.mark.parametrize(
+        ("query_string", "error_fragment"),
+        [
+            ("metadata_filter_mode=xor", "metadata_filter_mode"),
+            ("min_similarity=abc", "min_similarity"),
+            ("min_similarity=-0.1", "min_similarity"),
+            ("min_similarity=1.1", "min_similarity"),
+        ],
+    )
+    def test_rag_search_route_rejects_invalid_params(self, query_string, error_fragment):
+        response = self.client.get(f"/api/rag/search?q=memory&{query_string}")
 
         assert response.status_code == 400
-        assert "metadata_filter_mode" in response.get_json()["error"]
-
-    def test_rag_search_route_rejects_invalid_min_similarity(self):
-        response = self.client.get("/api/rag/search?q=memory&min_similarity=abc")
-
-        assert response.status_code == 400
-        assert "min_similarity" in response.get_json()["error"]
-
-    def test_rag_search_route_rejects_out_of_range_min_similarity(self):
-        for value in ("-0.1", "1.1"):
-            response = self.client.get(f"/api/rag/search?q=memory&min_similarity={value}")
-
-            assert response.status_code == 400
-            assert "min_similarity" in response.get_json()["error"]
+        assert error_fragment in response.get_json()["error"]
