@@ -59,8 +59,7 @@ class TestRuntimeSystemMessage:
         assert "Default away" in content
         assert "Scratchpad Policy" in content
         assert "Clarification**: If a good answer depends" in content
-        assert "Tool Memory" in content
-        assert "Remembered web result" in content
+        assert "Tool Execution History" in content
         assert "Knowledge Base" in content
         assert "Context block" in content
         assert "You are an advanced, capable, and helpful AI assistant." not in content
@@ -700,7 +699,7 @@ class TestRuntimeSystemMessage:
         assert "Multiple localized replace_canvas_lines calls are fine" in replace_guidance
         assert "document_id is optional" in expand_description
         assert "call-time snapshot" in expand_description
-        assert "use document_path from the workspace summary or manifest" in expand_guidance
+        assert "Use document_path from the workspace summary or manifest" in expand_guidance
         assert "call expand_canvas_document again" in expand_guidance
         assert "before line-level edits" in scroll_description
         assert "Use this first when the user asks you to find something inside a large canvas" in search_guidance
@@ -895,8 +894,8 @@ class TestRuntimeSystemMessage:
         assert messages[3]["role"] == "user"
         content = messages[1]["content"]
         assert "## Current Date and Time" in content
-        assert "## Conversation Summaries" in content
-        assert content.index("## Current Date and Time") < content.index("## Conversation Summaries")
+        assert "## Scratchpad (AI Persistent Memory)" in content
+        assert content.index("## Current Date and Time") > content.index("## Scratchpad (AI Persistent Memory)")
         assert "id" not in messages[0]
 
     def test_runtime_system_message_places_datetime_before_tool_history(self):

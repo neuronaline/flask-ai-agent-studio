@@ -519,6 +519,21 @@ def _build_knowledge_base_payload(retrieved_context, active_tool_names: list[str
     return payload or None
 
 
+def _normalize_answers_to_list(answers) -> list[dict]:
+    """Normalize clarification answers from either list or dict format to a list of dicts."""
+    if isinstance(answers, list):
+        return answers
+    if isinstance(answers, dict) and answers:
+        result = []
+        for qid, answer in answers.items():
+            if isinstance(answer, dict):
+                result.append({"id": qid, "display": answer.get("display") or answer.get("value") or ""})
+            else:
+                result.append({"id": qid, "display": str(answer)})
+        return result
+    return []
+
+
 def _normalize_clarification_rounds(
     clarification_response: dict | None,
     all_clarification_rounds: list[dict] | None = None,
@@ -530,10 +545,11 @@ def _normalize_clarification_rounds(
     # turns and re-injecting them on every subsequent non-clarification turn
     # misleads the model into treating the current user message as a
     # clarification response.
+    raw_answers = (clarification_response or {}).get("answers") if isinstance(clarification_response, dict) else None
     current_has_clarification = (
         isinstance(clarification_response, dict)
-        and isinstance(clarification_response.get("answers"), list)
-        and bool(clarification_response["answers"])
+        and raw_answers is not None
+        and bool(raw_answers)
     )
     if not current_has_clarification:
         return []
@@ -553,8 +569,10 @@ def _normalize_clarification_rounds(
     for rp in raw_rounds:
         if not isinstance(rp, dict):
             continue
+        # Support both list-based and dict-based answer formats
+        raw_rp_answers = rp.get("answers")
+        answers_list = _normalize_answers_to_list(raw_rp_answers)
         answers_sig_parts: list[str] = []
-        answers_list = rp.get("answers") if isinstance(rp.get("answers"), list) else []
         for i, a in enumerate(answers_list):
             if isinstance(a, dict):
                 answers_sig_parts.append(f"{i}:{a.get('display', '')}")
@@ -600,7 +618,7 @@ def _normalize_clarification_rounds(
         if not isinstance(round_payload, dict):
             continue
 
-        answers = round_payload.get("answers") if isinstance(round_payload.get("answers"), list) else []
+        answers = _normalize_answers_to_list(round_payload.get("answers"))
         if not answers:
             continue
 
@@ -2033,7 +2051,12 @@ def _build_canvas_preview_compaction_note(active_tool_names: list[str], clipped_
     if flags["batch_read"]:
         tool_guidance = "use batch_read_canvas_documents if exact full line text matters"
     else:
-        tool_guidance = "exact full line text may require enabling a canvas read tool"
+        active_set = set(active_tool_names or [])
+        read_tools = [t for t in ("scroll_canvas_document", "expand_canvas_document") if t in active_set]
+        if read_tools:
+            tool_guidance = " or ".join(read_tools)
+        else:
+            tool_guidance = "exact full line text may require enabling a canvas read tool"
     return f"- Preview compaction: {int(clipped_line_count)} long line(s) were clipped for token efficiency; {tool_guidance}."
 
 
@@ -2184,6 +2207,11 @@ def _build_canvas_runtime_context_sections(
     else:
         active_lines.append(
             "- Guidance: The active canvas document is fully visible in the current excerpt. Canvas is already fully visible, so use the visible line numbers directly for line-level edits."
+        )
+    # Snapshot rule: remind the model that expand_canvas_document returns a call-time snapshot
+    if "expand_canvas_document" in set(active_tool_names or []):
+        active_lines.append(
+            "- Snapshot rule: expand_canvas_document returns a call-time snapshot — call it again before relying on that older view."
         )
     if canvas_payload["mode"] == "project":
         active_lines.append(
@@ -2485,6 +2513,14 @@ def _build_runtime_dynamic_state_parts(
 ) -> list[str]:
     """Build dynamic state sections: user profile, persona memory, conversation memory, scratchpad."""
     parts: list[str] = []
+
+    # User Profile section
+    profile_text = str(user_profile_context or "").strip()
+    if profile_text:
+        parts.append("## User Profile")
+        parts.append(profile_text)
+        parts.append("")
+
     persona_memory_tools_enabled = any(
         name in {"save_to_persona_memory", "delete_persona_memory_entry"} for name in runtime_tool_names
     )
@@ -2534,7 +2570,7 @@ def _build_runtime_volatile_parts(
     double_check_query: str = "",
     context_node_stats: dict | None = None,
     scratchpad: str = "",
-    scratchpad_sections: list[tuple[str, str]] | None = None,
+    scratchpad_sections: dict[str, str] | list[tuple[str, str]] | None = None,
     persona_memory: str = "",
     conversation_memory: str = "",
 ):
@@ -2565,7 +2601,10 @@ def _build_runtime_volatile_parts(
     scratchpad_intro = get_prompt("scratchpad.intro", "")
     scratchpad_intro = f"*{scratchpad_intro}*\n"
     parts.append(scratchpad_intro)
-    non_empty_scratchpad_sections = [(sid, content) for sid, content in (scratchpad_sections or []) if content.strip()]
+    if isinstance(scratchpad_sections, dict):
+        non_empty_scratchpad_sections = [(sid, content) for sid, content in scratchpad_sections.items() if str(content or "").strip()]
+    else:
+        non_empty_scratchpad_sections = [(sid, content) for sid, content in (scratchpad_sections or []) if str(content or "").strip()]
     if non_empty_scratchpad_sections:
         for section_id, section_content in non_empty_scratchpad_sections:
             parts.append(f"### {SCRATCHPAD_SECTION_METADATA[section_id]['title']}")
@@ -2577,6 +2616,68 @@ def _build_runtime_volatile_parts(
             f"{get_prompt('scratchpad.policy', '')}"
         )
     parts.append("")
+
+    # Current Date and Time — placed early in volatile context so the model
+    # knows the authoritative time before reading tool results or canvas state.
+    if include_time_context:
+        parts.append(_build_current_time_context(now))
+
+    # Tool Execution History (tool trace context from prior turns)
+    if tool_trace_context:
+        parts.append("## Tool Execution History")
+        parts.append(str(tool_trace_context))
+        parts.append("")
+
+    # Clarification Response section
+    clarification_payload = _build_clarification_response_payload(
+        clarification_response,
+        all_clarification_rounds=all_clarification_rounds,
+    )
+    if clarification_payload:
+        parts.append("## Clarification Response")
+        parts.append(f"**{clarification_payload['guidance']}**")
+        parts.append(clarification_payload["formatted_answers"])
+        parts.append("")
+
+    # Knowledge Base (RAG)
+    if retrieved_context:
+        formatted_context = format_knowledge_base_auto_context(retrieved_context)
+        if formatted_context:
+            parts.append("## Knowledge Base")
+            parts.append(f"*{formatted_context}*")
+            parts.append("")
+
+    # Double-Check Protocol
+    if double_check:
+        parts.append("## Double-Check Protocol")
+        parts.append("Treat this turn as a verification pass.")
+        if double_check_query:
+            parts.append(f"verify this specific claim or request first: {double_check_query}.")
+        parts.append("Consider the strongest counterargument and any evidence against the original claim.")
+        parts.append("Do not present uncertain claims as certain.")
+        parts.append("")
+
+    # Canvas Runtime Context sections
+    canvas_sections = _build_canvas_runtime_context_sections(
+        active_tool_names,
+        canvas_payload,
+        previous_canvas_content_hash=previous_canvas_content_hash,
+    )
+    if canvas_sections:
+        parts.extend(canvas_sections)
+
+    # Active Tools This Turn
+    active_tools_section = _build_active_tools_context(active_tool_names)
+    if active_tools_section:
+        parts.extend(active_tools_section)
+
+    # Prompt Budget Status
+    if isinstance(runtime_budget_stats, dict):
+        remaining_budget = runtime_budget_stats.get("remaining_context_budget")
+        if remaining_budget is not None:
+            parts.append("## Prompt Budget Status")
+            parts.append(f"Remaining context budget ≈ {int(remaining_budget)} tokens")
+            parts.append("")
 
     persona_memory_section = build_persona_memory_section(persona_memory)
     if persona_memory_section:
@@ -2593,28 +2694,6 @@ def _build_runtime_volatile_parts(
         parts.append(get_prompt("memory.conversation_priority.header", "## Conversation Memory Priority"))
         parts.append("- " + get_prompt("memory.conversation_priority.guidance", ""))
         parts.append("")
-
-    # Build Clarification Response section if clarification_response is available
-    # This should come before Knowledge Base per test expectations
-    clarification_payload = _build_clarification_response_payload(
-        clarification_response,
-        all_clarification_rounds=all_clarification_rounds,
-    )
-    if clarification_payload:
-        parts.append("## Clarification Response")
-        parts.append(f"**{clarification_payload['guidance']}**")
-        parts.append(clarification_payload["formatted_answers"])
-        parts.append("")
-
-    # Build Knowledge Base (RAG) section if retrieved_context is available
-    # This follows the document's guidance: RAG content should be placed after static parts
-    # and before volatile dynamic content to optimize for prefix caching
-    if retrieved_context:
-        formatted_context = format_knowledge_base_auto_context(retrieved_context)
-        if formatted_context:
-            parts.append("## Knowledge Base")
-            parts.append(f"*{formatted_context}*")
-            parts.append("")
 
     return parts
 
@@ -2759,7 +2838,10 @@ def build_runtime_context_injection(
             double_check_query=double_check_query,
             retrieved_context=retrieved_context,
             tool_trace_context=tool_trace_context,
-            
+            scratchpad=scratchpad,
+            scratchpad_sections=scratchpad_sections,
+            persona_memory=persona_memory,
+            conversation_memory=conversation_memory,
             now=normalized_now,
             canvas_documents=canvas_documents,
             canvas_active_document_id=canvas_active_document_id,
@@ -2874,7 +2956,10 @@ def build_runtime_system_message(
                 double_check_query=double_check_query,
                 retrieved_context=retrieved_context,
                 tool_trace_context=tool_trace_context,
-                
+                scratchpad=scratchpad,
+                scratchpad_sections=scratchpad_sections,
+                persona_memory=persona_memory,
+                conversation_memory=conversation_memory,
                 now=now,
                 canvas_documents=canvas_documents,
                 canvas_active_document_id=canvas_active_document_id,

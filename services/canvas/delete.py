@@ -12,6 +12,8 @@ from services.canvas.viewport import clear_canvas_viewport
 
 from services.canvas.runtime import _refresh_canvas_runtime_state, get_canvas_runtime_active_document_id
 
+from services.canvas.constants import CanvasError
+
 from services.canvas.normalize import extract_canvas_documents
 
 
@@ -39,7 +41,7 @@ def delete_canvas_document(
                 clear_canvas_viewport(
                     runtime_state, document_id=str(removed.get("id") or "") or None, document_path=removed.get("path")
                 )
-            except ValueError:
+            except (ValueError, CanvasError):
                 pass
         runtime_state["active_document_id"] = None
         _refresh_canvas_runtime_state(runtime_state)

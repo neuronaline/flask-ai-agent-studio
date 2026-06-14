@@ -855,7 +855,7 @@ TOOL_SPECS = [
                 "atomic": "optional rollback flag",
             },
             "guidance": (
-                "Use this when you already know several non-overlapping edits for one document or multiple documents. "
+                "Prefer one batch_canvas_edits call when you already know several non-overlapping edits for one document or multiple documents. "
                 "Every operation must target a disjoint region or insertion anchor. "
                 "Every operation must be a plain JSON object with an action field set to replace, insert, or delete. "
                 "Do not nest a single operation inside an extra array or wrapper object. "
@@ -958,7 +958,106 @@ TOOL_SPECS = [
         "prompt": {
             "purpose": "Deletes one or more canvas documents from the current conversation.",
             "inputs": {"documents": "optional array of {document_id, document_path}", "document_id": "optional target id", "document_path": "optional target project-relative path"},
-            "guidance": "Use documents array for batch delete when multiple documents need to be removed. Use single document_id/document_path for single document deletion. Deletion is irreversible for the current conversation state.",
+            "guidance": "Use documents array for batch delete when multiple documents need to be removed. Use single document_id/document_path for single document deletion. Delete obsolete or superseded documents that are no longer needed. Deletion is irreversible for the current conversation state.",
+        },
+    },
+    {
+        "name": "rewrite_canvas_document",
+        "description": "Replace the entire content of a canvas document. Use for bulk rewrites or when most of the document should change. Do not default to this when only part of the file needs to change.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string", "description": "Optional target canvas document id."},
+                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this in project mode."},
+                "content": {"type": "string", "description": "The complete new document content."},
+            },
+            "required": ["content"],
+        },
+        "prompt": {
+            "purpose": "Replaces the entire content of a canvas document with new content.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "content": "complete new document content"},
+            "guidance": "Do not default to this when only part of the file needs to change. Prefer batch_canvas_edits for localized edits. Use this only for bulk rewrites where most of the document should change.",
+        },
+    },
+    {
+        "name": "replace_canvas_lines",
+        "description": "Replace specific lines in a canvas document. Use for localized line-level edits.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string", "description": "Optional target canvas document id."},
+                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this in project mode."},
+                "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to replace."},
+                "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to replace."},
+                "lines": {"type": "array", "items": {"type": "string"}, "description": "Replacement lines as properly escaped JSON strings."},
+            },
+            "required": ["start_line", "end_line", "lines"],
+        },
+        "prompt": {
+            "purpose": "Replaces a specific inclusive line range in a canvas document with new lines.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "start_line": "1-based start", "end_line": "1-based end", "lines": "replacement lines"},
+            "guidance": "Multiple localized replace_canvas_lines calls are fine for non-overlapping edits. Prefer batch_canvas_edits when several edits target the same document.",
+        },
+    },
+    {
+        "name": "expand_canvas_document",
+        "description": "Expand the visible excerpt of a canvas document to show more lines. Returns a call-time snapshot of the document content around the specified range. document_id is optional when only one document exists.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string", "description": "Optional target canvas document id. Defaults to the active document."},
+                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this in project mode."},
+                "start_line": {"type": "integer", "minimum": 1, "description": "Optional 1-based start line for the expanded range."},
+                "end_line": {"type": "integer", "minimum": 1, "description": "Optional 1-based end line for the expanded range."},
+            },
+        },
+        "prompt": {
+            "purpose": "Expands the visible excerpt of a canvas document to show more lines.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "start_line": "optional start", "end_line": "optional end"},
+            "guidance": "Use document_path from the workspace summary or manifest. expand_canvas_document returns a call-time snapshot — call it again before relying on that older view if the document may have changed since the last expand. Snapshot rule: Always call expand_canvas_document again before relying on an older view of the document content.",
+        },
+    },
+    {
+        "name": "scroll_canvas_document",
+        "description": "Scroll to a specific line range in a canvas document and return the visible lines. Use before line-level edits when the target lines are not yet visible.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string", "description": "Optional target canvas document id."},
+                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this in project mode."},
+                "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to scroll to."},
+                "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to scroll to."},
+                "max_window_lines": {"type": "integer", "minimum": 1, "description": "Maximum number of lines to return."},
+            },
+            "required": ["start_line", "end_line"],
+        },
+        "prompt": {
+            "purpose": "Scrolls to a specific line range and returns the visible lines for inspection before editing.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "start_line": "scroll start", "end_line": "scroll end", "max_window_lines": "optional max lines to return"},
+            "guidance": "Use this before line-level edits when the target lines are not yet visible in the current excerpt.",
+        },
+    },
+    {
+        "name": "preview_canvas_changes",
+        "description": "Preview the result of pending canvas changes without applying them. Returns the would-be document state after the proposed edits.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string", "description": "Optional target canvas document id."},
+                "document_path": {"type": "string", "description": "Optional target project-relative path."},
+                "operations": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "Proposed edit operations to preview.",
+                    "items": {"type": "object"},
+                },
+            },
+            "required": ["operations"],
+        },
+        "prompt": {
+            "purpose": "Shows the would-be result of proposed canvas edits without committing them.",
+            "inputs": {"document_id": "optional target id", "document_path": "optional target path", "operations": "proposed edit operations"},
+            "guidance": "Use this to verify the impact of a batch of edits before committing them with batch_canvas_edits.",
         },
     },
     {
@@ -1227,6 +1326,34 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "requires_canvas_document": True,
     },
     "delete_canvas_document": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+    },
+    "rewrite_canvas_document": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
+        "requires_editable_canvas": True,
+    },
+    "replace_canvas_lines": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
+        "requires_editable_canvas": True,
+    },
+    "expand_canvas_document": {
+        "read_only": True,
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+    },
+    "scroll_canvas_document": {
+        "state_domains": ("canvas",),
+        "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
+    },
+    "preview_canvas_changes": {
+        "read_only": True,
+        "parallel_safe": True,
         "state_domains": ("canvas",),
         "requires_canvas_document": True,
     },
@@ -1519,6 +1646,22 @@ def resolve_runtime_tool_names(
     return runtime_names
 
 
+_TOOL_SPEC_PRIORITY = {
+    "expand_canvas_document": 0,
+    "scroll_canvas_document": 1,
+    "search_canvas_document": 2,
+    "batch_read_canvas_documents": 3,
+    "create_canvas_document": 10,
+    "rewrite_canvas_document": 11,
+    "replace_canvas_lines": 12,
+    "batch_canvas_edits": 13,
+    "set_canvas_viewport": 14,
+    "clear_canvas_viewport": 15,
+    "delete_canvas_document": 16,
+    "preview_canvas_changes": 17,
+}
+
+
 def get_openai_tool_specs(
     active_tool_names: list[str],
     canvas_documents: list[dict] | None = None,
@@ -1548,6 +1691,7 @@ def get_openai_tool_specs(
                 },
             }
         )
+    specs.sort(key=lambda entry: _TOOL_SPEC_PRIORITY.get(entry["function"]["name"], 50))
     return specs
 
 

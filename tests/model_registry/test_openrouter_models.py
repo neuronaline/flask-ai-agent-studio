@@ -229,7 +229,7 @@ class TestOpenRouterModelRegistry:
 
         assert client._base_kwargs.get("default_headers") == {
             "HTTP-Referer": "https://example.com/runtime",
-            "X-Title": "Runtime Header Test",
+            "X-OpenRouter-Title": "Runtime Header Test",
         }
 
     def test_settings_patch_rejects_invalid_openrouter_provider_slug(self, client):
@@ -838,5 +838,5 @@ class TestOpenRouterModelRegistry:
 
         assert payload["custom_models"] == []
         visible_model_order = payload["visible_model_order"]
-        assert visible_model_order[:2] == ["deepseek-chat", "deepseek-reasoner"]
+        assert visible_model_order[:2] == ["deepseek-v4-flash", "deepseek-v4-pro"]
         assert "openrouter:anthropic/claude-sonnet-4.5" not in visible_model_order

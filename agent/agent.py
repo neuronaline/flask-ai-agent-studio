@@ -788,19 +788,37 @@ def _coerce_tool_bool(value, default: bool = False) -> bool:
     return bool(value)
 
 
-def _format_tool_execution_error(error: Exception | str) -> str:
+def _format_tool_execution_error(error: Exception | str, tool_name: str = "") -> str:
+    """Format a tool execution error as an LLM-steering message.
+
+    Per llm-backend-protocol §2.7 (Graceful Degradation & Steering Error Messages),
+    error responses must describe what went wrong in plain language AND suggest
+    a corrective action so the model can self-correct within the same turn.
+
+    Args:
+        error: The exception or error string.
+        tool_name: Optional tool name for targeted recovery hints.
+
+    Returns:
+        A steering error message suitable for injection into the agent context.
+    """
     raw_text = _clean_tool_text(str(error or ""), limit=280)
     if not raw_text:
-        return "Tool execution failed."
+        raw_text = "An unexpected error occurred."
 
     class_name = type(error).__name__ if isinstance(error, Exception) else ""
     lowered = raw_text.casefold()
     if class_name.endswith("Error") and class_name not in {"ValueError", "RuntimeError"}:
         if lowered.startswith(class_name.casefold()):
-            raw_text = raw_text[len(class_name) :].lstrip(": ") or raw_text
+            raw_text = raw_text[len(class_name):].lstrip(": ") or raw_text
     if raw_text.lower().startswith("traceback"):
-        return "Tool execution failed before producing a usable result."
-    return raw_text
+        raw_text = "Tool execution failed before producing a usable result."
+
+    # Build the steering message: error description + corrective action.
+    recovery_hint = _build_recovery_hint_for_tool(tool_name) if tool_name else ""
+    if recovery_hint:
+        return f"Error: {raw_text}\n\nRecovery: {recovery_hint}"
+    return f"Error: {raw_text}"
 
 
 def _sanitize_clarification_text(text: str, limit: int | None = None) -> str:
@@ -839,26 +857,92 @@ def _truncate_preview_text(text: str, limit: int | None = None) -> str:
 
 
 def _build_recovery_hint_for_tool(tool_name: str, tool_args: dict | None = None) -> str:
+    """Build a steering recovery hint for a failed tool execution.
+
+    Per llm-backend-protocol §2.7, error responses should suggest the corrective
+    action. This function maps tool names to concrete next steps the LLM can take
+    to self-correct.
+
+    Args:
+        tool_name: The tool that failed.
+        tool_args: The arguments that were passed (for context-aware hints).
+
+    Returns:
+        A recovery hint string, or empty string if no specific hint is available.
+    """
     normalized_tool_name = str(tool_name or "").strip()
     normalized_tool_args = tool_args if isinstance(tool_args, dict) else {}
 
-    if normalized_tool_name == "fetch_url":
+    if normalized_tool_name in {"fetch_url", "fetch_url_summarized"}:
         url = _clean_tool_text(normalized_tool_args.get("url") or "", limit=160)
+        if normalized_tool_name == "fetch_url":
+            if url:
+                return f"Retry fetch_url with {url} using compress=false for full content, or try an alternative source."
+            return "Retry fetch_url with compress=false for full content, or try an alternative source."
         if url:
-            return f"Need omitted text? Re-fetch {url} with compress=false to get the full uncompressed content."
-        return "Need omitted text? Re-fetch the same URL with compress=false to get the full uncompressed content."
-    if normalized_tool_name == "fetch_url_summarized":
-        url = _clean_tool_text(normalized_tool_args.get("url") or "", limit=160)
-        if url:
-            return f"Need more than the summary? Call fetch_url for {url} with compress=false to get the full content."
-        return "Need more than the summary? Call fetch_url with compress=false to get the full content."
+            return f"Fall back to fetch_url for {url} with compress=false to get the raw content, or narrow the focus query."
+        return "Fall back to fetch_url with compress=false to get the raw content, or narrow the focus query."
+
     if normalized_tool_name in {"search_web", "search_news", "search_news_google", "search_scholar"}:
-        return "If exact wording is needed, fetch a specific returned URL or rerun the search with a narrower query."
+        return "Try a different query phrasing. Or fetch a specific result URL directly with fetch_url."
+
     if normalized_tool_name == "search_knowledge_base":
-        return "Repeat search_knowledge_base with the same query if you need the exact retrieved excerpts again."
+        return "Try the search with a different query, or narrow the category filter."
+
     if normalized_tool_name in {"search_canvas_document", "batch_read_canvas_documents"}:
-        return "Reopen the same canvas document or search it again if you need the exact omitted lines."
-    return ""
+        return "Verify the document still exists and the document_id/path is correct."
+
+    if normalized_tool_name in ("create_canvas_document",):
+        return "Check that the content is valid and the document format is recognized."
+
+    if normalized_tool_name in (
+        "batch_canvas_edits", "replace_canvas_lines",
+    ):
+        return (
+            "Verify your line numbers match the current document. "
+            "Use batch_read_canvas_documents to re-read the document first, "
+            "then adjust your edit ranges. Use expected_lines to guard against stale edits."
+        )
+
+    if normalized_tool_name == "rewrite_canvas_document":
+        return (
+            "Verify the document exists and is editable. "
+            "Use batch_read_canvas_documents to confirm the document ID/path is correct."
+        )
+
+    if normalized_tool_name == "delete_canvas_document":
+        return "Verify the document still exists and the document_id or document_path is correct."
+
+    if normalized_tool_name == "transcribe_youtube_video":
+        return (
+            "Verify the URL is a valid YouTube URL (watch, short, embed, or youtu.be format). "
+            "Ensure the video is publicly accessible and not region-restricted."
+        )
+
+    if normalized_tool_name == "ask_clarifying_question":
+        return (
+            "Ensure each question has a unique 'id' field and a 'label'. "
+            "Check that required questions are included and options are valid."
+        )
+
+    if normalized_tool_name == "expand_truncated_tool_result":
+        return (
+            "Verify that message_id and tool_call_id are both provided "
+            "and refer to an existing tool result in the current conversation."
+        )
+
+    if normalized_tool_name in {"analyze_uploaded_image", "answer_image_question"}:
+        return (
+            "Verify the image_id refers to a previously stored image in this conversation. "
+            "If the image was uploaded in a different conversation, ask the user to re-upload it."
+        )
+
+    # Generic fallback: encourage the model to try an alternative approach
+    return (
+        f"Tool '{normalized_tool_name}' failed. Consider checking the arguments for "
+        f"correctness, using a different tool for the same goal, or re-reading the "
+        f"relevant state first."
+    )
 
 
 def _coerce_int_range(value, default: int, minimum: int, maximum: int) -> int:
@@ -3544,7 +3628,7 @@ def _run_transcribe_youtube_video(tool_args: dict, runtime_state: dict):
             summary += " (truncated)"
         return result, summary
     except Exception as exc:
-        error_text = _format_tool_execution_error(exc)
+        error_text = _format_tool_execution_error(exc, tool_name="transcribe_youtube_video")
         return {"status": "error", "error": error_text}, f"Failed: {error_text}"
 
 
@@ -6693,7 +6777,7 @@ def run_agent_stream(
                         )
                         return {"ok": True, "result": res, "summary": summ, "events": events}
                     except Exception as exc:
-                        return {"ok": False, "error": _format_tool_execution_error(exc)}
+                        return {"ok": False, "error": _format_tool_execution_error(exc, tool_name=s["tool_name"])}
 
                 with ThreadPoolExecutor(
                     max_workers=min(normalized_parallel_tool_limit, len(parallel_slots))
@@ -6711,7 +6795,7 @@ def run_agent_stream(
                         )
                         s["exec_result"] = {"ok": True, "result": res, "summary": summ, "events": events}
                     except Exception as exc:
-                        s["exec_result"] = {"ok": False, "error": _format_tool_execution_error(exc)}
+                        s["exec_result"] = {"ok": False, "error": _format_tool_execution_error(exc, tool_name=s["tool_name"])}
 
             for s in parallel_slots:
                 buffered_events = (
@@ -6781,7 +6865,7 @@ def run_agent_stream(
                         _canvas_mutated_doc_ids.update(tracked_doc_ids)
                         _canvas_mutated_doc_paths.update(tracked_doc_paths)
                 except Exception as exc:
-                    s["exec_result"] = {"ok": False, "error": _format_tool_execution_error(exc)}
+                    s["exec_result"] = {"ok": False, "error": _format_tool_execution_error(exc, tool_name=_tool_name)}
 
         # ---- Phase 3: post-process all slots in original order ----
         for slot in slots:

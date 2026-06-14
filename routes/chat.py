@@ -36,6 +36,7 @@ from services.canvas import (
     get_canvas_runtime_documents,
 )
 from core.config import (
+    CHAT_SUMMARY_MODEL,
     CHAT_SUMMARY_STAGE_AWARE_ENABLED,
     CONVERSATION_MEMORY_ENABLED,
     IMAGE_UPLOADS_DISABLED_FEATURE_ERROR,

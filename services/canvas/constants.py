@@ -43,7 +43,7 @@ class CanvasDocumentNotFoundError(CanvasError):
         super().__init__(msg, document_title=document_path or document_id)
 
 
-class CanvasCapabilityError(CanvasError):
+class CanvasCapabilityError(ValueError, CanvasError):
     """Raised when an operation is not permitted for the document type."""
 
     def __init__(
@@ -72,7 +72,7 @@ class CanvasCapabilityError(CanvasError):
                 "This document is image-backed and does not provide text-addressable lines. "
                 "Switch to a text-extracted document for line-based tools."
             )
-        super().__init__(message, document_title=title)
+        CanvasError.__init__(self, message, document_title=title)
 
 
 class CanvasValidationError(CanvasError):

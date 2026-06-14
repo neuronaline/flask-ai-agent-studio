@@ -1303,6 +1303,13 @@ def build_model_provider_policy(
             "supports_prompt_cache": True,
             "strategy": "implicit",
         }
+    elif provider == OPENROUTER_PROVIDER:
+        tool_choice_fallback_value = "auto"
+        tool_choice_error_signatures = (
+            ("no endpoints found", "tool_choice"),
+            ("tool_choice", "not supported"),
+            ("404", "tool_choice"),
+        )
     elif provider == MINIMAX_PROVIDER:
         # MiniMax uses Anthropic SDK format with thinking support
         supports_native_reasoning_continuation = True
@@ -1841,7 +1848,7 @@ def get_provider_client(provider: str) -> OpenAI | _OpenRouterClientProxy | _Min
         if http_referer:
             default_headers["HTTP-Referer"] = http_referer
         if app_title:
-            default_headers["X-Title"] = app_title
+            default_headers["X-OpenRouter-Title"] = app_title
 
         kwargs: dict[str, Any] = {
             "api_key": (config.OPENROUTER_API_KEY or "").strip(),
@@ -1900,7 +1907,9 @@ def build_model_request_extra_body(
             extra_body["thinking"] = {"type": "enabled"}
             # Map effort levels: xhigh -> max, others -> high
             if reasoning_effort and reasoning_effort != OPENROUTER_REASONING_MODE_DISABLED:
-                effort_mapping = {"xhigh": "max", "minimal": "minimal", "low": "low", "medium": "medium", "high": "high"}
+                # DeepSeek docs: "In thinking mode, for compatibility,
+                # low and medium are mapped to high, and xhigh is mapped to max"
+                effort_mapping = {"xhigh": "max", "minimal": "minimal", "low": "high", "medium": "high", "high": "high"}
                 mapped_effort = effort_mapping.get(reasoning_effort, "high")
                 if reasoning_mode == OPENROUTER_REASONING_MODE_ENABLED:
                     extra_body["reasoning_effort"] = mapped_effort

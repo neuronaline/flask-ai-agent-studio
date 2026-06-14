@@ -104,7 +104,7 @@ def _run_helper_llm_image_analysis(
         }
 
     request_kwargs = apply_model_target_request_options(request_kwargs, target)
-    from activity_service import ActivityTimer, STATUS_OK, STATUS_ERROR, extract_usage_from_response, log_activity_call
+    from services.activity_service import ActivityTimer, STATUS_OK, STATUS_ERROR, extract_usage_from_response, log_activity_call
     _timer = ActivityTimer()
     try:
         with _timer:
@@ -270,7 +270,7 @@ def answer_image_question(
         "temperature": 0.2,
     }
     request_kwargs = apply_model_target_request_options(request_kwargs, target)
-    from activity_service import ActivityTimer, STATUS_OK, STATUS_ERROR, extract_usage_from_response, log_activity_call
+    from services.activity_service import ActivityTimer, STATUS_OK, STATUS_ERROR, extract_usage_from_response, log_activity_call
     _timer = ActivityTimer()
     try:
         with _timer:

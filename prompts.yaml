@@ -6,7 +6,7 @@ system:
     ## Role
 
   role: |
-    You are an AI assistant with access to a comprehensive set of tools for file operations, web search, image analysis, memory management, and more. You make decisions based on conversation state and tool results. When you need information or must perform actions that require tools, use the available tools proactively.
+    You are a tool-using assistant. Make decisions based on conversation state and tool results.
 
   core_directives_header: |
     ## Core Directives
@@ -54,6 +54,30 @@ policies:
 
     guidance: |
       Use for follow-up questions about a stored prior image. Send the question in English. Ask for clarification if multiple earlier images could match.
+
+memory:
+  persona:
+    header: |
+      ## Persona Memory
+    guidance: |
+      Persona memory stores durable patterns about how this persona should behave. Use save_to_persona_memory to persist learned behavioral rules. Use delete_persona_memory_entry to remove outdated entries.
+    intro: |
+      Durable persona-level behavioral patterns learned across conversations.
+  conversation:
+    header: |
+      ## Conversation Memory
+    guidance: |
+      Conversation memory stores task-specific facts within the current conversation scope. Use save_to_conversation_memory to persist task context, goals, and decisions. Use delete_conversation_memory_entry to remove stale entries.
+    intro: |
+      Task-specific facts persisted for this conversation.
+  conversation_priority:
+    header: |
+      ## Conversation Memory Priority
+    guidance: |
+      Recent conversation memory entries take priority over older summaries. When there is a conflict, prefer the most recent entry.
+
+scratchpad_policy_header: |
+  ## Scratchpad Policy
 
 fetch:
   summarization:

@@ -17,6 +17,7 @@ from core.config import (
     SEARCH_MAX_RESULTS,
 )
 from core.db import cache_get, cache_set, get_search_tool_query_limit as load_search_tool_query_limit
+import contextlib as _contextlib
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +134,38 @@ def _validate_resolved_ip_address(address: str) -> None:
         raise socket.gaierror(f"Invalid IP address: {address}")
     if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
         raise socket.gaierror(f"Resolution blocked for non-public address: {address}")
+
+
+@_contextlib.contextmanager
+def _guarded_dns_resolution(enabled: bool = True):
+    """Context manager that patches socket.getaddrinfo for SSRF protection.
+
+    Inside the context, all DNS resolutions are validated against private/
+    reserved IP ranges. The original getaddrinfo is always restored on exit,
+    even if an exception occurs.
+
+    Args:
+        enabled: If False, the context is a no-op (yields without patching).
+    """
+    if not enabled:
+        yield
+        return
+
+    original_getaddrinfo = socket.getaddrinfo
+
+    def guarded_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        result = original_getaddrinfo(host, port, family, type, proto, flags)
+        for entry in result:
+            addr = entry[4][0] if len(entry) > 4 else None
+            if addr:
+                _validate_resolved_ip_address(addr)
+        return result
+
+    socket.getaddrinfo = guarded_getaddrinfo
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
 
 
 # ---------------------------------------------------------------------------

@@ -88,11 +88,18 @@ def _load_prompts() -> dict[str, Any]:
         return _PROMPTS
 
     prompts_path = Path(__file__).parent / "prompts.yaml"
+    project_prompts_path = Path(__file__).parent.parent / "prompts.yaml"
 
     try:
-        with open(prompts_path, encoding="utf-8") as f:
-            _PROMPTS = yaml.safe_load(f) or {}
-        logger.info("Loaded prompts from %s", prompts_path)
+        # Prefer project-root prompts.yaml (sibling to core/), fall back to core/prompts.yaml
+        if project_prompts_path.exists():
+            with open(project_prompts_path, encoding="utf-8") as f:
+                _PROMPTS = yaml.safe_load(f) or {}
+            logger.info("Loaded prompts from %s", project_prompts_path)
+        else:
+            with open(prompts_path, encoding="utf-8") as f:
+                _PROMPTS = yaml.safe_load(f) or {}
+            logger.info("Loaded prompts from %s", prompts_path)
         return _PROMPTS
     except FileNotFoundError:
         logger.warning("prompts.yaml not found at %s, using fallback prompts", prompts_path)

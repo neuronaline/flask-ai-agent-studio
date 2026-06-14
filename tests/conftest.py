@@ -24,6 +24,24 @@ from lib import request_security
 
 from tests.support.mocks import FakeChromaClient, fake_embed_texts
 
+# Ensure `rag_service` can be used as a bare module alias in test patches
+# (e.g. ``patch("rag_service.RAG_ENABLED", ...)``) even though the actual
+# module lives at ``services.rag_service``.
+import services.rag_service as _rag_svc
+sys.modules.setdefault("rag_service", _rag_svc)
+
+# Same alias for ``activity_service`` which lives at ``services.activity_service``.
+import services.activity_service as _act_svc
+sys.modules.setdefault("activity_service", _act_svc)
+
+# Same alias for ``db`` which lives at ``core.db``.
+import core.db as _db_mod
+sys.modules.setdefault("db", _db_mod)
+
+# Reload prompts from the project-root prompts.yaml so tests see the latest prompt texts.
+from core import prompts as _prompts_mod
+_prompts_mod.reload_prompts()
+
 
 @pytest.fixture(autouse=True)
 def test_environment(monkeypatch):
