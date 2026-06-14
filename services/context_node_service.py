@@ -44,6 +44,7 @@ DEFAULT_MODEL_TOKEN_LIMIT = 128_000
 
 # Transient buffer - tool results are stored here temporarily and NOT persisted
 # unless explicitly promoted by AI with keep_alive: true
+_MAX_TRANSIENT_BUFFER_SIZE = 200
 _TRANSIENT_BUFFER: dict[str, dict] = {}
 
 
@@ -157,6 +158,13 @@ class ContextNodeService:
             token_count = self.MAX_NODE_TOKENS
 
         # Store in transient buffer - NOT persisted
+        # Evict oldest entries if buffer exceeds max size
+        if len(_TRANSIENT_BUFFER) >= _MAX_TRANSIENT_BUFFER_SIZE:
+            overflow = len(_TRANSIENT_BUFFER) - _MAX_TRANSIENT_BUFFER_SIZE + 1
+            oldest_keys = sorted(_TRANSIENT_BUFFER, key=lambda k: _TRANSIENT_BUFFER[k].get("created_at", ""))[:overflow]
+            for key in oldest_keys:
+                _TRANSIENT_BUFFER.pop(key, None)
+
         _TRANSIENT_BUFFER[transient_id] = {
             "transient_id": transient_id,
             "tool_name": tool_name,

@@ -125,49 +125,6 @@ def _extract_section_title(paragraph: str) -> str | None:
     return title or None
 
 
-def split_text_into_chunks(
-    text: str, chunk_size: int = DEFAULT_CHUNK_SIZE, overlap: int = DEFAULT_CHUNK_OVERLAP
-) -> list[str]:
-    chunk_size = max(300, int(chunk_size or DEFAULT_CHUNK_SIZE))
-    overlap = max(0, min(int(overlap or DEFAULT_CHUNK_OVERLAP), chunk_size // 2))
-    paragraphs = _paragraphs_from_text(text)
-    if not paragraphs:
-        return []
-
-    chunks: list[str] = []
-    current = ""
-
-    for paragraph in paragraphs:
-        pieces = list(_slice_long_paragraph(paragraph, chunk_size, overlap))
-        for piece in pieces:
-            if not current:
-                current = piece
-                continue
-            candidate = f"{current}\n\n{piece}" if current else piece
-            if len(candidate) <= chunk_size:
-                current = candidate
-                continue
-            chunks.append(current.strip())
-            carry = current[-overlap:].strip() if overlap and len(current) > overlap else ""
-            current = f"{carry}\n\n{piece}".strip() if carry else piece
-            if len(current) > chunk_size:
-                overflow_parts = list(_slice_long_paragraph(current, chunk_size, overlap))
-                chunks.extend(overflow_parts[:-1])
-                current = overflow_parts[-1]
-
-    if current.strip():
-        chunks.append(current.strip())
-
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for chunk in chunks:
-        cleaned = _normalize_whitespace(chunk)
-        if cleaned and cleaned not in seen:
-            seen.add(cleaned)
-            deduped.append(cleaned)
-    return deduped
-
-
 def _build_chunk_id(source_name: str, source_type: str, category: str, text: str) -> str:
     digest = hashlib.sha1(f"{source_name}|{source_type}|{category}|{text}".encode("utf-8")).hexdigest()
     return f"chunk-{digest}"

@@ -96,7 +96,7 @@ RAG_QUERY_POISONING_DENYLIST = {
     "runtime_context",
     "prompt_engineering",
 }
-RAG_QUERY_MIN_INFORMATIVE_TOKEN_COUNT = 2
+_RAG_ALL_CONVERSATIONS_SYNC_KEY = "all_conversations"
 LOGGER = get_logger(__name__)
 
 

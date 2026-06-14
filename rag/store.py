@@ -154,7 +154,7 @@ def _iter_query_collections(
 def _query_collection_rows(collection, query_embedding: list[list[float]], top_k: int, where: dict[str, Any] | None = None) -> list[dict]:
     result = collection.query(
         query_embeddings=query_embedding,
-        n_results=max(1, min(int(top_k or 5), 12)),
+        n_results=max(1, int(top_k or 5)),
         where=where,
         include=["documents", "metadatas", "distances"],
     )
@@ -231,12 +231,6 @@ def upsert_chunks(chunks: list[Chunk]) -> int:
         )
         inserted += len(grouped_items)
     return inserted
-
-
-def _build_where(category: str | None = None) -> dict[str, Any] | None:
-    if not category:
-        return None
-    return {"category": normalize_category(category)}
 
 
 def _coerce_timestamp(value) -> int | None:

@@ -5628,7 +5628,7 @@ def run_agent_stream(
 
         # Also create a context node for the new memory system
         try:
-            from context_node_service import get_context_node_service
+            from services.context_node_service import get_context_node_service
 
             agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
             conversation_id = int(agent_context.get("conversation_id") or 0) or None
@@ -5640,6 +5640,7 @@ def run_agent_stream(
                     result=result,
                     conversation_id=conversation_id,
                     message_id=None,
+                    keep_alive=True,
                 )
         except Exception:
             # Context node creation is best-effort and should not break tool execution
@@ -7028,7 +7029,7 @@ def run_agent_stream(
                         persisted_tool_results.append(storage_entry)
                     # Create context node for new memory system
                     try:
-                        from context_node_service import get_context_node_service
+                        from services.context_node_service import get_context_node_service
 
                         agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
                         conversation_id = int(agent_context.get("conversation_id") or 0) or None
@@ -7040,6 +7041,7 @@ def run_agent_stream(
                                 result=result,
                                 conversation_id=conversation_id,
                                 message_id=None,
+                                keep_alive=True,
                             )
                     except Exception:
                         LOGGER.debug("Context node creation skipped for tool %s", tool_name, exc_info=True)
