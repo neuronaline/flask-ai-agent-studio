@@ -1050,7 +1050,6 @@
             </div>
           </div>
         </section>
-        </section>
 
         <section class="settings-tab-panel" data-settings-panel="knowledge" aria-labelledby="knowledge-tab">
           <div class="settings-page-grid settings-page-grid--two">
@@ -1142,7 +1141,7 @@
             </div>
           </div>
 
-          <div class="settings-page-section-card">
+          <div class="settings-page-section-card settings-page-section-card--knowledge-runtime">
             <div class="settings-page-section-card__header">
               <div>
                 <span class="settings-section-kicker">Knowledge runtime</span>
@@ -1150,7 +1149,7 @@
               </div>
                 <p>Feature toggles and ingestion defaults for memory, OCR, RAG, and transcripts.</p>
               </div>
-              <div class="settings-subsection-grid settings-subsection-grid--three">
+              <div class="settings-subsection-grid settings-subsection-grid--three settings-subsection-grid--knowledge-runtime">
                 <section class="settings-subsection settings-subsection--compact">
                   <div class="settings-subsection__header">
                     <span class="settings-subsection__eyebrow">Core features</span>
@@ -1217,7 +1216,7 @@
         </section>
 
         <section class="settings-tab-panel" data-settings-panel="activity" aria-labelledby="activity-tab" hidden>
-          <div class="settings-page-grid settings-page-grid--two">
+          <div class="settings-page-grid settings-page-grid--activity">
             <section class="settings-page-section-card settings-page-section-card--activity-log">
               <div class="settings-page-section-card__header">
                 <div>
@@ -1228,35 +1227,43 @@
               </div>
 
               <div class="activity-toolbar-row" role="group" aria-label="Activity filters">
-                <label class="settings-label" for="activity-filter-conversation">Conversation</label>
-                <select id="activity-filter-conversation" class="settings-select activity-filter-select activity-filter-select--wide">
-                  <option value="">All chats</option>
-                </select>
+                <div class="activity-filter-field">
+                  <label class="settings-label" for="activity-filter-conversation">Conversation</label>
+                  <select id="activity-filter-conversation" class="settings-select activity-filter-select activity-filter-select--wide">
+                    <option value="">All chats</option>
+                  </select>
+                </div>
 
-                <label class="settings-label" for="activity-filter-provider">Provider</label>
-                <select id="activity-filter-provider" class="settings-select activity-filter-select">
-                  <option value="">All</option>
-                </select>
+                <div class="activity-filter-field">
+                  <label class="settings-label" for="activity-filter-provider">Provider</label>
+                  <select id="activity-filter-provider" class="settings-select activity-filter-select">
+                    <option value="">All</option>
+                  </select>
+                </div>
 
-                <label class="settings-label" for="activity-filter-operation">Operation</label>
-                <select id="activity-filter-operation" class="settings-select activity-filter-select">
-                  <option value="">All</option>
-                  <option value="agent_step">Chat / Agent</option>
-                  <option value="fetch_summarize">Fetch Summarize</option>
-                  <option value="prune">Prune</option>
-                  <option value="image_analysis">Image Analysis</option>
-                  <option value="image_question">Image Question</option>
-                  <option value="summarize_reformat">Summarize Reformat</option>
-                </select>
+                <div class="activity-filter-field">
+                  <label class="settings-label" for="activity-filter-operation">Operation</label>
+                  <select id="activity-filter-operation" class="settings-select activity-filter-select">
+                    <option value="">All</option>
+                    <option value="agent_step">Chat / Agent</option>
+                    <option value="fetch_summarize">Fetch Summarize</option>
+                    <option value="prune">Prune</option>
+                    <option value="image_analysis">Image Analysis</option>
+                    <option value="image_question">Image Question</option>
+                    <option value="summarize_reformat">Summarize Reformat</option>
+                  </select>
+                </div>
 
-                <label class="settings-label" for="activity-filter-status">Status</label>
-                <select id="activity-filter-status" class="settings-select activity-filter-select">
-                  <option value="">All</option>
-                  <option value="ok">OK</option>
-                  <option value="error">Error</option>
-                  <option value="stream_error">Stream Error</option>
-                  <option value="cancelled">Cancelled</option>
-                </select>
+                <div class="activity-filter-field">
+                  <label class="settings-label" for="activity-filter-status">Status</label>
+                  <select id="activity-filter-status" class="settings-select activity-filter-select">
+                    <option value="">All</option>
+                    <option value="ok">OK</option>
+                    <option value="error">Error</option>
+                    <option value="stream_error">Stream Error</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                </div>
 
                 <div class="settings-inline-actions activity-toolbar-actions">
                   <button class="btn-primary" id="activity-filter-apply-btn" type="button">Apply</button>

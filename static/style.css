@@ -6918,10 +6918,24 @@ kbd {
   align-items: start;
 }
 
+.settings-page-grid--activity {
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+.settings-page-section-card--knowledge-runtime .settings-subsection-grid--knowledge-runtime {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
 body[data-page="settings"] .settings-page-grid--two,
 body[data-page="settings"] .settings-page-grid--three,
+body[data-page="settings"] .settings-page-grid--activity,
 body[data-page="settings"] .settings-subsection-grid--two,
 body[data-page="settings"] .settings-subsection-grid--three,
+body[data-page="settings"] .settings-subsection-grid--knowledge-runtime,
 body[data-page="settings"] .tool-toggles--page,
 body[data-page="settings"] .settings-inline-grid,
 body[data-page="settings"] .rag-settings-grid {
@@ -6933,7 +6947,7 @@ body[data-page="settings"] .settings-tab-panels,
 body[data-page="settings"] .settings-tab-panel,
 body[data-page="settings"] .settings-page-grid,
 body[data-page="settings"] .settings-page-stack {
-  gap: 12px;
+  gap: 16px;
 }
 
 body[data-page="settings"] .settings-page-shell {
@@ -6959,12 +6973,12 @@ body[data-page="settings"] .settings-page-section-card {
 body[data-page="settings"] .settings-page-sidebar__intro,
 body[data-page="settings"] .settings-page-toolbar,
 body[data-page="settings"] .settings-page-section-card {
-  padding: 14px;
-  gap: 10px;
+  padding: 18px;
+  gap: 14px;
 }
 
 body[data-page="settings"] .settings-page-section-card__header {
-  gap: 8px;
+  gap: 10px;
   padding-bottom: 0;
 }
 
@@ -6975,7 +6989,7 @@ body[data-page="settings"] .settings-page-toolbar p {
 }
 
 body[data-page="settings"] .settings-subsection-grid {
-  gap: 12px;
+  gap: 14px;
 }
 
 body[data-page="settings"] .settings-subsection,
@@ -6983,17 +6997,17 @@ body[data-page="settings"] .settings-toggle-panel,
 body[data-page="settings"] .settings-conditional-group,
 body[data-page="settings"] .tool-permission-section,
 body[data-page="settings"] .rag-setting-group {
-  padding: 10px;
-  border-radius: 10px;
+  padding: 14px;
+  border-radius: 12px;
 }
 
 body[data-page="settings"] .settings-subsection {
-  gap: 8px;
+  gap: 10px;
 }
 
 body[data-page="settings"] .settings-subsection--compact {
-  padding: 10px;
-  gap: 8px;
+  padding: 14px;
+  gap: 10px;
 }
 
 body[data-page="settings"] .settings-callout,
@@ -7464,11 +7478,16 @@ body[data-page="settings"] .settings-stat-card {
 }
 
 .activity-toolbar-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.activity-filter-field {
   display: flex;
-  align-items: flex-end;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  margin-bottom: 0.75rem;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .activity-toolbar-row .settings-label {
@@ -7476,23 +7495,29 @@ body[data-page="settings"] .settings-stat-card {
 }
 
 .activity-toolbar-actions {
-  margin-left: auto;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  padding-top: 4px;
 }
 
 .activity-filter-select {
-  min-width: 120px;
+  min-width: 0;
+  width: 100%;
 }
 
 .activity-filter-select--wide {
-  min-width: 220px;
+  min-width: 0;
 }
 
 #activity-filter-operation.activity-filter-select {
-  min-width: 140px;
+  min-width: 0;
 }
 
 #activity-filter-status.activity-filter-select {
-  min-width: 100px;
+  min-width: 0;
 }
 
 .activity-list-root {
@@ -8016,8 +8041,10 @@ body.login-page-body {
 @media (max-width: 960px) {
   .settings-page-grid--two,
   .settings-page-grid--three,
+  .settings-page-grid--activity,
   .settings-subsection-grid--two,
   .settings-subsection-grid--three,
+  .settings-subsection-grid--knowledge-runtime,
   .tool-toggles--page,
   .settings-inline-grid,
   .rag-settings-grid {
@@ -8050,6 +8077,10 @@ body.login-page-body {
 
   .settings-page-grid--model-preferences {
     grid-template-columns: 1fr;
+  }
+
+  .activity-toolbar-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -8107,6 +8138,19 @@ body.login-page-body {
 
   .kb-actions-row__buttons > .btn-ghost,
   .kb-actions-row__buttons > .btn-primary {
+    width: 100%;
+  }
+
+  .activity-toolbar-row {
+    grid-template-columns: 1fr;
+  }
+
+  .activity-toolbar-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .activity-toolbar-actions > button {
     width: 100%;
   }
 
