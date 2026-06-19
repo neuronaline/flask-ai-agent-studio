@@ -16,7 +16,7 @@ from core.config import (
     DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
     SEARCH_MAX_RESULTS,
 )
-from core.db import cache_get, cache_set, get_search_tool_query_limit as load_search_tool_query_limit
+from core.db import cache_get, cache_set, get_fetch_html_converter_mode, get_search_tool_query_limit as load_search_tool_query_limit
 import contextlib as _contextlib
 
 
@@ -593,7 +593,7 @@ def fetch_url_tool(
         return {"url": url, "error": reason, "content": ""}
 
     normalized_content_max_chars = _normalize_fetch_content_max_chars(content_max_chars)
-    fetch_html_converter_mode = "hybrid"
+    fetch_html_converter_mode = get_fetch_html_converter_mode()
 
     # Unified cache key: includes content_max_chars, converter mode, and compress flag
     digest = hashlib.md5(

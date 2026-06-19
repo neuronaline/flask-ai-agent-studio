@@ -12,6 +12,7 @@ from core.config import (
     CONTENT_MAX_CHARS,
     DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
+    FETCH_HTML_CONVERTER_MODES,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     OCR_SUPPORTED_PROVIDERS,
@@ -634,7 +635,7 @@ def register_page_routes(app) -> None:
             sub_agent_tool_sections=build_tool_permission_sections(),
             auth_enabled=is_login_pin_enabled(),
             page_lang=_resolve_page_lang(),
-            settings_js_version=_static_asset_version(app, "settings.js"),
+            settings_js_version=_static_asset_version(app, "settings/index.js"),
         )
 
     @app.route("/api/settings", methods=["GET"])
@@ -812,6 +813,7 @@ def register_page_routes(app) -> None:
         rag_query_expansion_max_variants_raw = data.get("rag_query_expansion_max_variants")
         fetch_raw_max_text_chars_raw = data.get("fetch_raw_max_text_chars")
         fetch_summary_max_chars_raw = data.get("fetch_summary_max_chars")
+        fetch_html_converter_mode_raw = data.get("fetch_html_converter_mode")
         scratchpad = data.get("scratchpad")
         scratchpad_sections_raw = data.get("scratchpad_sections")
         sub_agent_max_steps_raw = data.get("sub_agent_max_steps")
@@ -898,6 +900,7 @@ def register_page_routes(app) -> None:
             rag_query_expansion_max_variants_raw,
             fetch_raw_max_text_chars_raw,
             fetch_summary_max_chars_raw,
+            fetch_html_converter_mode_raw,
             sub_agent_max_steps_raw,
             sub_agent_timeout_seconds_raw,
             sub_agent_retry_attempts_raw,
@@ -1305,6 +1308,14 @@ def register_page_routes(app) -> None:
             if not (500 <= fetch_summary_max_chars <= CONTENT_MAX_CHARS):
                 return jsonify({"error": f"fetch_summary_max_chars must be between 500 and {CONTENT_MAX_CHARS}."}), 400
             settings["fetch_summary_max_chars"] = str(fetch_summary_max_chars)
+
+        if fetch_html_converter_mode_raw is not None:
+            normalized_converter_mode = str(fetch_html_converter_mode_raw).strip().lower()
+            if normalized_converter_mode not in FETCH_HTML_CONVERTER_MODES:
+                return jsonify(
+                    {"error": f"fetch_html_converter_mode must be one of: {', '.join(sorted(FETCH_HTML_CONVERTER_MODES))}."}
+                ), 400
+            settings["fetch_html_converter_mode"] = normalized_converter_mode
 
         effective_rag_enabled = get_rag_enabled(settings)
 

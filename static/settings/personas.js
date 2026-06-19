@@ -583,7 +583,7 @@
   defaultPersonaEl?.addEventListener("change", () => { if (typeof window.markDirty === "function") markDirty(); });
   generalInstructionsTemplateApplyBtn?.addEventListener("click", () => applyBehaviorTemplate(generalInstructionsTemplateSelectEl, generalInstructionsEl, window.__settingsCore?.GENERAL_INSTRUCTION_TEMPLATES || []));
   aiPersonalityTemplateApplyBtn?.addEventListener("click", () => applyBehaviorTemplate(aiPersonalityTemplateSelectEl, aiPersonalityEl, window.__settingsCore?.AI_PERSONALITY_TEMPLATES || []));
-  openPersonasTabBtn?.addEventListener("click", () => { if (typeof activateTab === "function") activateTab("personas"); });
+  openPersonasTabBtn?.addEventListener("click", () => window.__settingsTabs?.activateTab?.("personas"));
   personaNewBtn?.addEventListener("click", () => {
     if (hasUnsavedPersonaChanges && !window.confirm("Discard unsaved persona changes?")) return;
     selectPersonaForEditing(null);

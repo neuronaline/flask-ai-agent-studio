@@ -450,7 +450,7 @@
       rag_enabled: Boolean(ragEnabledEl?.checked),
       youtube_transcripts_enabled: Boolean(youtubeTranscriptsEnabledEl?.checked),
       chat_summary_model: String(chatSummaryModelEl?.value || ""),
-      rag_chunk_size: readNumericSetting(ragChunkSizeEl, 1800, { allowZero: false, min: 100, max: 8000 }),
+      rag_chunk_size: readNumericSetting(ragChunkSizeEl, 1800, { allowZero: false, min: 300, max: 100000 }),
       rag_chunk_overlap: readNumericSetting(ragChunkOverlapEl, 250, { min: 0, max: 4000 }),
       rag_max_chunks_per_source: readNumericSetting(ragMaxChunksPerSourceEl, 2, { allowZero: false, min: 1, max: 20 }),
       rag_search_top_k: readNumericSetting(ragSearchTopKEl, 5, { allowZero: false, min: 1, max: 50 }),

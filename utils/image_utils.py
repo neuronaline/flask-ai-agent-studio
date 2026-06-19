@@ -6,6 +6,7 @@ import re
 from io import BytesIO
 
 from core.config import IMAGE_ALLOWED_MIME_TYPES, IMAGE_MAX_BYTES
+from core.prompts import get_prompt
 
 REMOTE_IMAGE_MAX_SIDE = 1280
 
@@ -71,31 +72,11 @@ def normalize_freeform_answer_text(raw_text: str) -> str:
 
 
 def build_image_analysis_prompt(*, user_text: str = "", ocr_hint: str = "") -> str:
-    prompt = (
-        "Analyze the image for a text-first chat assistant. Return strict JSON with exactly these keys: "
-        "vision_summary, key_points, assistant_guidance. "
-        "vision_summary: a dense 2-4 sentence explanation in English that states what the image is, "
-        "what the main regions or components are, and which visible relationships, states, or values matter most. "
-        "If the image is a UI or screenshot, explain the screen's likely purpose, major panels, active selections, "
-        "warnings, prices, totals, statuses, or controls that stand out. "
-        "If the image is a chart, table, or document, explain what is being compared or organized and the standout "
-        "values, structure, or trends. "
-        "key_points: an array of 4-6 short English bullets with the most relevant observations, labels, values, "
-        "warnings, selections, or layout clues. "
-        "assistant_guidance: one short English sentence telling another LLM which cues from this analysis should "
-        "drive the final answer. "
-        "Do not transcribe visible text verbatim into vision_summary unless it is essential for understanding the image, "
-        "because OCR handles raw text separately. "
-        "Be specific and concrete. Avoid vague phrases like 'some interface' or 'various items'. "
-        "Return JSON only."
-    )
+    prompt = get_prompt("image.analysis.base_prompt").rstrip()
     if ocr_hint:
-        prompt += (
-            f" OCR already extracted likely text cues: {ocr_hint[:1500]}. "
-            "Use them to interpret structure, emphasis, and relationships, but do not simply repeat them."
-        )
+        prompt += get_prompt("image.analysis.ocr_hint_suffix").format(ocr_hint=ocr_hint[:1500])
     if user_text:
-        prompt += f" The user's current request is: {user_text.strip()}"
+        prompt += get_prompt("image.analysis.user_text_suffix").format(user_text=user_text.strip())
     return prompt
 
 
@@ -125,18 +106,16 @@ def normalize_image_analysis(raw_analysis: dict, fallback_text: str = "") -> dic
         if fallback_text:
             normalized["vision_summary"] = fallback_text.strip()[:500]
         elif normalized["ocr_text"]:
-            normalized["vision_summary"] = "Readable text was detected in the image and added to the context."
+            normalized["vision_summary"] = get_prompt("image.analysis.fallback_vision_summary")
 
     has_visual_context = bool(raw_summary or normalized["key_points"] or fallback_text)
     if not normalized["assistant_guidance"]:
         if normalized["ocr_text"] and has_visual_context:
-            normalized["assistant_guidance"] = (
-                "Use the extracted OCR text as the primary image context and the visual summary for non-text cues when answering the user."
-            )
+            normalized["assistant_guidance"] = get_prompt("image.analysis.fallback_guidance_ocr_visual")
         elif normalized["ocr_text"]:
-            normalized["assistant_guidance"] = "Use the extracted OCR text as the primary image context when answering the user."
+            normalized["assistant_guidance"] = get_prompt("image.analysis.fallback_guidance_ocr")
         elif normalized["vision_summary"]:
-            normalized["assistant_guidance"] = "Use the visual summary as the primary image context when answering the user."
+            normalized["assistant_guidance"] = get_prompt("image.analysis.fallback_guidance_visual")
 
     return normalized
 

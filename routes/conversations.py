@@ -100,6 +100,7 @@ from lib.model_registry import (
 )
 
 from rag import delete_source as rag_delete_source
+from core.prompts import get_prompt
 from services.rag_service import (
     delete_rag_document_record,
     ensure_supported_rag_sources,
@@ -408,13 +409,7 @@ def _generate_upload_metadata_suggestion(
     prompt = [
         {
             "role": "system",
-            "content": (
-                "You generate concise metadata for a knowledge base upload. "
-                "Return ONLY valid JSON with keys title and description. "
-                "Title must be 3-8 words, specific, and have no trailing punctuation. "
-                "Description must be 1-2 sentences, under 280 characters, and explain what the document is useful for. "
-                "Match the document language when clear. Do not mention that you are an AI."
-            ),
+            "content": get_prompt("upload_metadata.system_prompt"),
         },
         {
             "role": "user",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 
 from core.config import IMAGE_UPLOADS_DISABLED_FEATURE_ERROR, IMAGE_UPLOADS_ENABLED, OCR_ENABLED
+from core.prompts import get_prompt
 from utils.image_utils import (
     build_image_analysis_prompt,
     extract_json_object,
@@ -152,7 +153,7 @@ def _prepare_direct_multimodal_analysis(model_id: str, settings: dict | None = N
     return normalize_image_analysis(
         {
             "analysis_method": "multimodal",
-            "assistant_guidance": "The original image will be attached directly to the active multimodal chat model.",
+            "assistant_guidance": get_prompt("image.analysis.multimodal_assistant_guidance"),
         }
     )
 
@@ -244,9 +245,9 @@ def answer_image_question(
     key_points = analysis.get("key_points") if isinstance(analysis.get("key_points"), list) else []
 
     prompt_parts = [
-        "You are answering a follow-up question about a previously uploaded image.",
-        "Use the image as the primary source of truth. Any stored OCR or summary is hint-only context.",
-        "Always answer in English.",
+        get_prompt("image.followup.intro"),
+        get_prompt("image.followup.source_truth"),
+        get_prompt("image.followup.language"),
         f"User question: {normalized_question}",
     ]
     if analysis_method:
@@ -260,7 +261,7 @@ def answer_image_question(
     if ocr_text:
         prompt_parts.append(f"Stored OCR hint: {ocr_text[:1500]}")
     prompt_parts.append(
-        "Answer directly in English in 1-3 short paragraphs. If a detail is unreadable, say so briefly instead of guessing. Do not return JSON."
+        get_prompt("image.followup.answer_footer")
     )
 
     target = resolve_model_target(helper_model_id, settings)

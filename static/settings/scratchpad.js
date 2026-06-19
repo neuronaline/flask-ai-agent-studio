@@ -157,7 +157,6 @@
       if (typeof window.markDirty === "function") markDirty();
       updateScratchpadSectionCount(sectionId);
       updateScratchpadCount();
-      if (typeof syncOverviewStats === "function") syncOverviewStats();
     });
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
@@ -171,7 +170,6 @@
       }
       updateScratchpadSectionCount(sectionId);
       updateScratchpadCount();
-      if (typeof syncOverviewStats === "function") syncOverviewStats();
       if (typeof window.markDirty === "function") markDirty();
     });
     row.append(input, removeBtn);
@@ -245,7 +243,6 @@
       scratchpadListEl.append(createScratchpadSectionCard(section, notes, { editable }));
     });
     updateScratchpadCount();
-    if (typeof syncOverviewStats === "function") syncOverviewStats();
   }
 
   function addScratchpadNote(sectionId = DEFAULT_SCRATCHPAD_SECTION_ID, note = "") {
@@ -260,11 +257,10 @@
     row.querySelector(".scratchpad-note-input")?.focus();
     updateScratchpadSectionCount(sectionId);
     updateScratchpadCount();
-    if (typeof syncOverviewStats === "function") syncOverviewStats();
     if (typeof window.markDirty === "function") markDirty();
   }
 
-  // ─── Event listeners ──────────────────────────────────────────────────────────
+  // ─── Event listeners
   scratchpadAddBtn?.addEventListener("click", () => addScratchpadNote());
 
   // ─── Export for use by settings.js core ──────────────────────────────────────

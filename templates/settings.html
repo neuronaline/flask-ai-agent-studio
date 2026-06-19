@@ -182,7 +182,7 @@
                     <span class="settings-subsection__eyebrow">Behavior</span>
                     <h4 class="settings-subsection__title">General instructions</h4>
                   </div>
-                  <label class="settings-label" for="persona-name-input">Instructions</label>
+                  <label class="settings-label" for="general-instructions-input">Instructions</label>
                   <textarea id="general-instructions-input" rows="5" placeholder="Example: Keep answers concise, state assumptions clearly, and use bullets only when they improve scanning."></textarea>
                   <div class="settings-inline-actions">
                     <select id="general-instructions-template-select" class="settings-select settings-select--compact">
@@ -336,6 +336,7 @@
                   </div>
                   <div class="settings-inline-actions">
                     <button class="btn-primary" id="add-custom-model-btn" type="button">Add OpenRouter model</button>
+                    <button class="btn-ghost" id="custom-model-cancel-edit-btn" type="button" hidden>Cancel edit</button>
                     <span id="custom-model-status" class="settings-status" data-tone="muted">No pending model changes</span>
                   </div>
                   <p class="settings-copy">You can add the same base model more than once if the reasoning mode, provider route, or capability flags differ.</p>
@@ -389,6 +390,27 @@
                 </section>
                 <section class="settings-subsection settings-subsection--compact">
                   <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Preferred model</span>
+                    <h4 class="settings-subsection__title">Fetch summarize</h4>
+                  </div>
+                  <select id="fetch-summarize-model-preference-select"></select>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Preferred model</span>
+                    <h4 class="settings-subsection__title">Fix text</h4>
+                  </div>
+                  <select id="fix-text-model-preference-select"></select>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Preferred model</span>
+                    <h4 class="settings-subsection__title">Upload metadata</h4>
+                  </div>
+                  <select id="upload-metadata-model-preference-select"></select>
+                </section>
+                <section class="settings-subsection settings-subsection--compact">
+                  <div class="settings-subsection__header">
                     <span class="settings-subsection__eyebrow">Runtime fallback</span>
                     <h4 class="settings-subsection__title">Chat summary model <span class="settings-restart-badge">Restart</span></h4>
                   </div>
@@ -409,6 +431,51 @@
                   <div id="summary-model-fallback-list" class="model-management-list"></div>
                   <div class="settings-inline-actions">
                     <button class="btn-ghost" id="summary-model-fallback-add-btn" type="button">Add fallback model</button>
+                  </div>
+                </div>
+              </details>
+              <details class="settings-collapsible">
+                <summary class="settings-collapsible__summary">
+                  <div>
+                    <span class="settings-subsection__eyebrow">Advanced routing</span>
+                    <strong>Fetch summarize fallback order</strong>
+                  </div>
+                  <span class="settings-collapsible__meta">Open only if you need explicit recovery order.</span>
+                </summary>
+                <div class="settings-collapsible__content">
+                  <div id="fetch-summarize-model-fallback-list" class="model-management-list"></div>
+                  <div class="settings-inline-actions">
+                    <button class="btn-ghost" id="fetch-summarize-model-fallback-add-btn" type="button">Add fallback model</button>
+                  </div>
+                </div>
+              </details>
+              <details class="settings-collapsible">
+                <summary class="settings-collapsible__summary">
+                  <div>
+                    <span class="settings-subsection__eyebrow">Advanced routing</span>
+                    <strong>Fix text fallback order</strong>
+                  </div>
+                  <span class="settings-collapsible__meta">Open only if you need explicit recovery order.</span>
+                </summary>
+                <div class="settings-collapsible__content">
+                  <div id="fix-text-model-fallback-list" class="model-management-list"></div>
+                  <div class="settings-inline-actions">
+                    <button class="btn-ghost" id="fix-text-model-fallback-add-btn" type="button">Add fallback model</button>
+                  </div>
+                </div>
+              </details>
+              <details class="settings-collapsible">
+                <summary class="settings-collapsible__summary">
+                  <div>
+                    <span class="settings-subsection__eyebrow">Advanced routing</span>
+                    <strong>Upload metadata fallback order</strong>
+                  </div>
+                  <span class="settings-collapsible__meta">Open only if you need explicit recovery order.</span>
+                </summary>
+                <div class="settings-collapsible__content">
+                  <div id="upload-metadata-model-fallback-list" class="model-management-list"></div>
+                  <div class="settings-inline-actions">
+                    <button class="btn-ghost" id="upload-metadata-model-fallback-add-btn" type="button">Add fallback model</button>
                   </div>
                 </div>
               </details>
@@ -922,6 +989,21 @@
                     <span>Auto-open created documents</span>
                   </label>
                 </div>
+                <details class="settings-collapsible">
+                  <summary class="settings-collapsible__summary">
+                    <div>
+                      <span class="settings-subsection__eyebrow">Advanced routing</span>
+                      <strong>Sub-agent fallback order</strong>
+                    </div>
+                    <span class="settings-collapsible__meta">Open only if you need explicit recovery order.</span>
+                  </summary>
+                  <div class="settings-collapsible__content">
+                    <div id="sub-agent-model-fallback-list" class="model-management-list"></div>
+                    <div class="settings-inline-actions">
+                      <button class="btn-ghost" id="sub-agent-model-fallback-add-btn" type="button">Add fallback model</button>
+                    </div>
+                  </div>
+                </details>
               </div>
             </div>
 
@@ -1179,7 +1261,7 @@
                   </summary>
                   <div class="settings-collapsible__content">
                     <label class="settings-label" for="rag-chunk-size-input">Chunk size</label>
-                    <input type="number" class="settings-number" id="rag-chunk-size-input" min="300" max="1000000" value="1800" />
+                    <input type="number" class="settings-number" id="rag-chunk-size-input" min="300" max="100000" value="1800" />
                     <label class="settings-label" for="rag-chunk-overlap-input">Chunk overlap</label>
                     <input type="number" class="settings-number" id="rag-chunk-overlap-input" min="0" max="4000" value="250" />
                     <label class="settings-label" for="rag-max-chunks-per-source-input">Max chunks per source</label>
@@ -1206,10 +1288,10 @@
                     <span class="settings-subsection__eyebrow">Fetch storage</span>
                     <h4 class="settings-subsection__title">Persisted text caps</h4>
                   </div>
-                  <label class="settings-label" for="fetch-raw-max-text-chars-input">Raw fetch (1000–1M chars)</label>
-                  <input type="number" class="settings-number" id="fetch-raw-max-text-chars-input" min="1000" max="1000000" value="24000" />
-                  <label class="settings-label" for="fetch-summary-max-chars-input">Summary memory (500–1M chars)</label>
-                  <input type="number" class="settings-number" id="fetch-summary-max-chars-input" min="500" max="1000000" value="8000" />
+                  <label class="settings-label" for="fetch-raw-max-text-chars-input">Raw fetch (1000–100K chars)</label>
+                  <input type="number" class="settings-number" id="fetch-raw-max-text-chars-input" min="1000" max="100000" value="24000" />
+                  <label class="settings-label" for="fetch-summary-max-chars-input">Summary memory (500–100K chars)</label>
+                  <input type="number" class="settings-number" id="fetch-summary-max-chars-input" min="500" max="100000" value="8000" />
                 </section>
               </div>
           </div>

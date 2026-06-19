@@ -145,16 +145,33 @@ from services.video_transcript_service import (
     transcribe_youtube_video,
 )
 
-FINAL_ANSWER_ERROR_TEXT = "The model returned an invalid tool instruction and no final answer could be produced."
-FINAL_ANSWER_MISSING_TEXT = "The model did not produce a final answer in assistant content."
-CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT = (
-    "Context window is full and cannot be compacted further. "
-    "Try starting a new conversation, disabling RAG or large canvas content, or reducing the request size."
+FINAL_ANSWER_ERROR_TEXT_FALLBACK = "The model returned an invalid tool instruction and no final answer could be produced."
+FINAL_ANSWER_MISSING_TEXT_FALLBACK = "The model did not produce a final answer in assistant content."
+CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT_FALLBACK = "Context window is full and cannot be compacted further. Try starting a new conversation, disabling RAG or large canvas content, or reducing the request size."
+USER_CANCELLED_ERROR_TEXT_FALLBACK = "Cancelled by user."
+MISSING_FINAL_ANSWER_MARKER_FALLBACK = "[INSTRUCTION: MISSING FINAL ANSWER"
+TOOL_EXECUTION_RESULTS_MARKER_FALLBACK = "[TOOL EXECUTION RESULTS]"
+REASONING_REPLAY_MARKER_FALLBACK = "[AGENT REASONING CONTEXT]"
+AGENT_WORKING_MEMORY_MARKER_FALLBACK = "[AGENT WORKING MEMORY]"
+
+
+def _get_prompt_constant(key: str, fallback: str) -> str:
+    """Resolve a prompt constant, respecting runtime reloads."""
+    return get_prompt(key, fallback)
+
+
+AGENT_WORKING_MEMORY_MARKER = _get_prompt_constant(
+    "agent.constants.agent_working_memory_marker", AGENT_WORKING_MEMORY_MARKER_FALLBACK
 )
-USER_CANCELLED_ERROR_TEXT = "Cancelled by user."
-MISSING_FINAL_ANSWER_MARKER = "[INSTRUCTION: MISSING FINAL ANSWER"
-TOOL_EXECUTION_RESULTS_MARKER = "[TOOL EXECUTION RESULTS]"
-REASONING_REPLAY_MARKER = "[AGENT REASONING CONTEXT]"
+
+FINAL_ANSWER_ERROR_TEXT = _get_prompt_constant("agent.constants.final_answer_error", FINAL_ANSWER_ERROR_TEXT_FALLBACK)
+FINAL_ANSWER_MISSING_TEXT = _get_prompt_constant("agent.constants.final_answer_missing", FINAL_ANSWER_MISSING_TEXT_FALLBACK)
+CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT = _get_prompt_constant("agent.constants.context_overflow_recovery", CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT_FALLBACK)
+USER_CANCELLED_ERROR_TEXT = _get_prompt_constant("agent.constants.user_cancelled", USER_CANCELLED_ERROR_TEXT_FALLBACK)
+MISSING_FINAL_ANSWER_MARKER = _get_prompt_constant("agent.constants.missing_final_answer_marker", MISSING_FINAL_ANSWER_MARKER_FALLBACK)
+TOOL_EXECUTION_RESULTS_MARKER = _get_prompt_constant("agent.constants.tool_execution_results_marker", TOOL_EXECUTION_RESULTS_MARKER_FALLBACK)
+REASONING_REPLAY_MARKER = _get_prompt_constant("agent.constants.reasoning_replay_marker", REASONING_REPLAY_MARKER_FALLBACK)
+
 MAX_REASONING_REPLAY_ENTRIES = 2
 MAX_REASONING_REPLAY_CHARS = 4_000
 MAX_REASONING_REPLAY_TOTAL_CHARS = 10_000
@@ -511,7 +528,7 @@ def _estimate_message_breakdown(message: dict) -> dict[str, int]:
     if role == "system":
         if content.startswith(TOOL_EXECUTION_RESULTS_MARKER):
             return {"tool_results": content_tokens}
-        if content.startswith(REASONING_REPLAY_MARKER) or content.startswith("[AGENT WORKING MEMORY]"):
+        if content.startswith(REASONING_REPLAY_MARKER) or content.startswith(AGENT_WORKING_MEMORY_MARKER):
             return {"internal_state": content_tokens}
         return {"core_instructions": content_tokens}
     return {"core_instructions": content_tokens} if content_tokens > 0 else {}
@@ -3305,30 +3322,21 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
 def _build_final_answer_instruction() -> dict:
     return {
         "role": "system",
-        "content": (
-            "[FINAL ANSWER REQUIRED]\n\n"
-            "Tool budget exhausted. Respond with the best final answer using available context.\n"
-            "Do not claim completion unless confirmed by tool results. "
-            "If work is unfinished, say so.\n"
-            "Begin your answer directly. No step-by-step recap."
-        ),
+        "content": get_prompt("agent.final_answer.instruction"),
     }
 
 
 def _build_minimal_final_answer_instruction() -> dict:
     return {
         "role": "system",
-        "content": "[FINAL ANSWER ONLY] No tools.",
+        "content": get_prompt("agent.minimal_final_answer.instruction"),
     }
 
 
 def _build_missing_final_answer_instruction() -> dict:
     return {
         "role": "system",
-        "content": (
-            "[FINAL ANSWER REQUIRED]\n\n"
-            "No final answer in assistant content yet. Respond now using assistant content only."
-        ),
+        "content": get_prompt("agent.missing_final_answer.instruction"),
     }
 
 
@@ -3342,9 +3350,7 @@ def _build_tool_execution_result_message(transcript_results: list[dict]) -> dict
 
     parts = [
         f"{TOOL_EXECUTION_RESULTS_MARKER}\n",
-        "**Fetch Guidance**: Use the retrieved page content from this step as the source of truth. "
-        "This guidance is step-local, not a blanket rule for later turns. "
-        "If the user later asks you to verify or refresh, call fetch_url again.\n",
+        get_prompt("agent.tool_execution.fetch_guidance") + "\n",
     ]
     for item in transcript_results:
         tool_name = str(item.get("tool_name") or "unknown")
@@ -3945,23 +3951,7 @@ def _build_internal_title_generation_prompt(source_text: str) -> list[dict]:
     return [
         {
             "role": "system",
-            "content": (
-                "You generate a compact conversation title from the user's message. "
-                "Return only a noun phrase or short topic label, not a sentence.\n\n"
-                "Rules:\n"
-                "- Return ONLY the title — nothing else.\n"
-                "- Use 2-5 words when possible; 1 word is allowed if it is specific.\n"
-                "- Match the user's language when clear.\n"
-                "- Prefer the concrete topic over generic labels like 'Greeting', 'Question', 'Canvas', or 'Completed'.\n"
-                "- Do NOT answer, explain, apologize, greet, or mention that you are generating a title.\n"
-                "- No quotes, markdown, emojis, or punctuation at the end.\n"
-                "- If the topic is unclear, return exactly: New Chat\n\n"
-                "Examples:\n"
-                "User: 'How do I sort a list in Python?' → Python List Sorting\n"
-                "User: 'Hello, how are you?' → Hello\n"
-                "User: 'What is the capital of France?' → Capital of France\n"
-                "User: 'What's the weather like today?' → Weather Forecast"
-            ),
+            "content": get_prompt("agent.title_generation.system_prompt"),
         },
         {
             "role": "user",
@@ -5165,16 +5155,16 @@ def _build_reasoning_replay_instruction(reasoning_state: dict, current_goal: str
 
     parts = [REASONING_REPLAY_MARKER]
     parts.append(
-        "This is a compact memory of your own earlier thinking in the current run. Read it as a working note, not as new user input."
+        get_prompt("agent.reasoning_replay.intro")
     )
     parts.append(
-        "These entries capture prior planning and intermediate conclusions. Only actual tool results confirm that an action really happened."
+        get_prompt("agent.reasoning_replay.planning_note")
     )
     parts.append(
-        "Use it to keep the same plan across tool calls: remember what you already checked, what you concluded, and what the next step was."
+        get_prompt("agent.reasoning_replay.continuation_note")
     )
     parts.append(
-        "If a tool result changes the situation, update the plan instead of restarting from zero. If it does not change the picture, continue where you left off."
+        get_prompt("agent.reasoning_replay.update_note")
     )
 
     normalized_goal = _clean_tool_text(current_goal or "", limit=180)
@@ -5214,7 +5204,7 @@ def _build_working_state_instruction(working_state: dict) -> dict | None:
     if not blockers:
         return None
 
-    parts = ["[AGENT WORKING MEMORY]"]
+    parts = [get_prompt("agent.working_state.header")]
     if current_goal:
         parts.append(f"Current goal: {current_goal}")
     if attempts:
@@ -5227,7 +5217,7 @@ def _build_working_state_instruction(working_state: dict) -> dict | None:
                 line += f": {preview}"
             lines.append(line)
         if lines:
-            parts.append("Tried in this run:\n" + "\n".join(lines))
+            parts.append(f"{get_prompt('agent.working_state.tried_prefix')}\n" + "\n".join(lines))
     if blockers:
         lines = []
         for entry in blockers[-4:]:
@@ -5238,9 +5228,9 @@ def _build_working_state_instruction(working_state: dict) -> dict | None:
                 line += f": {error}"
             lines.append(line)
         if lines:
-            parts.append("Failed paths to avoid repeating without a concrete reason:\n" + "\n".join(lines))
+            parts.append(f"{get_prompt('agent.working_state.failed_paths_prefix')}\n" + "\n".join(lines))
     parts.append(
-        "Prefer a different tool or produce the best available answer if these blockers make repetition low-value."
+        get_prompt("agent.working_state.prefer_different")
     )
     return {"role": "system", "content": "\n\n".join(parts)}
 

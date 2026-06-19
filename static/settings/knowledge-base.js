@@ -235,5 +235,7 @@
   window.__knowledgeBaseModule = {
     loadKnowledgeBaseDocuments,
     syncKbUploadActionState,
+    setKbStatus,
+    setKbUploadStatus,
   };
 })();

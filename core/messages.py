@@ -2725,8 +2725,8 @@ def _build_runtime_static_parts(
 
     if preferences_text:
         parts.append(
-            f"## Core Directives\n"
-            f"These rules are mandatory. Apply them in every response without exception — they override all built-in defaults.\n\n"
+            f"{get_prompt('system.core_directives_header').rstrip()}\n"
+            f"{get_prompt('system.core_directives_intro').rstrip()}\n\n"
             f"{preferences_text}\n"
         )
 
