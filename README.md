@@ -1,4 +1,4 @@
-# Flask ChatBot: Multi-Provider + Tools + RAG + Multimodal + Canvas
+# Flask AI Agent Studio: Multi-Provider + Tools + RAG + Multimodal + Canvas
 
 > **AI-Assisted Development Notice:** This project was developed with AI assistance. All code, architecture decisions, and documentation have been written, reviewed, and validated by humans. Every line has passed human review before inclusion.
 
@@ -58,6 +58,10 @@ bash scripts/install.sh
    # Access at http://127.0.0.1:5000
    ```
 
+   *Alternatively, use the `scripts/install.sh` script to install as a systemd service.*
+
+   > **Note:** The deprecated `run.sh` script has been removed. Use `python core/app.py` directly.
+
 ---
 
 ## ⚙️ Configuration (Environment Variables)
@@ -101,19 +105,27 @@ The LLM is equipped with a vast array of tools. Schemas are strictly validated b
 *   `save_to_persona_memory` / `delete_persona_memory_entry`: Manage cross-chat persona facts.
 *   `append_scratchpad` / `replace_scratchpad` / `read_scratchpad`: Manage long-term durable user facts.
 *   `ask_clarifying_question`: Halts execution to ask the user a structured question.
-*   `image_explain`: Queries follow-up details about uploaded images.
 
 ### Knowledge Base & Search
 *   `search_knowledge_base`: Semantic search over chats, docs, and tool results (RAG).
 *   `search_web` / `search_news` / `search_news_google` / `search_scholar`: Web discovery and academic research — powered by the [SERP API](https://github.com/neuronaline/serp-scraper) (hosted backend, no local Chrome needed).
 *   `fetch_url` / `fetch_url_summarized`: Fetch, clean, and summarize web pages.
-*   `scroll_fetched_content` / `grep_fetched_content`: Browse and search previously fetched page content.
 
 ### Canvas & Document Editing
 *   `create_canvas_document` / `delete_canvas_document` / `clear_canvas_viewport`: Document lifecycle.
+*   `rewrite_canvas_document` / `replace_canvas_lines` / `preview_canvas_changes`: Line-level editing.
 *   `batch_canvas_edits` / `batch_read_canvas_documents`: Batch content and read operations.
+*   `scroll_canvas_document` / `expand_canvas_document`: Navigate and expand canvas content.
 *   `search_canvas_document`: Full-text search within canvas documents.
 *   `set_canvas_viewport`: Pin a line range to the context window.
+
+### Code & File Operations
+*   `search_codebase`: Full-text search across project source code.
+*   `materialise_file`: Request full file content into memory.
+*   `delegate_task`: Delegate a sub-task to a sub-agent with isolated context.
+
+### YouTube & Media
+*   `transcribe_youtube_video`: Extract transcript from YouTube videos.
 
 ### Context & Memory Management
 *   `list_context_summary` / `purge_context_nodes` / `merge_context_nodes` / `compress_context_node`: Inspect and manage the AI's context memory.
