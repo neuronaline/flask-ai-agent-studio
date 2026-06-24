@@ -233,6 +233,7 @@ HISTORICAL_CONTEXT_INJECTION_STRIP_HEADINGS = {
     "## Tool Execution History",
     "## Active Tools This Turn",
     "## Current Date and Time",
+    "## Token Usage Status",
 }
 CANVAS_RUNTIME_CONTEXT_REFRESH_HEADINGS = {
     "## Canvas File Set Summary",
@@ -2576,18 +2577,36 @@ def _build_runtime_volatile_parts(
 ):
     parts: list[str] = []
 
-    # Dynamic Status Line (per AI Memory and Context Management doc Section 3.1)
+    # Dynamic Status Line (per AI Memory and Context Management doc Section 6.1)
     # Injected at the start of volatile context so the AI can self-regulate.
     if context_node_stats and isinstance(context_node_stats, dict):
         active_tokens = int(context_node_stats.get("active_tokens", 0))
         model_limit = int(context_node_stats.get("model_limit", 128_000))
         usage_pct = (active_tokens / model_limit * 100) if model_limit > 0 else 0.0
         buffer_free = max(0, model_limit - active_tokens)
-        parts.append(
-            f"## Token Usage Status\n"
-            f"**Status:** Token Usage: {active_tokens:,} / {model_limit:,} "
-            f"({usage_pct:.1f}%) | Buffer Free: {buffer_free:,} tokens.\n"
+
+        # Extended status: nodes + VFS (Section 6.1 format)
+        active_nodes = int(context_node_stats.get("active_nodes", 0))
+        tombstoned_nodes = int(context_node_stats.get("tombstoned_nodes", 0))
+        vfs_stats = context_node_stats.get("vfs_stats") or {}
+
+        status_line = (
+            f"**Status:** Context: {active_tokens:,} / {model_limit:,} "
+            f"({usage_pct:.1f}%) | Buffer: {buffer_free:,}"
         )
+        if active_nodes > 0 or tombstoned_nodes > 0:
+            status_line += f" | Nodes: {active_nodes} active"
+            if tombstoned_nodes > 0:
+                status_line += f", {tombstoned_nodes} tombstoned"
+        if vfs_stats.get("file_count", 0) > 0:
+            status_line += (
+                f" | VFS: {vfs_stats.get('file_count', 0)} files, "
+                f"{vfs_stats.get('total_tokens', 0):,} tokens"
+            )
+            if vfs_stats.get("dirty_count", 0) > 0:
+                status_line += f", {vfs_stats.get('dirty_count')} dirty"
+        parts.append(f"## Token Usage Status\n{status_line}\n")
+
         if usage_pct > 90:
             parts.append(
                 "⚠️ **WARNING**: Token usage exceeds 90%! Consider purging or compressing context nodes to free capacity.\n"

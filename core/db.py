@@ -1068,13 +1068,50 @@ def initialize_database() -> None:
 
 
 def ensure_context_nodes_columns() -> None:
-    """Add summary and compressed columns to context_nodes table if missing."""
+    """Add summary and compressed columns to context_nodes table if missing.
+    Also ensure tombstoned status is supported via the status enum.
+    """
     with get_db() as conn:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(context_nodes)").fetchall()}
         if "summary" not in columns:
             conn.execute("ALTER TABLE context_nodes ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
         if "compressed" not in columns:
             conn.execute("ALTER TABLE context_nodes ADD COLUMN compressed INTEGER NOT NULL DEFAULT 0")
+
+
+def get_tombstone_count(conversation_id: int) -> int:
+    """Count tombstoned (deleted) nodes for a conversation.
+
+    Per Section 6.3: Tombstone count > 5 triggers compaction.
+    """
+    normalized_conversation_id = int(conversation_id) if conversation_id else None
+    if not normalized_conversation_id:
+        return 0
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) as count FROM context_nodes WHERE conversation_id = ? AND status = 'deleted'",
+            (normalized_conversation_id,),
+        ).fetchone()
+    return int(row["count"]) if row else 0
+
+
+def hard_delete_tombstoned_nodes(conversation_id: int) -> int:
+    """Physically delete all tombstoned (status='deleted') nodes for a conversation.
+
+    Per Section 6.3: Called during compaction to reclaim space after tombstone
+    accumulation exceeds threshold.
+    """
+    normalized_conversation_id = int(conversation_id) if conversation_id else None
+    if not normalized_conversation_id:
+        return 0
+
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM context_nodes WHERE conversation_id = ? AND status = 'deleted'",
+            (normalized_conversation_id,),
+        )
+    return int(cursor.rowcount or 0)
 
 
 def _normalize_user_profile_value(value, max_length: int = 500) -> str:
@@ -5755,6 +5792,21 @@ def get_reasoning_auto_collapse(settings: dict | None = None) -> bool:
     source = settings if settings is not None else get_app_settings()
     raw_value = source.get("reasoning_auto_collapse")
     return str(raw_value).strip().lower() in {"1", "true", "yes", "on"} if raw_value is not None else False
+
+
+def get_pruning_enabled(settings: dict | None = None) -> bool:
+    source = settings if settings is not None else get_app_settings()
+    return _get_bool_setting_value(source, "pruning_enabled", False)
+
+
+def get_pruning_aggressive_keep_count(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "pruning_aggressive_keep_count", 20, 5, 100)
+
+
+def get_pruning_failed_attempts_threshold(settings: dict | None = None) -> int:
+    source = settings if settings is not None else get_app_settings()
+    return _get_int_setting_value(source, "pruning_failed_attempts_threshold", 3, 1, 20)
 
 
 def get_next_message_position(conn: sqlite3.Connection, conversation_id: int) -> int:

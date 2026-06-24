@@ -7,7 +7,8 @@ Per AI Memory and Context Management document:
 - This service handles:
   - Adding new context nodes (only when explicitly promoted)
   - Tracking token usage
-  - Pre-execution cost estimation
+  - Pre-execution cost estimation (including VFS)
+  - Compaction (tombstone cleanup)
   - Runtime stats reporting
 """
 
@@ -26,6 +27,8 @@ from core.db import (
     archive_context_nodes as db_archive_context_nodes,
     get_context_node as db_get_context_node,
     get_context_node_stats as db_get_context_node_stats,
+    get_tombstone_count as db_get_tombstone_count,
+    hard_delete_tombstoned_nodes as db_hard_delete_tombstoned_nodes,
     insert_context_node as db_insert_context_node,
     list_context_nodes as db_list_context_nodes,
     list_context_summary,
@@ -110,9 +113,69 @@ class ContextNodeService:
     WARN_THRESHOLD = WARN_THRESHOLD
     BLOCK_THRESHOLD = BLOCK_THRESHOLD
     MAX_NODE_TOKENS = MAX_NODE_TOKENS
+    COMPACTION_TOMBSTONE_THRESHOLD = 5  # Section 6.3
 
     def __init__(self, model_token_limit: int = DEFAULT_MODEL_TOKEN_LIMIT):
         self.model_token_limit = model_token_limit
+
+    # ------------------------------------------------------------------
+    # Pre-execution cost check (Section 6.2)
+    # ------------------------------------------------------------------
+
+    def check_execution_cost(
+        self,
+        tool_name: str,
+        args: dict,
+        conversation_id: int,
+    ) -> ExecutionWarning | None:
+        """Check if tool execution would exceed token thresholds.
+
+        Per AI Memory and Context Management document Section 6.2:
+        - If current_usage + estimated_cost > 90% of total limit,
+          the operation is rejected outright.
+        - The AI receives a structured warning with the recommended action.
+        - Includes VFS token usage in the calculation.
+        """
+        # Estimate cost of this execution
+        args_preview = self._create_args_preview(args)
+        estimated_tokens = estimate_text_tokens(args_preview)
+
+        # Get current stats (context nodes)
+        stats = self.get_stats(conversation_id)
+
+        # Also account for VFS token usage
+        try:
+            from utils.vfs import get_vfs
+            vfs_stats = get_vfs().get_stats()
+            vfs_tokens = vfs_stats.get("total_tokens", 0)
+        except Exception:
+            vfs_tokens = 0
+
+        total_current = stats.active_tokens + vfs_tokens
+        projected_tokens = total_current + estimated_tokens
+        projected_percent = projected_tokens / stats.model_limit if stats.model_limit > 0 else 0
+
+        if projected_percent >= self.BLOCK_THRESHOLD:
+            message = (
+                f"**System Warning:** The requested action is estimated to consume ~{estimated_tokens:,} tokens, "
+                f"which would breach the 90% safety threshold. Operation denied.\n"
+                f"**Recommended action:** Run `purge_context_nodes` to free space, narrow the query scope, "
+                f"or summarise existing data before retry."
+            )
+            return ExecutionWarning(
+                tool_name=tool_name,
+                estimated_tokens=estimated_tokens,
+                current_tokens=total_current,
+                projected_tokens=projected_tokens,
+                threshold_percent=round(projected_percent * 100, 1),
+                message=message,
+            )
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Transient buffer management
+    # ------------------------------------------------------------------
 
     def add_transient(
         self,
@@ -122,8 +185,7 @@ class ContextNodeService:
         conversation_id: int,
         message_id: int | None = None,
     ) -> str:
-        """
-        Store tool result as TRANSIENT (not persisted).
+        """Store tool result as TRANSIENT (not persisted).
 
         Per AI Memory and Context Management document:
         - "All tool outcomes are tagged transient by default"
@@ -189,8 +251,7 @@ class ContextNodeService:
         transient_id: str,
         summary: str | None = None,
     ) -> dict | None:
-        """
-        Promote transient data to a persistent Context Node.
+        """Promote transient data to a persistent Context Node.
 
         Per AI Memory and Context Management document:
         - "A context node is created only when the AI sets a flag such as keep_alive: true"
@@ -221,8 +282,6 @@ class ContextNodeService:
         payload = transient_data.get("full_content", "")
 
         try:
-            # Note: db_insert_context_node signature may need updating to match doc schema
-            # Doc specifies: node_id, tool_name, timestamp, token_count, summary, payload, status
             return db_insert_context_node(
                 node_id=node_id,
                 tool_name=transient_data.get("tool_name", ""),
@@ -240,8 +299,7 @@ class ContextNodeService:
             return None
 
     def discard_transient(self, transient_id: str) -> bool:
-        """
-        Discard transient data without promoting it.
+        """Discard transient data without promoting it.
 
         Per AI Memory and Context Management document:
         - "the raw payload is immediately discarded once the derived insight has been captured"
@@ -259,13 +317,37 @@ class ContextNodeService:
         return False
 
     def _generate_summary(self, result_preview: str, full_content: str) -> str:
-        """Generate a concise summary (per doc: < 50 tokens recommended)."""
-        # Simple truncation-based summary for now
-        # In production, could use a separate LLM call for better summarization
-        content = result_preview or full_content
-        if len(content) <= 200:
+        """Generate a fact-dense summary capped at ~50 tokens.
+
+        Per AI Memory doc Section 4: summaries must answer
+        "If this is the only node I can read, what key facts must I know?"
+        and be ≤ 50 tokens.
+        """
+        content = (result_preview or full_content or "").strip()
+        if not content:
+            return ""
+
+        # Progressive truncation: keep as much meaning as fits in ~50 tokens
+        # ~50 tokens ≈ 200 chars (rough 4 chars/token average)
+        max_chars = 200
+
+        if len(content) <= max_chars:
             return content
-        return content[:197] + "..."
+
+        # Try to cut at a sentence boundary
+        truncated = content[:max_chars]
+        last_period = truncated.rfind(". ")
+        last_comma = truncated.rfind(", ")
+        cut_point = max(last_period, last_comma)
+
+        if cut_point > max_chars // 2:
+            suffix = truncated[:cut_point + 1].rstrip()
+            # Avoid ending with a trailing comma — clean it up
+            if suffix.endswith(","):
+                suffix = suffix.rstrip(",").rstrip()
+            return suffix
+
+        return truncated[:197] + "..."
 
     def get_transient(self, transient_id: str) -> dict | None:
         """Get transient data by ID."""
@@ -280,8 +362,7 @@ class ContextNodeService:
         message_id: int | None = None,
         keep_alive: bool = False,
     ) -> dict | None:
-        """
-        Create a new context node from tool execution result.
+        """Create a new context node from tool execution result.
 
         Per AI Memory and Context Management document:
         - Tool outcomes are TRANSIENT by default
@@ -297,8 +378,7 @@ class ContextNodeService:
             keep_alive: If True, promote to persistent Context Node. If False, store as transient only.
 
         Returns:
-            Created node dict if keep_alive=True, None otherwise. If keep_alive=False,
-            returns None but the transient_id is logged for debugging.
+            Created node dict if keep_alive=True, None otherwise.
         """
         # First store as transient (this is the default per doc)
         transient_id = self.add_transient(tool_name, args, result, conversation_id, message_id)
@@ -328,8 +408,7 @@ class ContextNodeService:
             return str(args)[:500]
 
     def _create_result_preview(self, result: Any) -> tuple[str, str | None]:
-        """
-        Create preview and full content from result.
+        """Create preview and full content from result.
 
         Returns:
             Tuple of (preview, full_content)
@@ -338,15 +417,12 @@ class ContextNodeService:
             return "", None
 
         try:
-            # Try to serialize as JSON
             if isinstance(result, (dict, list)):
                 content = json.dumps(result, ensure_ascii=False, sort_keys=True)
             else:
                 content = str(result)
 
-            # Create preview (first 1000 chars)
             preview = content[:1000] if len(content) > 1000 else content
-
             return preview, content
         except Exception:
             preview = str(result)[:1000]
@@ -378,8 +454,7 @@ class ContextNodeService:
         return db_archive_context_nodes(node_ids, reason)
 
     def purge_nodes(self, node_ids: list[str], reason: str) -> dict:
-        """
-        Purge nodes (soft delete - tombestone).
+        """Purge nodes (soft delete - tombestone).
 
         Returns dict with purged, archived, not_found counts.
         """
@@ -452,19 +527,9 @@ class ContextNodeService:
         summary: str | None = None,
         compressed: bool | None = None,
     ) -> dict | None:
-        """Update an existing context node's content, token_count, summary, or compressed flag.
+        """Update an existing context node.
 
         Used by compress_context_node to update the payload after compression.
-
-        Args:
-            node_id: UUID of the node.
-            full_content: Optional new content.
-            token_count: Optional new token count.
-            summary: Optional new summary.
-            compressed: Optional compressed flag.
-
-        Returns:
-            Updated node dict or None.
         """
         return update_context_node(
             node_id=node_id,
@@ -474,55 +539,8 @@ class ContextNodeService:
             compressed=compressed,
         )
 
-    def check_execution_cost(
-        self,
-        tool_name: str,
-        args: dict,
-        conversation_id: int,
-    ) -> ExecutionWarning | None:
-        """
-        Check if tool execution would exceed token thresholds.
-
-        Per AI Memory and Context Management document:
-        - "If current_usage + estimated_cost > 90% of total limit, the operation is rejected outright"
-        - "The AI receives a structured warning with the recommended action"
-
-        Returns ExecutionWarning if threshold would be exceeded at 90%, None otherwise.
-        """
-        # Estimate cost of this execution
-        args_preview = self._create_args_preview(args)
-        estimated_tokens = estimate_text_tokens(args_preview)
-
-        # Get current stats
-        stats = self.get_stats(conversation_id)
-        projected_tokens = stats.active_tokens + estimated_tokens
-        projected_percent = projected_tokens / stats.model_limit if stats.model_limit > 0 else 0
-
-        if projected_percent >= self.BLOCK_THRESHOLD:
-            # Per doc format:
-            # "> **System Warning:** The requested action is estimated to consume ~[X] tokens,
-            #    which would breach the 90% safety threshold. Operation denied.
-            #    > **Recommended action:** Run `purge_context_nodes` to free space..."
-            message = (
-                f"**System Warning:** The requested action is estimated to consume ~{estimated_tokens:,} tokens, "
-                f"which would breach the 90% safety threshold. Operation denied.\n"
-                f"**Recommended action:** Run `purge_context_nodes` to free space, narrow the query scope, "
-                f"or summarise existing data before retry."
-            )
-            return ExecutionWarning(
-                tool_name=tool_name,
-                estimated_tokens=estimated_tokens,
-                current_tokens=stats.active_tokens,
-                projected_tokens=projected_tokens,
-                threshold_percent=round(projected_percent * 100, 1),
-                message=message,
-            )
-
-        return None
-
     def generate_status_report(self, conversation_id: int) -> str:
-        """
-        Generate a human-readable token status report.
+        """Generate a human-readable token status report.
 
         Per AI Memory and Context Management document:
         - "Every processing cycle receives an up-to-date telemetry line"
@@ -545,6 +563,236 @@ class ContextNodeService:
             status_line += "\n\n💡 **NOTE**: Token usage is above 70%. Consider archiving irrelevant nodes."
 
         return status_line
+
+    # ------------------------------------------------------------------
+    # Compaction event trigger (Section 6.3)
+    # ------------------------------------------------------------------
+
+    def trigger_compaction_if_needed(self, conversation_id: int) -> dict:
+        """Check if compaction should fire and physically clean tombstoned nodes.
+
+        Per AI Memory doc Section 6.3:
+        - Compaction triggers when tombstone count > 5 OR token usage ≥ 90%.
+        - This is a controlled cache-break: tombstoned rows are hard-deleted.
+
+        Returns:
+            Dict with triggered (bool), tombstones_deleted, tokens_before,
+            tokens_after, and reason.
+        """
+        tombstone_count = db_get_tombstone_count(conversation_id)
+        stats = self.get_stats(conversation_id)
+        usage_pct = stats.usage_percent
+
+        triggered = tombstone_count > self.COMPACTION_TOMBSTONE_THRESHOLD or usage_pct >= BLOCK_THRESHOLD
+        reason = []
+        if tombstone_count > self.COMPACTION_TOMBSTONE_THRESHOLD:
+            reason.append(f"tombstone_count={tombstone_count} > {self.COMPACTION_TOMBSTONE_THRESHOLD}")
+        if usage_pct >= BLOCK_THRESHOLD:
+            reason.append(f"token_usage={usage_pct * 100:.1f}% >= {BLOCK_THRESHOLD * 100:.0f}%")
+
+        if not triggered:
+            LOGGER.debug(
+                f"Compaction not needed for conversation {conversation_id}: "
+                f"tombstones={tombstone_count}, usage={usage_pct * 100:.1f}%"
+            )
+            return {
+                "triggered": False,
+                "tombstones_deleted": 0,
+                "tokens_before": stats.active_tokens,
+                "tokens_after": stats.active_tokens,
+                "reason": None,
+            }
+
+        # Hard-delete all tombstoned nodes
+        deleted_count = db_hard_delete_tombstoned_nodes(conversation_id)
+
+        # Re-read stats after deletion
+        stats_after = self.get_stats(conversation_id)
+        reason_str = "; ".join(reason)
+        LOGGER.info(
+            f"Compaction executed for conversation {conversation_id}: "
+            f"deleted {deleted_count} tombstoned nodes, "
+            f"tokens {stats.active_tokens} -> {stats_after.active_tokens}, "
+            f"reason: {reason_str}"
+        )
+
+        return {
+            "triggered": True,
+            "tombstones_deleted": deleted_count,
+            "tokens_before": stats.active_tokens,
+            "tokens_after": stats_after.active_tokens,
+            "reason": reason_str,
+        }
+
+    # ------------------------------------------------------------------
+    # Goal-driven eviction (Section 8.1)
+    # ------------------------------------------------------------------
+
+    def evict_irrelevant_nodes(
+        self,
+        conversation_id: int,
+        current_goal_tools: list[str],
+    ) -> dict:
+        """Evict nodes unrelated to the current task's tool usage.
+
+        Per AI Memory doc Section 8.1, priority order:
+        1. Goal Alignment — nodes whose tool_name is NOT in current_goal_tools
+        2. Recency of Access — oldest last_accessed first
+        3. Dependency Links — nodes with no dependents evicted first
+        4. VFS Staleness — nodes with stale VFS references evicted first
+
+        Stops once recovered tokens bring usage below 90%.
+
+        Returns:
+            Dict with evicted_count, tokens_recovered, usage_before, usage_after.
+        """
+        if not current_goal_tools:
+            return {
+                "evicted_count": 0,
+                "tokens_recovered": 0,
+                "usage_before": 0.0,
+                "usage_after": 0.0,
+            }
+
+        goal_tools_set = set(current_goal_tools)
+        stats = self.get_stats(conversation_id)
+        usage_before = stats.usage_percent
+
+        # Already below threshold
+        if usage_before < BLOCK_THRESHOLD:
+            return {
+                "evicted_count": 0,
+                "tokens_recovered": 0,
+                "usage_before": round(usage_before * 100, 1),
+                "usage_after": round(usage_before * 100, 1),
+            }
+
+        # Get all active nodes for this conversation, sorted by token_count desc
+        active_nodes = db_list_context_nodes(
+            conversation_id=conversation_id,
+            status="active",
+            limit=500,
+            sort_by="token_count",
+        )
+
+        # Partition: goal-aligned vs non-aligned
+        non_aligned = [
+            n for n in active_nodes
+            if n.get("tool_name", "") not in goal_tools_set
+        ]
+        aligned = [
+            n for n in active_nodes
+            if n.get("tool_name", "") in goal_tools_set
+        ]
+
+        # Sort non-aligned by recency (oldest first), then by token count (largest first)
+        non_aligned.sort(key=lambda n: (n.get("created_at", ""), -n.get("token_count", 0)))
+
+        target_recovery = stats.active_tokens - int(stats.model_limit * BLOCK_THRESHOLD)
+        if target_recovery <= 0:
+            target_recovery = stats.active_tokens  # try to recover everything we can
+
+        evicted_ids: list[str] = []
+        tokens_recovered = 0
+
+        for node in non_aligned:
+            if tokens_recovered >= target_recovery:
+                break
+            evicted_ids.append(node["node_id"])
+            tokens_recovered += node.get("token_count", 0)
+
+        if evicted_ids:
+            db_archive_context_nodes(evicted_ids, "goal-driven eviction (Section 8.1)")
+
+        stats_after = self.get_stats(conversation_id)
+        LOGGER.info(
+            f"Goal-driven eviction for conversation {conversation_id}: "
+            f"evicted {len(evicted_ids)} non-aligned nodes, "
+            f"recovered ~{tokens_recovered} tokens, "
+            f"usage {usage_before * 100:.1f}% -> {stats_after.usage_percent * 100:.1f}%"
+        )
+
+        return {
+            "evicted_count": len(evicted_ids),
+            "tokens_recovered": tokens_recovered,
+            "usage_before": round(usage_before * 100, 1),
+            "usage_after": round(stats_after.usage_percent * 100, 1),
+        }
+
+    # ------------------------------------------------------------------
+    # Purge with extraction (Section 5.3)
+    # ------------------------------------------------------------------
+
+    def purge_with_extraction(
+        self,
+        conversation_id: int,
+        node_ids: list[str],
+        reason: str,
+    ) -> dict:
+        """Purge nodes, extracting goal-critical content first if needed.
+
+        Per AI Memory doc Section 5.3:
+        - Before purging, check if any nodes contain goal-critical data.
+        - If so, extract key content into a new summary node (max 50 tokens).
+        - Then purge the originals.
+
+        Returns:
+            Dict with extracted_node (if any) and purge_result.
+        """
+        extracted_node = None
+
+        # Read the nodes before purging to check for critical data
+        nodes_to_check: list[dict] = []
+        for nid in node_ids:
+            node = db_get_context_node(nid)
+            if node:
+                nodes_to_check.append(node)
+
+        # Check if any node has content worth extracting
+        # Heuristic: if summary or full_content exists and node is large,
+        # it likely contains goal-critical data worth preserving
+        for node in nodes_to_check:
+            summary = (node.get("summary") or "").strip()
+            full_content = (node.get("full_content") or "").strip()
+            token_count = node.get("token_count", 0)
+
+            # If the node has a meaningful summary or substantial content,
+            # extract the summary as a preserved node
+            if summary and token_count > 100:
+                extracted_summary = self._generate_summary(summary, full_content)
+
+                # Create a lightweight extraction node
+                extraction_node_id = str(uuid.uuid4())
+                extraction_tokens = estimate_text_tokens(extracted_summary)
+
+                try:
+                    extracted_node = db_insert_context_node(
+                        node_id=extraction_node_id,
+                        tool_name=node.get("tool_name", ""),
+                        args_preview=None,
+                        result_preview=extracted_summary[:1000],
+                        full_content=extracted_summary,
+                        token_count=extraction_tokens,
+                        conversation_id=conversation_id,
+                        message_id=None,
+                    )
+                    LOGGER.info(
+                        f"Extracted goal-critical summary from node {node['node_id']} "
+                        f"into {extraction_node_id} ({extraction_tokens} tokens)"
+                    )
+                except Exception:
+                    LOGGER.exception(f"Failed to extract summary from node {node['node_id']}")
+                    extracted_node = None
+                # Only extract from the first qualifying node
+                break
+
+        # Purge the original nodes
+        purge_result = db_purge_context_nodes(node_ids, reason)
+
+        return {
+            "extracted_node": extracted_node,
+            "purge_result": purge_result,
+        }
 
 
 # Singleton instance

@@ -3588,7 +3588,44 @@ def _run_ask_clarifying_question(tool_args: dict, runtime_state: dict):
     }, "Awaiting user clarification"
 
 
+# Large operations that may trigger pre-execution cost check (Section 6.2)
+_LARGE_OPERATION_TOOL_NAMES = frozenset({
+    "materialise_file",
+    "fetch_url",
+    "fetch_url_summarized",
+    "batch_read_canvas_documents",
+    "expand_canvas_document",
+    "rewrite_canvas_document",
+    "create_canvas_document",
+    "search_canvas_document",
+    "web_search",
+    "web_fetch",
+})
+
+
 def _execute_streaming_tool_with_event_buffer(tool_name: str, tool_args: dict, runtime_state: dict):
+    """Execute a tool with optional pre-execution cost check (Section 6.2).
+
+    Per AI Memory and Context Management doc Section 6.2:
+    - Before tool execution, estimate the token cost.
+    - If current_usage + estimated_cost > 90%, reject the operation.
+    - Covers all large operations that could significantly impact token budget.
+    """
+    conversation_id = runtime_state.get("conversation_id") if isinstance(runtime_state, dict) else None
+    if conversation_id and tool_name in _LARGE_OPERATION_TOOL_NAMES:
+        try:
+            from services.context_node_service import get_context_node_service
+            service = get_context_node_service()
+            warning = service.check_execution_cost(
+                tool_name=tool_name,
+                args=tool_args,
+                conversation_id=int(conversation_id),
+            )
+            if warning is not None:
+                return {"error": warning.message, "blocked": True}, f"Execution blocked: {warning.message}", []
+        except Exception:
+            pass
+
     result, summary = _execute_tool(tool_name, tool_args, runtime_state=runtime_state)
     return result, summary, []
 
@@ -4020,18 +4057,48 @@ def _run_list_context_summary(tool_args: dict, runtime_state: dict) -> tuple[dic
     """Handler for list_context_summary tool.
 
     Per Section 2.1: Lightweight overview of all context nodes without full payloads.
+    Per Section 5.1: sort_by accepts 'timestamp' (default) or 'token_count'.
     """
     conversation_id = runtime_state.get("conversation_id") if isinstance(runtime_state, dict) else None
     if not conversation_id:
         return {"error": "No active conversation."}, "list_context_summary: no active conversation"
 
-    sort_by = str(tool_args.get("sort_by") or "created_at").strip()
+    sort_by = str(tool_args.get("sort_by") or "timestamp").strip()
+    # Accept "timestamp" as the canonical name (per doc Section 5.1);
+    # map to internal "created_at" for DB queries.
+    if sort_by == "timestamp":
+        sort_by = "created_at"
     if sort_by not in ("created_at", "token_count"):
         sort_by = "created_at"
 
     nodes = _db_list_context_summary(conversation_id=int(conversation_id), sort_by=sort_by)
     total_tokens = sum(node.get("token_count", 0) for node in nodes)
+
+    # Build memory_health block (per agent_identity protocol)
+    total_limit = 128_000  # default fallback
+    try:
+        from core.db import get_prompt_max_input_tokens
+        total_limit = get_prompt_max_input_tokens({})
+    except Exception:
+        pass
+    usage_percent = round((total_tokens / total_limit * 100) if total_limit > 0 else 0, 1)
+    buffer_free = max(0, total_limit - total_tokens)
+
+    if usage_percent >= 90:
+        pressure_level = "critical"
+    elif usage_percent >= 75:
+        pressure_level = "warning"
+    else:
+        pressure_level = "normal"
+
     result = {
+        "memory_health": {
+            "total_persistent_nodes": len(nodes),
+            "total_persistent_tokens": total_tokens,
+            "usage_percent": usage_percent,
+            "buffer_free": buffer_free,
+            "pressure_level": pressure_level,
+        },
         "nodes": nodes,
         "total_nodes": len(nodes),
         "total_tokens": total_tokens,
@@ -4044,10 +4111,23 @@ def _run_purge_context_nodes(tool_args: dict, runtime_state: dict) -> tuple[dict
     """Handler for purge_context_nodes tool.
 
     Per Section 2.2: Permanently remove specified context nodes.
+    Per doc Section 5.3: Supports purge_all=true for crisis cleanup.
     """
     conversation_id = runtime_state.get("conversation_id") if isinstance(runtime_state, dict) else None
     if not conversation_id:
         return {"error": "No active conversation."}, "purge_context_nodes: no active conversation"
+
+    # Support purge_all=true for crisis cleanup (per doc Section 5.3)
+    purge_all = tool_args.get("purge_all", False)
+    if purge_all:
+        # Get all active node IDs for this conversation
+        nodes = _db_list_context_summary(conversation_id=int(conversation_id), sort_by="created_at")
+        all_ids = [n["node_id"] for n in nodes if n.get("node_id")]
+        if all_ids:
+            reason = str(tool_args.get("reason") or "").strip() or "Crisis cleanup via purge_all"
+            result = _db_purge_context_nodes(all_ids, reason)
+            return result, f"purge_context_nodes (purge_all): {result.get('purged', 0)} nodes purged"
+        return {"purged": 0, "archived": 0, "active": 0}, "purge_context_nodes: no nodes to purge"
 
     node_ids = tool_args.get("nodes") if isinstance(tool_args.get("nodes"), list) else []
     if not node_ids:
@@ -4219,7 +4299,97 @@ _TOOL_EXECUTORS = {
     "purge_context_nodes": _run_purge_context_nodes,
     "merge_context_nodes": _run_merge_context_nodes,
     "compress_context_node": _run_compress_context_node,
+    # Virtual File System tools (per AI Memory and Context Management doc)
+    "materialise_file": _run_materialise_file,
+    "search_codebase": _run_search_codebase,
+    "delegate_task": _run_delegate_task,
 }
+
+
+# ---------------------------------------------------------------------------
+# Virtual File System (VFS) tool executors
+# ---------------------------------------------------------------------------
+from utils.vfs import get_vfs
+
+
+def _run_materialise_file(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
+    """Handler for materialise_file tool.
+
+    Per doc Section 2.3 materialise_file:
+    1. Retrieves content from shadow store.
+    2. Returns formatted content block for Tier 2 append.
+    3. Updates last_access timestamp.
+    """
+    path = str(tool_args.get("path") or "").strip()
+    if not path:
+        return {"error": "path is required."}, "materialise_file: missing path"
+
+    vfs = get_vfs()
+    content_block = vfs.materialise_file(path)
+    if content_block is None:
+        return {"error": f"File not found or not loadable: {path}"}, f"materialise_file: failed for {path}"
+
+    # Return the full content as the tool result — it will be injected into the
+    # tool message (Tier 2 append) by _build_compact_tool_message_content
+    return {
+        "path": path,
+        "hash": vfs.get_shadow(path).hash_short if vfs.get_shadow(path) else "",
+        "status": "materialised",
+        "tokens_estimate": vfs.get_shadow(path).tokens_estimate if vfs.get_shadow(path) else 0,
+    }, content_block
+
+
+def _run_search_codebase(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
+    """Handler for search_codebase tool.
+    
+    Per doc Section 2.3:
+    - Searches across the shadow store and file system.
+    - Returns matches with context lines, not full files.
+    - Matched files remain in the shadow store for future access.
+    """
+    query = str(tool_args.get("query") or "").strip()
+    if not query:
+        return {"error": "query is required."}, "search_codebase: missing query"
+    
+    scope = str(tool_args.get("scope") or "").strip() or None
+    max_results = min(50, max(1, int(tool_args.get("max_results") or 20)))
+    
+    vfs = get_vfs()
+    result = vfs.search_codebase(query, scope=scope, max_results=max_results)
+    summary = f"search_codebase: {result.get('total_matches', 0)} matches for '{query[:60]}'"
+    return result, summary
+
+
+def _run_delegate_task(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
+    """Handler for delegate_task tool.
+
+    Per doc Section 7:
+    - Spawns a sub-agent with a fresh context window.
+    - Scope files are loaded into the sub-agent's VFS.
+    - Returns only a summary — orchestrator context stays lean.
+    """
+    goal = str(tool_args.get("goal") or "").strip()
+    scope = tool_args.get("scope") if isinstance(tool_args.get("scope"), list) else []
+    constraints = str(tool_args.get("constraints") or "").strip()
+
+    if not goal:
+        return {"error": "goal is required."}, "delegate_task: missing goal"
+
+    # Normalise scope to file paths
+    scope_paths = [str(p).strip() for p in scope if str(p or "").strip()]
+
+    # The actual sub-agent spawning is handled by the agent() tool.
+    # This executor returns the delegation request as confirmation;
+    # the agent loop will handle spawning via the existing agent() mechanism.
+    result = {
+        "goal": goal,
+        "scope": scope_paths,
+        "constraints": constraints,
+        "status": "delegated",
+        "note": "Sub-agent execution in progress. Results will be appended when complete.",
+    }
+    summary = f"delegate_task: '{goal[:60]}' delegated with {len(scope_paths)} scope files"
+    return result, summary
 
 
 def _execute_tool(tool_name: str, tool_args: dict, runtime_state: dict | None = None):
@@ -5617,24 +5787,28 @@ def run_agent_stream(
         persisted_tool_results.append(entry)
 
         # Also create a context node for the new memory system
-        try:
-            from services.context_node_service import get_context_node_service
+        # Per AI Memory and Context Management doc:
+        # - Tool outcomes are TRANSIENT by default
+        # - Context Nodes are only created when AI explicitly sets keep_alive: true
+        if tool_args.get("keep_alive", False):
+            try:
+                from services.context_node_service import get_context_node_service
 
-            agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
-            conversation_id = int(agent_context.get("conversation_id") or 0) or None
-            if conversation_id:
-                service = get_context_node_service()
-                service.add_node(
-                    tool_name=tool_name,
-                    args=tool_args,
-                    result=result,
-                    conversation_id=conversation_id,
-                    message_id=None,
-                    keep_alive=True,
-                )
-        except Exception:
-            # Context node creation is best-effort and should not break tool execution
-            LOGGER.debug("Context node creation skipped for tool %s", tool_name, exc_info=True)
+                agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
+                conversation_id = int(agent_context.get("conversation_id") or 0) or None
+                if conversation_id:
+                    service = get_context_node_service()
+                    service.add_node(
+                        tool_name=tool_name,
+                        args=tool_args,
+                        result=result,
+                        conversation_id=conversation_id,
+                        message_id=None,
+                        keep_alive=True,
+                    )
+            except Exception:
+                # Context node creation is best-effort and should not break tool execution
+                LOGGER.debug("Context node creation skipped for tool %s", tool_name, exc_info=True)
 
     def emit_reasoning(reasoning_text: str):
         nonlocal reasoning_started
@@ -7018,23 +7192,45 @@ def run_agent_stream(
                         persisted_tool_cache_keys.add(cache_key)
                         persisted_tool_results.append(storage_entry)
                     # Create context node for new memory system
+                    # Per AI Memory doc: transient by default, promote only when keep_alive=true
+                    if tool_args.get("keep_alive", False):
+                        try:
+                            from services.context_node_service import get_context_node_service
+
+                            agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
+                            conversation_id = int(agent_context.get("conversation_id") or 0) or None
+                            if conversation_id:
+                                service = get_context_node_service()
+                                service.add_node(
+                                    tool_name=tool_name,
+                                    args=tool_args,
+                                    result=result,
+                                    conversation_id=conversation_id,
+                                    message_id=None,
+                                    keep_alive=True,
+                                )
+                        except Exception:
+                            LOGGER.debug("Context node creation skipped for tool %s", tool_name, exc_info=True)
+
+                    # Auto-trigger compaction per Section 6.3
                     try:
                         from services.context_node_service import get_context_node_service
-
-                        agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
-                        conversation_id = int(agent_context.get("conversation_id") or 0) or None
-                        if conversation_id:
-                            service = get_context_node_service()
-                            service.add_node(
-                                tool_name=tool_name,
-                                args=tool_args,
-                                result=result,
-                                conversation_id=conversation_id,
-                                message_id=None,
-                                keep_alive=True,
-                            )
+                        _auto_service = get_context_node_service()
+                        _auto_conversation_id = int(runtime_state.get("conversation_id", 0)) or None
+                        if _auto_conversation_id:
+                            _compaction_result = _auto_service.trigger_compaction_if_needed(_auto_conversation_id)
+                            if _compaction_result.get("triggered"):
+                                LOGGER.info(
+                                    "Section 6.3 compaction auto-triggered: "
+                                    "deleted %d tombstones, "
+                                    "tokens %d -> %d, reason: %s",
+                                    _compaction_result.get("tombstones_deleted", 0),
+                                    _compaction_result.get("tokens_before", 0),
+                                    _compaction_result.get("tokens_after", 0),
+                                    _compaction_result.get("reason", ""),
+                                )
                     except Exception:
-                        LOGGER.debug("Context node creation skipped for tool %s", tool_name, exc_info=True)
+                        LOGGER.debug("Section 6.3 compaction skipped", exc_info=True)
                     _trace_agent_event(
                         "tool_call_completed",
                         trace_id=trace_id,

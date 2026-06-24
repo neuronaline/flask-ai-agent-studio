@@ -114,6 +114,9 @@ from core.db import (
     get_summary_skip_last,
     get_general_instructions,
     get_persona,
+    get_pruning_aggressive_keep_count,
+    get_pruning_enabled,
+    get_pruning_failed_attempts_threshold,
     get_web_cache_ttl_hours,
     get_youtube_transcripts_enabled,
     get_sub_agent_max_steps,
@@ -526,6 +529,10 @@ def _build_conversation_section(raw: dict) -> dict:
         "conversation_truncation_enabled": get_conversation_truncation_enabled(raw),
         "conversation_max_messages": get_conversation_max_messages(raw),
         "conversation_max_message_chars": get_conversation_max_message_chars(raw),
+        # Pruning config
+        "pruning_enabled": get_pruning_enabled(raw),
+        "pruning_aggressive_keep_count": get_pruning_aggressive_keep_count(raw),
+        "pruning_failed_attempts_threshold": get_pruning_failed_attempts_threshold(raw),
     }
 
 
@@ -824,6 +831,9 @@ def register_page_routes(app) -> None:
         sub_agent_canvas_auto_save_raw = data.get("sub_agent_canvas_auto_save")
         sub_agent_canvas_auto_open_raw = data.get("sub_agent_canvas_auto_open")
         sub_agent_allowed_tool_names_raw = data.get("sub_agent_allowed_tool_names")
+        pruning_enabled_raw = data.get("pruning_enabled")
+        pruning_aggressive_keep_count_raw = data.get("pruning_aggressive_keep_count")
+        pruning_failed_attempts_threshold_raw = data.get("pruning_failed_attempts_threshold")
 
         provided_setting_values = (
             general_instructions,
@@ -909,6 +919,9 @@ def register_page_routes(app) -> None:
             sub_agent_canvas_auto_save_raw,
             sub_agent_canvas_auto_open_raw,
             sub_agent_allowed_tool_names_raw,
+            pruning_enabled_raw,
+            pruning_aggressive_keep_count_raw,
+            pruning_failed_attempts_threshold_raw,
         )
 
         if not any(value is not None for value in provided_setting_values):
@@ -1793,6 +1806,28 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "sub_agent_allowed_tool_names must be an array."}), 400
             normalized_tool_names = normalize_active_tool_names(sub_agent_allowed_tool_names_raw)
             settings["sub_agent_allowed_tool_names"] = json.dumps(normalized_tool_names, ensure_ascii=False)
+
+        # Pruning config
+        if pruning_enabled_raw is not None:
+            settings["pruning_enabled"] = _normalize_bool_setting_value(pruning_enabled_raw)
+
+        if pruning_aggressive_keep_count_raw is not None:
+            try:
+                pruning_aggressive_keep_count = int(pruning_aggressive_keep_count_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "pruning_aggressive_keep_count must be an integer."}), 400
+            if not (5 <= pruning_aggressive_keep_count <= 100):
+                return jsonify({"error": "pruning_aggressive_keep_count must be between 5 and 100."}), 400
+            settings["pruning_aggressive_keep_count"] = str(pruning_aggressive_keep_count)
+
+        if pruning_failed_attempts_threshold_raw is not None:
+            try:
+                pruning_failed_attempts_threshold = int(pruning_failed_attempts_threshold_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "pruning_failed_attempts_threshold must be an integer."}), 400
+            if not (1 <= pruning_failed_attempts_threshold <= 20):
+                return jsonify({"error": "pruning_failed_attempts_threshold must be between 1 and 20."}), 400
+            settings["pruning_failed_attempts_threshold"] = str(pruning_failed_attempts_threshold)
 
         save_app_settings(settings)
         return jsonify(build_settings_payload())

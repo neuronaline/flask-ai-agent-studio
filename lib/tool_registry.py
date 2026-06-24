@@ -1098,8 +1098,8 @@ TOOL_SPECS = [
             "properties": {
                 "sort_by": {
                     "type": "string",
-                    "enum": ["created_at", "token_count"],
-                    "description": "Sort order: 'created_at' (chronological) or 'token_count' (largest first). Default: 'created_at'.",
+                    "enum": ["timestamp", "created_at", "token_count"],
+                    "description": "Sort order: 'timestamp' (chronological, default), 'created_at' (alias for timestamp), or 'token_count' (largest first).",
                 },
             },
             "required": [],
@@ -1126,8 +1126,12 @@ TOOL_SPECS = [
                 "nodes": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of node_id UUIDs to permanently delete.",
+                    "description": "List of node_id UUIDs to permanently delete. Ignored if purge_all=true.",
                     "minItems": 1,
+                },
+                "purge_all": {
+                    "type": "boolean",
+                    "description": "If true, purge ALL persistent nodes (crisis cleanup). Ignores 'nodes'. Default: false.",
                 },
                 "reason": {
                     "type": "string",
@@ -1215,6 +1219,130 @@ TOOL_SPECS = [
             ),
         },
     },
+    # -----------------------------------------------------------------------
+    # Virtual File System Tools (per AI Memory and Context Management doc)
+    # -----------------------------------------------------------------------
+    {
+        "name": "search_codebase",
+        "description": (
+            "Search across the shadow store and file system for a text or regex pattern. "
+            "Returns matches with path, line number, and surrounding context lines. "
+            "Files not yet loaded are scanned temporarily and cached if they contain matches."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Query string or regex pattern to search for.",
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "Optional directory scope to limit the search.",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "description": "Maximum number of matches to return (default: 20).",
+                },
+            },
+            "required": ["query"],
+        },
+        "prompt": {
+            "purpose": "Searches codebase for matching patterns across loaded and unloaded files.",
+            "inputs": {
+                "query": "search query or regex",
+                "scope": "optional directory scope",
+                "max_results": "optional result limit (1-50)",
+            },
+            "guidance": (
+                "Use this to locate where specific functions, variables, or text patterns "
+                "appear in the codebase. The search covers both files already loaded in the "
+                "shadow store and the wider file system. Matched files stay in the shadow "
+                "store for subsequent materialisation calls."
+            ),
+        },
+    },
+    {
+        "name": "materialise_file",
+        "description": (
+            "Inject the full current content of a file into the context for detailed analysis. "
+            "Use this only when you need to examine exact line content, write a patch, or understand "
+            "implementation details. Returns the full file content as a code block. "
+            "For most needs — checking if a file exists, its size, or its rough structure — the "
+            "lightweight pointer from read_file is sufficient and much cheaper."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "File path to materialise (loaded from disk if not already in the shadow store).",
+                },
+            },
+            "required": ["path"],
+        },
+        "prompt": {
+            "purpose": "Injects the full content of a previously-read file into Tier 2 context for deep analysis.",
+            "inputs": {"path": "file path to materialise (loaded from disk if needed)"},
+            "guidance": (
+                "Use this sparingly — materialising a large file consumes significant token budget "
+                "(~8 tokens per line). Prefer the lightweight file pointer from read_file for existence "
+                "checks, size estimation, and structural understanding. "
+                "Once materialised, the content stays in the conversational context. "
+                "If the file is later edited, call materialise_file again to see the new version."
+            ),
+        },
+    },
+    {
+        "name": "delegate_task",
+        "description": (
+            "Spawn a fresh sub-agent to handle a self-contained sub-task independently. "
+            "The sub-agent gets a clean context window and its own tool access. "
+            "Returns a summary of actions taken and key findings. "
+            "Use this for: deep analysis of files not yet in context, iterative debug-edit-test loops, "
+            "or running a large test suite. "
+            "Do NOT use for single tool calls, quick lookups, or tasks requiring cross-file reasoning "
+            "with files already in your context."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "Clear description of what the sub-agent should accomplish.",
+                },
+                "scope": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of file paths the sub-agent should focus on.",
+                },
+                "constraints": {
+                    "type": "string",
+                    "description": "Optional constraints (e.g. 'Maintain backward compatibility. Do not modify test files.').",
+                },
+            },
+            "required": ["goal"],
+        },
+        "prompt": {
+            "purpose": "Delegates a self-contained sub-task to a fresh sub-agent to keep the main context lean.",
+            "inputs": {
+                "goal": "task description",
+                "scope": "optional list of file paths",
+                "constraints": "optional constraints",
+            },
+            "guidance": (
+                "Delegate when: (1) the task involves deep analysis of 3+ files not yet in context, "
+                "(2) the task is self-contained with clear input/output, "
+                "(3) the task requires iterative refinement (debug-edit-test). "
+                "Do NOT delegate when: files are already in context, "
+                "or the task is a single tool call or quick lookup. "
+                "The sub-agent returns only a summary — do not re-verify its work unless the summary "
+                "indicates uncertainty."
+            ),
+        },
+    },
 ]
 
 TOOL_SPEC_BY_NAME = {tool["name"]: tool for tool in TOOL_SPECS}
@@ -1250,6 +1378,19 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
     },
     "compress_context_node": {
         "ui_hidden": True,
+    },
+    "materialise_file": {
+        "read_only": True,
+        "parallel_safe": True,
+    },
+    "search_codebase": {
+        "read_only": True,
+        "parallel_safe": True,
+    },
+    "delegate_task": {
+        "ui_hidden": True,
+        "exclusive_turn": True,
+        "read_only": True,
     },
     "transcribe_youtube_video": {
         "state_domains": ("video",),

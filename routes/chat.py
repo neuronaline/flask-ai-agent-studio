@@ -2579,16 +2579,46 @@ def _build_budgeted_prompt_messages(
     prompt_budget = max(2_000, get_prompt_max_input_tokens(settings) - get_prompt_response_token_reserve(settings))
     prompt_now = datetime.now(timezone.utc).astimezone()
 
-    # Build context node stats for Dynamic Status Line (per AI Memory doc Section 3.1)
-    from core.db import get_context_node_stats as _get_context_node_stats
+    # Build context node stats for Dynamic Status Line (per AI Memory doc Section 6.1)
+    from core.db import get_context_node_stats as _get_context_node_stats, get_tombstone_count as _get_tombstone_count
     _raw_stats = _get_context_node_stats(conversation_id) if conversation_id else {}
+    _tombstone_count = _get_tombstone_count(conversation_id) if conversation_id else 0
+
+    # Include VFS stats in the status line
+    try:
+        from utils.vfs import get_vfs
+        _vfs_stats = get_vfs().get_stats()
+    except Exception:
+        _vfs_stats = {}
+
     context_node_stats = {
         "active_nodes": _raw_stats.get("active_nodes", 0),
         "active_tokens": _raw_stats.get("active_tokens", 0),
         "total_nodes": _raw_stats.get("total_nodes", 0),
         "total_tokens": _raw_stats.get("total_tokens", 0),
+        "tombstoned_nodes": _tombstone_count,
+        "vfs_stats": _vfs_stats,
         "model_limit": get_prompt_max_input_tokens(settings),
     } if _raw_stats else None
+
+    # Load prune awareness message (if any) for injection into volatile context
+    _prune_awareness = None
+    try:
+        from core.db import get_db, get_app_settings
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key = ?",
+                (f"prune_awareness:{conversation_id}",),
+            ).fetchone()
+            if row:
+                _prune_awareness = str(row["value"]).strip()
+                # Clean up after reading so it only injects once
+                conn.execute(
+                    "DELETE FROM app_settings WHERE key = ?",
+                    (f"prune_awareness:{conversation_id}",),
+                )
+    except Exception:
+        pass
 
     stable_runtime_message = build_runtime_system_message(
         assistant_behavior,
@@ -2652,6 +2682,8 @@ def _build_budgeted_prompt_messages(
         include_dynamic_context=True,
         context_node_stats=context_node_stats,
     )
+    if _prune_awareness:
+        base_context_injection = f"{_prune_awareness}\n\n{base_context_injection}" if base_context_injection else _prune_awareness
     if base_context_injection:
         base_runtime_messages.append({"role": "system", "content": base_context_injection})
     base_system_tokens = _estimate_prompt_tokens(base_runtime_messages)
@@ -4061,6 +4093,35 @@ def _is_failed_tool_summary(summary: str) -> bool:
     return bool(re.match(r"^[^:]{0,120}\bfailed:\s*", text))
 
 
+
+
+def _persist_pruned_messages(conv_id: int, pruned_messages: list[dict]) -> None:
+    """Persist pruned message content back to the database.
+
+    Only updates the content field for tool messages that were pruned
+    (those with pruned: true flag). Leaves all other messages untouched.
+    """
+    from core.db import get_db
+
+    with get_db() as conn:
+        for msg in pruned_messages:
+            if msg.get("pruned") is not True:
+                continue
+            if msg.get("role") != "tool":
+                continue
+            message_id = msg.get("id")
+            if not message_id:
+                continue
+            try:
+                message_id = int(message_id)
+            except (TypeError, ValueError):
+                continue
+            conn.execute(
+                "UPDATE messages SET content = ? WHERE id = ? AND conversation_id = ?",
+                (str(msg.get("content", "")), message_id, conv_id),
+            )
+
+
 def register_chat_routes(app) -> None:
     def upsert_tool_trace_entry(entries: list[dict], call_map: dict[str, int], event: dict) -> None:
         tool_name = str(event.get("tool") or "").strip()
@@ -4298,6 +4359,78 @@ def register_chat_routes(app) -> None:
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
+
+    # -----------------------------------------------------------------------
+    # /api/prune route — Pruning System Plan implementation
+    # -----------------------------------------------------------------------
+
+    @app.route("/api/conversations/<int:conv_id>/prune", methods=["POST"])
+    def prune_conversation_messages(conv_id):
+        """Prune tool outputs from a conversation's message list.
+
+        Per Pruning System Plan (docs/Pruning System Plan.md).
+
+        Request JSON:
+            mode: "smart" (default), "aggressive", or "status" (dry-run).
+            keep_count: Override aggressive_keep_count (default: 5).
+
+        Returns:
+            pruned_count: Number of outputs pruned.
+            pruned_tokens: Estimated tokens saved.
+            pruned_list: Descriptions of what was pruned.
+            awareness_message: Optional system message for the next LLM call.
+            mode: Which strategy was used.
+        """
+        from services.prune_service import prune_messages, mark_rerun_protected
+
+        if not request.is_json:
+            return jsonify({"error": "Request must be JSON."}), 400
+
+        data = request.get_json(silent=True) or {}
+        mode = str(data.get("mode") or "smart").strip().lower()
+        keep_count = data.get("keep_count")
+        if keep_count is not None:
+            try:
+                keep_count = max(1, int(keep_count))
+            except (TypeError, ValueError):
+                keep_count = None
+
+        # Load conversation messages.
+        from core.db import get_conversation_messages
+        messages = get_conversation_messages(conv_id)
+        if not messages:
+            return jsonify({"error": "Conversation not found or empty."}), 404
+
+        # Run pruning.
+        result = prune_messages(
+            messages,
+            mode=mode,
+            aggressive_keep_count=keep_count,
+            conversation_id=conv_id,
+        )
+
+        if mode == "status":
+            return jsonify(result)
+
+        # Persist pruned messages back to the database if not a dry-run.
+        if result["pruned_count"] > 0:
+            _persist_pruned_messages(conv_id, result["messages"])
+
+            # Store awareness_message in app_settings so the next agent turn can inject it
+            awareness_message = result.get("awareness_message")
+            if awareness_message:
+                try:
+                    from core.db import get_db
+                    with get_db() as conn:
+                        conn.execute(
+                            "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now')) "
+                            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')",
+                            (f"prune_awareness:{conv_id}", awareness_message),
+                        )
+                except Exception:
+                    pass
+
+        return jsonify(result)
 
     @app.route("/api/fix-text", methods=["POST"])
     def fix_text():
