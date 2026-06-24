@@ -201,7 +201,7 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "ask_clarifying_question": "Pause and ask the user structured questions before answering.",
     "transcribe_youtube_video": "Validate a YouTube URL and generate a local speech transcript with a prompt-ready context block.",
     "search_knowledge_base": "Semantic search over synced chats and uploaded documents.",
-    "search_web": "Live web search via DuckDuckGo for current facts.",
+    "search_web": "Live web search via SERP API for current facts.",
     "fetch_url": "Read and extract cleaned text from a specific web page.",
     "fetch_url_summarized": "Fetch a page and return only a focused AI summary.",
     "search_news": "Search recent news articles via Google News.",

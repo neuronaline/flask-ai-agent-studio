@@ -31,21 +31,44 @@ import logging
 import re
 from typing import Any
 
+from core.db import get_pruning_enabled, get_pruning_aggressive_keep_count, get_pruning_failed_attempts_threshold
 from utils.token_utils import estimate_text_tokens
 
 LOGGER = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration defaults
+#
+# These defaults are used at import time.  When prune_messages() runs it
+# syncs from the persisted settings table via _sync_pruning_config_from_db(),
+# so values set through the UI (pruning_enabled, aggressive_keep_count,
+# failed_attempts_threshold) are picked up at runtime.
+# The /api/conversations/<id>/prune endpoint in routes/chat.py can also
+# override aggressive_keep_count from the request payload.
 # ---------------------------------------------------------------------------
 
 PRUNING_CONFIG: dict[str, Any] = {
-    "enabled": True,
-    "aggressive_keep_count": 5,
+    "enabled": False,
+    "aggressive_keep_count": 20,
     "failed_attempts_threshold": 3,
     "protect_reruns": True,
     "read_file_prune_strategy": "same_file_edited",
 }
+
+
+def _sync_pruning_config_from_db() -> None:
+    """Sync the module-level PRUNING_CONFIG from the persisted settings table.
+
+    Reads the values stored by the UI (settings page) so the runtime state
+    reflects the user's current preferences instead of the import-time defaults.
+    Called at the beginning of every ``prune_messages()`` call.
+    """
+    try:
+        PRUNING_CONFIG["enabled"] = get_pruning_enabled()
+        PRUNING_CONFIG["aggressive_keep_count"] = get_pruning_aggressive_keep_count()
+        PRUNING_CONFIG["failed_attempts_threshold"] = get_pruning_failed_attempts_threshold()
+    except Exception:
+        LOGGER.exception("prune_service: failed to sync pruning config from DB — using module defaults")
 
 # Tool names whose *outputs* (role == "tool") are eligible for pruning.
 # Assistant messages that *call* these tools are never touched.
@@ -792,10 +815,15 @@ def prune_messages(
         ``protected_count`` — Number of outputs protected from pruning.
         ``awareness_message`` — Optional system message snippet for the next LLM call.
     """
-    if not PRUNING_CONFIG.get("enabled", True):
+    if not messages:
         return _result(messages)
 
-    if not messages:
+    # Sync runtime config from the persisted settings table so user
+    # preferences (UI toggle, thresholds) take effect immediately.
+    # This must happen before the enabled check below.
+    _sync_pruning_config_from_db()
+
+    if not PRUNING_CONFIG.get("enabled", True):
         return _result(messages)
 
     normalized_mode = str(mode or "smart").strip().lower()

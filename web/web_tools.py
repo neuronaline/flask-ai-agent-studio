@@ -330,7 +330,7 @@ def _search_news_internal(
         if not query:
             continue
 
-        cache_key = f"{cache_prefix}:{hashlib.md5((query + lang + (when or '')).lower().encode()).hexdigest()}"
+        cache_key = f"{cache_prefix}:{hashlib.md5((query + lang).lower().encode()).hexdigest()}"
         cached = cache_get(cache_key)
         if cached is not None:
             LOGGER.debug("_search_news_internal[%s]: cache HIT for query='%.60s'", cache_prefix, query)
@@ -342,18 +342,13 @@ def _search_news_internal(
 
         LOGGER.debug("_search_news_internal[%s]: cache MISS for query='%.60s' — calling SERP API", cache_prefix, query)
         try:
-            # Build payload; include when for forward-compatibility (SERP API
-            # silently ignores unknown fields; the old serp-scraper client
-            # supported timelimit via DuckDuckGo's API, but the hosted SERP API
-            # (Google News RSS) currently does not support time filtering).
+            # Build payload per SERP API spec (no time filter support in news).
             payload: dict[str, object] = {
                 "query": query,
                 "max_results": SEARCH_MAX_RESULTS,
                 "language": lang,
                 "country": country,
             }
-            if when:
-                payload["time_range"] = when
 
             api_data = _serp_api_request("/api/v1/news", payload)
             LOGGER.info("_search_news_internal[%s]: query='%.60s' returned %d raw news results", cache_prefix, query, len(api_data))

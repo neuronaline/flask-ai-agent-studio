@@ -334,7 +334,7 @@ TOOL_SPECS = [
     {
         "name": "search_web",
         "description": (
-            "Search the web using DuckDuckGo. Use this only when you need current information, external verification, or facts that are not already answerable from the current conversation. "
+            "Search the web using the SERP API (Google/Bing). Use this only when you need current information, external verification, or facts that are not already answerable from the current conversation. "
             "Provide one or more search queries. Do not pass max_results or other result-limit controls; the runtime already applies the search result cap."
         ),
         "parameters": {
@@ -435,9 +435,9 @@ TOOL_SPECS = [
     {
         "name": "search_news",
         "description": (
-            "Search recent news articles via Google News. Returns title, link, publication time and source for each article. "
+            "Search recent news articles via Google News through the SERP API. Returns title, link, publication time and source for each article. "
             "Use this only when the request needs current news coverage, external verification, or broad news discovery. "
-            "Optionally filter by time range and language. If you need the full article text, follow up with fetch_url on the returned links."
+            "Filter by language. If you need the full article text, follow up with fetch_url on the returned links."
         ),
         "parameters": {
             "type": "object",
@@ -454,20 +454,14 @@ TOOL_SPECS = [
                     "enum": ["tr", "en"],
                     "description": "Search language/region. 'tr' for Turkish results, 'en' for English.",
                 },
-                "when": {
-                    "type": "string",
-                    "enum": ["d", "w", "m", "y"],
-                    "description": "Optional time filter: 'd'=last day, 'w'=last week, 'm'=last month, 'y'=last year.",
-                },
             },
             "required": ["queries"],
         },
         "prompt": {
-            "purpose": "Searches news headlines/links/dates/sources via Google News.",
+            "purpose": "Searches news headlines/links/dates/sources via the SERP API.",
             "inputs": {
                 "queries": f"1-{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} news queries",
                 "lang": "tr|en",
-                "when": "d|w|m|y",
             },
             "guidance": (
                 "Use this for broad recent-news discovery when you actually need headlines, sources, and timestamps before reading full articles. "
@@ -480,9 +474,9 @@ TOOL_SPECS = [
     {
         "name": "search_news_google",
         "description": (
-            "Search Google News via RSS feed. Returns title, link, publication time and source for each article. "
-            "Use this only when the request needs current news coverage or current news verification and Google News coverage is specifically preferred, especially for Turkish financial news, local outlets, or when DuckDuckGo News yields weak coverage. "
-            "Optionally filter by time range and language. If you need the full article text, follow up with fetch_url on the returned links."
+            "Search Google News via the SERP API. Returns title, link, publication time and source for each article. "
+            "Use this only when the request needs current news coverage or current news verification and Google News coverage is specifically preferred, especially for Turkish financial news, local outlets, or when general news yields weak coverage. "
+            "Filter by language. If you need the full article text, follow up with fetch_url on the returned links."
         ),
         "parameters": {
             "type": "object",
@@ -499,23 +493,17 @@ TOOL_SPECS = [
                     "enum": ["tr", "en"],
                     "description": "Search language/region. 'tr' for Turkish results, 'en' for English.",
                 },
-                "when": {
-                    "type": "string",
-                    "enum": ["d", "w", "m", "y"],
-                    "description": "Optional time filter: 'd'=last day, 'w'=last week, 'm'=last month, 'y'=last year.",
-                },
             },
             "required": ["queries"],
         },
         "prompt": {
-            "purpose": "Searches news headlines/links/dates/sources with Google News RSS.",
+            "purpose": "Searches news headlines/links/dates/sources via the SERP API.",
             "inputs": {
                 "queries": f"1-{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} news queries",
                 "lang": "tr|en",
-                "when": "d|w|m|y",
             },
             "guidance": (
-                "Use this when Google News coverage is likely stronger than DuckDuckGo News for the topic or locale and the request genuinely needs current news verification. "
+                "Use this when Google News coverage is likely stronger than the default news source for the topic or locale and the request genuinely needs current news verification. "
                 f"Never pass more than {DEFAULT_SEARCH_TOOL_QUERY_LIMIT} queries in one call. After scanning the feed, fetch only the few links that are actually needed."
             ),
         },
@@ -523,10 +511,10 @@ TOOL_SPECS = [
     {
         "name": "search_scholar",
         "description": (
-            "Search academic papers via Google Scholar. Returns title, URL, snippet/abstract, authors, "
+            "Search academic papers via Google Scholar through the SERP API. Returns title, URL, snippet/abstract, authors, "
             "publication year, venue, and citation count for each result. "
             "Use this for academic research, literature reviews, finding papers, or verifying scholarly sources. "
-            "The tool uses browser automation for accurate results."
+            "The tool delegates to the SERP API which handles browser automation server-side."
         ),
         "parameters": {
             "type": "object",

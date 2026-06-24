@@ -538,6 +538,10 @@ DEFAULT_SETTINGS = {
     "conversation_truncation_enabled": "true" if CONVERSATION_TRUNCATION_ENABLED else "false",
     "conversation_max_messages": str(CONVERSATION_MAX_MESSAGES),
     "conversation_max_message_chars": str(CONVERSATION_MAX_MESSAGE_CHARS),
+    # Pruning config
+    "pruning_enabled": "false",
+    "pruning_aggressive_keep_count": "20",
+    "pruning_failed_attempts_threshold": "3",
 }
 
 

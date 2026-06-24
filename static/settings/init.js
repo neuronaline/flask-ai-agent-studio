@@ -139,6 +139,11 @@
     canvasPromptMaxCharsEl?.addEventListener("input", getMarkDirty());
     reasoningAutoCollapseEl?.addEventListener("change", getMarkDirty());
 
+    // Pruning controls
+    document.getElementById("pruning-enabled-toggle")?.addEventListener("change", getMarkDirty());
+    document.getElementById("pruning-aggressive-keep-count-input")?.addEventListener("input", getMarkDirty());
+    document.getElementById("pruning-failed-attempts-threshold-input")?.addEventListener("input", getMarkDirty());
+
     saveButtons.forEach((button) => {
       button.addEventListener("click", () => void getSaveAllSettings()());
     });

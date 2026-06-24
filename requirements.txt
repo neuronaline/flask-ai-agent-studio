@@ -35,8 +35,7 @@ pdfplumber>=0.11                # PDF text extraction (document ingestion)
 # Web Search & Scraping — SERP REST API backend, RSS feed parsing
 # ---------------------------------------------------------------------------
 # serp-scraper is no longer installed locally. All search, news, scholar, and
-# URL fetch operations use the hosted SERP API (https://serp.signalique.com).
-# See docs/SERP_API.md for details.
+# URL fetch operations use the hosted SERP API (https://github.com/neuronaline/serp-scraper).
 httpx>=0.27                     # HTTP client (already listed above, kept for clarity)
 # ---------------------------------------------------------------------------
 # Optional: RAG / Vector Search (knowledge base + semantic memory)

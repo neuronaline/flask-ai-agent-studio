@@ -191,6 +191,14 @@
     if (fetchRawMaxTextCharsEl) fetchRawMaxTextCharsEl.value = String(appSettings.fetch_raw_max_text_chars ?? 24000);
     if (fetchSummaryMaxCharsEl) fetchSummaryMaxCharsEl.value = String(appSettings.fetch_summary_max_chars ?? 8000);
 
+    // Pruning
+    const pruningEnabledEl = document.getElementById("pruning-enabled-toggle");
+    const pruningAggressiveKeepCountEl = document.getElementById("pruning-aggressive-keep-count-input");
+    const pruningFailedAttemptsThresholdEl = document.getElementById("pruning-failed-attempts-threshold-input");
+    if (pruningEnabledEl) pruningEnabledEl.checked = Boolean(appSettings.pruning_enabled ?? false);
+    if (pruningAggressiveKeepCountEl) pruningAggressiveKeepCountEl.value = String(appSettings.pruning_aggressive_keep_count ?? 20);
+    if (pruningFailedAttemptsThresholdEl) pruningFailedAttemptsThresholdEl.value = String(appSettings.pruning_failed_attempts_threshold ?? 3);
+
     // Tool / RAG — delegate to modules
     window.__settingsTools?.applySelectedTools?.(appSettings.active_tools || []);
     window.__settingsTools?.applySelectedSubAgentTools?.(appSettings.sub_agent_allowed_tool_names || []);
@@ -364,6 +372,9 @@
     appSettings.rag_auto_inject_source_types = Array.isArray(data.rag_auto_inject_source_types)
       ? data.rag_auto_inject_source_types
       : appSettings.rag_source_types;
+    appSettings.pruning_enabled = Boolean(data.pruning_enabled ?? false);
+    appSettings.pruning_aggressive_keep_count = data.pruning_aggressive_keep_count ?? 20;
+    appSettings.pruning_failed_attempts_threshold = data.pruning_failed_attempts_threshold ?? 3;
     if (data.features && typeof data.features === "object") {
       Object.assign(featureFlags, data.features);
     }
@@ -472,6 +483,10 @@
       rag_context_size: ragContextSizeEl?.value || "medium",
       rag_source_types: isRagEnabledDraft ? (window.__settingsRag?.getSelectedRagSourceTypes?.() ?? []) : [],
       rag_auto_inject_source_types: isRagEnabledDraft ? (window.__settingsRag?.getSelectedRagAutoInjectSourceTypes?.() ?? []) : [],
+      // Pruning
+      pruning_enabled: Boolean(document.getElementById("pruning-enabled-toggle")?.checked ?? false),
+      pruning_aggressive_keep_count: readNumericSetting(document.getElementById("pruning-aggressive-keep-count-input"), 20, { allowZero: false, min: 5, max: 100 }),
+      pruning_failed_attempts_threshold: readNumericSetting(document.getElementById("pruning-failed-attempts-threshold-input"), 3, { allowZero: false, min: 1, max: 20 }),
       // Scratchpad
       scratchpad_sections: DEFAULT_SCRATCHPAD_SECTION_ORDER.reduce((acc, sectionId) => {
         const sectionContent = scratchpadSections[sectionId];
