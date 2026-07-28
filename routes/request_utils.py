@@ -22,7 +22,7 @@ def parse_messages_payload(raw_value) -> list:
         return []
     try:
         parsed = json.loads(raw_value)
-    except Exception:
+    except (json.JSONDecodeError, TypeError, ValueError):
         return []
     return parsed if isinstance(parsed, list) else []
 

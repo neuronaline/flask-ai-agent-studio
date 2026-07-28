@@ -45,10 +45,7 @@ _prompts_mod.reload_prompts()
 
 @pytest.fixture(autouse=True)
 def test_environment(monkeypatch):
-    import core.config as config
-
     monkeypatch.setenv("RAG_ENABLED", "true")
-    monkeypatch.setattr(config, "RAG_ENABLED", True)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "")
     monkeypatch.setenv("OPENROUTER_API_KEY", "")
     monkeypatch.setenv("OPENAI_API_KEY", "")
@@ -71,25 +68,10 @@ def isolate_test_state(monkeypatch):
     import core.config as config
     import lib.model_registry as model_registry
     import rag.store as rag_store
-    import routes.conversations
 
-    # Ensure RAG_ENABLED is True in all relevant modules
-    monkeypatch.setattr(config, "RAG_ENABLED", True)
-    config._RUNTIME_BASE_VALUES["RAG_ENABLED"] = True  # override fallback used by apply_persisted_runtime_settings
-    monkeypatch.setattr(routes.conversations, "RAG_ENABLED", True)
-    # Patch RAG_ENABLED in any module already imported that copied the value at import time
-    _RAG_ENABLED_MODULES = {
-        "rag_service",
-        "messages",
-        "routes.pages",
-        "routes.chat",
-        "tool_registry",
-        "db",
-    }
-    for _mod_name in _RAG_ENABLED_MODULES:
-        _mod = sys.modules.get(_mod_name)
-        if _mod is not None and hasattr(_mod, "RAG_ENABLED"):
-            monkeypatch.setattr(_mod, "RAG_ENABLED", True)
+    # Ensure runtime settings are at their defaults via get_runtime_setting()
+    config._runtime_settings = config.RuntimeSettings.from_defaults()
+    config._RUNTIME_BASE_VALUES["RAG_ENABLED"] = True  # backward-compat fallback
 
     fake_client = FakeChromaClient()
     rag_store._client = None
@@ -113,13 +95,7 @@ def isolate_test_state(monkeypatch):
 def app(tmp_path, monkeypatch):
     from core.app import create_app
 
-    # Re-patch RAG_ENABLED — the module-level app = create_app() at core/app.py
-    # (triggered by the import above) resets patches applied by earlier fixtures.
     import core.config as _config
-    import routes.conversations as _conversations
-
-    monkeypatch.setattr(_config, "RAG_ENABLED", True)
-    monkeypatch.setattr(_conversations, "RAG_ENABLED", True)
 
     monkeypatch.setattr(_config, "LOGIN_PIN", "")
     app_instance = create_app(database_path=str(tmp_path / "test.db"), load_persisted_runtime_settings=False)

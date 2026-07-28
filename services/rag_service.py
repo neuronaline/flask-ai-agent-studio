@@ -16,12 +16,7 @@ from flask import current_app, has_app_context
 from utils.logging_config import get_logger
 from core.config import (
     RAG_DISABLED_FEATURE_ERROR,
-    RAG_ENABLED,
     RAG_MAX_CHUNKS_PER_SOURCE,
-    RAG_QUERY_EXPANSION_ENABLED,
-    RAG_QUERY_EXPANSION_MAX_VARIANTS,
-    RAG_SEARCH_DEFAULT_TOP_K,
-    RAG_SEARCH_MIN_SIMILARITY,
     RAG_SOURCE_CONVERSATION,
     RAG_SOURCE_TOOL_RESULT,
     RAG_SOURCE_UPLOADED_DOCUMENT,
@@ -29,6 +24,7 @@ from core.config import (
     RAG_SUPPORTED_SOURCE_TYPES,
     RAG_TEMPORAL_DECAY_ALPHA,
     RAG_TEMPORAL_DECAY_LAMBDA,
+    get_runtime_setting,
 )
 from core.db import (
     delete_rag_document_records,
@@ -101,7 +97,7 @@ LOGGER = get_logger(__name__)
 
 
 def _require_rag_enabled() -> None:
-    if not RAG_ENABLED:
+    if not get_runtime_setting("RAG_ENABLED"):
         raise RuntimeError(RAG_DISABLED_FEATURE_ERROR)
 
 
@@ -719,7 +715,7 @@ def _expand_query_variants(query: str) -> list[str]:
     if not normalized_query:
         return []
 
-    if not RAG_QUERY_EXPANSION_ENABLED:
+    if not get_runtime_setting("RAG_QUERY_EXPANSION_ENABLED"):
         return [normalized_query]
 
     variants: list[str] = []
@@ -746,16 +742,16 @@ def _expand_query_variants(query: str) -> list[str]:
     if len(informative_tokens) >= 3:
         add_variant(" ".join(informative_tokens[: max(2, len(informative_tokens) // 2 + 1)]))
 
-    return variants[:RAG_QUERY_EXPANSION_MAX_VARIANTS]
+    return variants[:get_runtime_setting("RAG_QUERY_EXPANSION_MAX_VARIANTS")]
 
 
 def _coerce_similarity_threshold(min_similarity: float | int | str | None) -> float:
     if min_similarity in (None, ""):
-        return RAG_SEARCH_MIN_SIMILARITY
+        return get_runtime_setting("RAG_SEARCH_MIN_SIMILARITY")
     try:
         return max(0.0, min(1.0, float(min_similarity)))
     except (TypeError, ValueError):
-        return RAG_SEARCH_MIN_SIMILARITY
+        return get_runtime_setting("RAG_SEARCH_MIN_SIMILARITY")
 
 
 def _resolve_source_type_hint(
@@ -878,7 +874,7 @@ def _dedupe_rag_hits(hits: list[dict]) -> list[dict]:
 
 
 def _apply_source_diversity_limit(matches: list[dict]) -> list[dict]:
-    per_source_limit = max(1, int(RAG_MAX_CHUNKS_PER_SOURCE))
+    per_source_limit = max(1, int(get_runtime_setting("RAG_MAX_CHUNKS_PER_SOURCE")))
     if per_source_limit <= 0:
         return matches
 
@@ -911,7 +907,7 @@ def _query_rag_hits(
         return []
     collected_hits: list[dict] = []
     requested_top_k = max(1, int(top_k))
-    candidate_top_k = max(requested_top_k, requested_top_k * max(2, int(RAG_MAX_CHUNKS_PER_SOURCE)))
+    candidate_top_k = max(requested_top_k, requested_top_k * max(2, int(get_runtime_setting("RAG_MAX_CHUNKS_PER_SOURCE"))))
     filtered_query = _filter_rag_query_poisoning(query)
     normalized_query = re.sub(r"\s+", " ", filtered_query.strip())
     if not normalized_query:
@@ -1064,7 +1060,7 @@ def search_knowledge_base_tool(
     if not query:
         return {"query": "", "matches": [], "count": 0}
 
-    top_k = RAG_SEARCH_DEFAULT_TOP_K if top_k is None else top_k
+    top_k = get_runtime_setting("RAG_SEARCH_DEFAULT_TOP_K") if top_k is None else top_k
 
     ensure_supported_rag_sources()
     normalized_category = normalize_rag_category(category, default=None) if category else None
@@ -1142,7 +1138,7 @@ def build_rag_auto_context(
     allowed_source_types: set[str] | list[str] | tuple[str, ...] | None = None,
 ) -> dict | None:
     query = str(query or "").strip()
-    if not RAG_ENABLED or not enabled or not query:
+    if not get_runtime_setting("RAG_ENABLED") or not enabled or not query:
         return None
     try:
         ensure_supported_rag_sources()
@@ -1626,7 +1622,7 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
 
 
 def sync_conversations_to_rag_safe(conversation_id: int | None = None, force: bool = False) -> list[dict]:
-    if not RAG_ENABLED:
+    if not get_runtime_setting("RAG_ENABLED"):
         return []
     try:
         return sync_conversations_to_rag(conversation_id=conversation_id, force=force)
@@ -1638,7 +1634,7 @@ def sync_conversations_to_rag_safe(conversation_id: int | None = None, force: bo
 
 
 def sync_conversations_to_rag_background(app_obj, conversation_id: int | None = None, force: bool = False):
-    if not RAG_ENABLED:
+    if not get_runtime_setting("RAG_ENABLED"):
         return None
     job_key, should_submit, existing_future = _queue_rag_background_sync_request(conversation_id, force)
     if not should_submit:

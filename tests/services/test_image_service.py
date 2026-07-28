@@ -10,7 +10,7 @@ from services.image_service import analyze_uploaded_image, answer_image_question
 
 class TestImageService:
     def test_analyze_uploaded_image_preserves_provider_failures(self):
-        with patch("services.image_service.IMAGE_UPLOADS_ENABLED", True), patch(
+        with patch("services.image_service.get_runtime_setting", return_value=True), patch(
             "services.image_service._resolve_processing_plan",
             return_value=["multimodal"],
         ), patch(
@@ -29,7 +29,7 @@ class TestImageService:
         assert str(raised.value) == "provider down"
 
     def test_analyze_uploaded_image_direct_mode_returns_passthrough_metadata(self):
-        with patch("services.image_service.IMAGE_UPLOADS_ENABLED", True), patch(
+        with patch("services.image_service.get_runtime_setting", return_value=True), patch(
             "services.image_service.can_model_process_images",
             return_value=True,
         ):
@@ -44,7 +44,7 @@ class TestImageService:
         assert "attached directly" in analysis["assistant_guidance"]
 
     def test_analyze_uploaded_image_local_ocr_does_not_fall_back_to_remote_modes(self):
-        with patch("services.image_service.IMAGE_UPLOADS_ENABLED", True), patch(
+        with patch("services.image_service.get_runtime_setting", return_value=True), patch(
             "services.image_service._run_local_ocr_analysis",
             side_effect=RuntimeError("OCR stack unavailable"),
         ), patch(
@@ -101,11 +101,11 @@ class TestImageService:
         assert mocked_log.called
         logged_kwargs = mocked_log.call_args.kwargs
         assert logged_kwargs["conversation_id"] == 9
-        assert logged_kwargs["source_message_id"] == 15
-        assert logged_kwargs["operation"] == "image_question"
-        assert "messages" in logged_kwargs["request_payload"]
+        assert logged_kwargs["params"]["source_message_id"] == 15
+        assert logged_kwargs["params"]["operation"] == "image_question"
+        assert "messages" in logged_kwargs["params"]["request_payload"]
         assert (
-            str(logged_kwargs["request_payload"]["messages"][0]["content"][1]["image_url"]["url"]).startswith(
+            str(logged_kwargs["params"]["request_payload"]["messages"][0]["content"][1]["image_url"]["url"]).startswith(
                 "data:image/png;base64,"
             )
         )

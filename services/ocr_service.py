@@ -8,8 +8,8 @@ from io import BytesIO, StringIO
 
 from core.config import (
     OCR_DISABLED_FEATURE_ERROR,
-    OCR_ENABLED,
     OCR_PRELOAD_ON_STARTUP,
+    get_runtime_setting,
 )
 from utils.image_utils import optimize_image_for_processing
 from utils.logging_config import get_logger
@@ -39,7 +39,7 @@ def _configure_paddle_runtime() -> None:
             }
         )
     except Exception:
-        pass
+        LOGGER.debug("Failed to set PaddlePaddle flags (non-critical)", exc_info=True)
 
 
 def _build_paddleocr_engine() -> dict:
@@ -67,7 +67,7 @@ def _build_paddleocr_engine() -> dict:
 def get_ocr_engine() -> dict:
     global _ocr_engine
 
-    if not OCR_ENABLED:
+    if not get_runtime_setting("OCR_ENABLED"):
         raise RuntimeError(OCR_DISABLED_FEATURE_ERROR)
 
     if _ocr_engine is not None:
@@ -86,7 +86,7 @@ def get_ocr_engine() -> dict:
 
 
 def preload_ocr_engine(app) -> None:
-    if not OCR_ENABLED or not OCR_PRELOAD_ON_STARTUP:
+    if not get_runtime_setting("OCR_ENABLED") or not OCR_PRELOAD_ON_STARTUP:
         return
 
     is_reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
@@ -125,7 +125,7 @@ def _coerce_mapping(value):
         try:
             return {key: value[key] for key in value.keys()}
         except Exception:
-            pass
+            LOGGER.debug("Failed to coerce mapping via keys()", exc_info=True)
 
     to_dict = getattr(value, "to_dict", None)
     if callable(to_dict):
@@ -134,7 +134,7 @@ def _coerce_mapping(value):
             if isinstance(result, dict):
                 return result
         except Exception:
-            pass
+            LOGGER.debug("Failed to coerce mapping via to_dict()", exc_info=True)
 
     raw_dict = getattr(value, "__dict__", None)
     if isinstance(raw_dict, dict):
@@ -192,7 +192,7 @@ def _run_paddleocr(image_bytes: bytes) -> str:
 
 
 def extract_image_text(image_bytes: bytes, mime_type: str) -> str:
-    if not OCR_ENABLED:
+    if not get_runtime_setting("OCR_ENABLED"):
         raise RuntimeError(OCR_DISABLED_FEATURE_ERROR)
 
     optimized_bytes, _ = optimize_image_for_processing(image_bytes, mime_type, purpose="ocr")

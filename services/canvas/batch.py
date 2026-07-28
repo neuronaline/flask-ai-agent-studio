@@ -12,6 +12,9 @@ import json
 import re
 
 from services.canvas.constants import CanvasBatchOverlapError
+from utils.logging_config import get_logger
+
+LOGGER = get_logger(__name__)
 
 from services.canvas.normalize import (
     list_canvas_lines,
@@ -70,11 +73,11 @@ def _coerce_batch_canvas_json_value(value):
     try:
         return json.loads(candidate_text)
     except Exception:
-        pass
+        LOGGER.debug("Failed to coerce JSON value via json.loads", exc_info=True)
     try:
         return ast.literal_eval(candidate_text)
     except Exception:
-        pass
+        LOGGER.debug("Failed to coerce value via ast.literal_eval", exc_info=True)
     return value
 
 

@@ -1394,12 +1394,70 @@ def build_model_target_tool_choice_fallback_request(
     return fallback_request_kwargs
 
 
+# Module-level constants for internal key stripping (defined once, not per-call)
+_INTERNAL_API_KEYS = {"reasoning", "reasoning_details"}
+_INTERNAL_API_PREFIXES = ("_forge_",)
+
+
+def _strip_internal_keys(msg: dict) -> dict:
+    """Strip internal-only keys from assistant messages before sending to the API.
+
+    Internal keys (``reasoning``, ``reasoning_details``, ``_forge_*``) are not
+    part of any provider's API contract and will cause HTTP 400 if sent.
+    """
+    cleaned = {}
+    for k, v in msg.items():
+        if k in _INTERNAL_API_KEYS:
+            continue
+        if any(k.startswith(prefix) for prefix in _INTERNAL_API_PREFIXES):
+            continue
+        cleaned[k] = v
+    return cleaned
+
+
 def _prepare_model_request_messages(
     messages: Any, record: dict[str, Any] | None, settings: dict[str, Any] | None = None
 ) -> Any:
     if not isinstance(messages, list) or not isinstance(record, dict):
         return messages
-    if str(record.get("provider") or "").strip() != OPENROUTER_PROVIDER:
+
+    provider = str(record.get("provider") or "").strip()
+
+    # === Rule 3: Universal Stripping of internal keys ===
+    # Per CACHE_AND_MESSAGE_RULES.md Rule 3 ("API Payload Safety"):
+    # Internal keys (`reasoning`, `reasoning_details`, `_forge_*`) MUST be
+    # stripped from ALL assistant messages before sending to the API.
+    cleaned_messages: list[dict] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            cleaned_messages.append(msg)
+            continue
+        role = str(msg.get("role") or "").strip()
+        if role == "assistant":
+            cleaned_messages.append(_strip_internal_keys(msg))
+        else:
+            cleaned_messages.append(msg)
+    messages = cleaned_messages
+
+    # === DeepSeek: Strip content from tool_calls assistant messages ===
+    # Per CACHE_AND_MESSAGE_RULES.md Rule 4 ("Content Key" Rule):
+    # ONLY DeepSeek rejects `content` alongside `tool_calls`.
+    # This is the provider-level safety net; the agent loop also gates
+    # _strip_intermediate_tool_call_content behind _is_deepseek_model_target.
+    if provider == DEEPSEEK_PROVIDER:
+        prepared: list[dict] = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                prepared.append(msg)
+                continue
+            role = str(msg.get("role") or "").strip()
+            if role == "assistant" and msg.get("tool_calls") and str(msg.get("content") or "").strip():
+                prepared.append({**msg, "content": None})
+            else:
+                prepared.append(msg)
+        return prepared
+
+    if provider != OPENROUTER_PROVIDER:
         return messages
     if not _is_openrouter_prompt_cache_enabled(settings):
         return messages
@@ -1843,8 +1901,8 @@ def get_provider_client(provider: str) -> OpenAI | _OpenRouterClientProxy | _Min
         )
     if provider == OPENROUTER_PROVIDER:
         default_headers: dict[str, str] = {}
-        http_referer = str(config.OPENROUTER_HTTP_REFERER or "").strip()
-        app_title = str(config.OPENROUTER_APP_TITLE or "").strip()
+        http_referer = str(config.get_runtime_setting("OPENROUTER_HTTP_REFERER") or "").strip()
+        app_title = str(config.get_runtime_setting("OPENROUTER_APP_TITLE") or "").strip()
         if http_referer:
             default_headers["HTTP-Referer"] = http_referer
         if app_title:

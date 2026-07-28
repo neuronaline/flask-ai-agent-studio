@@ -90,7 +90,7 @@ def _is_session_authenticated(now: datetime | None = None) -> bool:
         _clear_auth_state()
         return False
 
-    timeout = timedelta(minutes=config.LOGIN_SESSION_TIMEOUT_MINUTES)
+    timeout = timedelta(minutes=config.get_runtime_setting("LOGIN_SESSION_TIMEOUT_MINUTES"))
     if current_time - last_seen > timeout:
         _clear_auth_state()
         return False
@@ -108,8 +108,8 @@ def _build_login_context(error: str | None = None, next_url: str | None = None, 
             next_url=next_url,
             lockout_seconds=_remaining_lockout_seconds(),
             lockout_until=_lockout_until(),
-            timeout_minutes=config.LOGIN_SESSION_TIMEOUT_MINUTES,
-            remember_days=config.LOGIN_REMEMBER_SESSION_DAYS,
+            timeout_minutes=config.get_runtime_setting("LOGIN_SESSION_TIMEOUT_MINUTES"),
+            remember_days=config.get_runtime_setting("LOGIN_REMEMBER_SESSION_DAYS"),
             page_lang=request.accept_languages.best_match(["tr", "en"]) or "en",
         ),
         status_code,
@@ -157,8 +157,8 @@ def register_auth_routes(app) -> None:
             return redirect(next_url or url_for("index"))
 
         failed_attempts = int(session.get(AUTH_FAILED_ATTEMPTS_KEY) or 0) + 1
-        if failed_attempts >= config.LOGIN_MAX_FAILED_ATTEMPTS:
-            lockout_until = _utc_now() + timedelta(seconds=config.LOGIN_LOCKOUT_SECONDS)
+        if failed_attempts >= config.get_runtime_setting("LOGIN_MAX_FAILED_ATTEMPTS"):
+            lockout_until = _utc_now() + timedelta(seconds=config.get_runtime_setting("LOGIN_LOCKOUT_SECONDS"))
             session[AUTH_FAILED_ATTEMPTS_KEY] = 0
             session[AUTH_LOCKED_UNTIL_KEY] = lockout_until.isoformat()
             session.modified = True

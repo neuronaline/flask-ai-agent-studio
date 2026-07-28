@@ -19,6 +19,20 @@ from services.rag_service import (
 from routes.chat import maybe_create_conversation_summary
 
 
+def _runtime_setting_mock(key):
+    """Mock get_runtime_setting returning sensible defaults for test paths."""
+    _bools = {"RAG_ENABLED", "RAG_QUERY_EXPANSION_ENABLED", "CONVERSATION_MEMORY_ENABLED"}
+    _ints = {"RAG_SEARCH_DEFAULT_TOP_K": 5, "RAG_QUERY_EXPANSION_MAX_VARIANTS": 2, "RAG_MAX_CHUNKS_PER_SOURCE": 2}
+    _floats = {"RAG_SEARCH_MIN_SIMILARITY": 0.35}
+    if key in _bools:
+        return True
+    if key in _ints:
+        return _ints[key]
+    if key in _floats:
+        return _floats[key]
+    return True
+
+
 def test_build_metadata_filter_where_defaults_to_and_across_fields_and_or_within_field():
     where = _build_metadata_filter_where(
         {
@@ -243,7 +257,7 @@ class TestRagRuntime:
         ]
 
         with (
-            patch("rag_service.RAG_ENABLED", True),
+            patch("rag_service.get_runtime_setting", side_effect=_runtime_setting_mock),
             patch("rag_service.ensure_supported_rag_sources"),
             patch("rag_service.rag_query_chunks", return_value=fake_hits),
             patch("rag_service.get_db") as mocked_db,
@@ -318,7 +332,7 @@ class TestRagRuntime:
             ]
 
         with (
-            patch("rag_service.RAG_ENABLED", True),
+            patch("rag_service.get_runtime_setting", side_effect=_runtime_setting_mock),
             patch("rag_service.ensure_supported_rag_sources"),
             patch("rag_service.rag_query_chunks", side_effect=fake_query) as mocked_query,
             patch("rag_service.time.time", return_value=2_000),
@@ -333,7 +347,7 @@ class TestRagRuntime:
         fake_conn.execute.return_value.fetchall.return_value = []
 
         with (
-            patch("rag_service.RAG_ENABLED", True),
+            patch("rag_service.get_runtime_setting", side_effect=_runtime_setting_mock),
             patch("rag_service._rag_sources_verified", True),
             patch("rag_service._rag_sources_last_verified_at", 100.0),
             patch("rag_service.time.time", return_value=120.0),
@@ -435,7 +449,7 @@ class TestRagRuntime:
         ]
 
         with (
-            patch("rag_service.RAG_ENABLED", True),
+            patch("rag_service.get_runtime_setting", side_effect=_runtime_setting_mock),
             patch("rag_service.ensure_supported_rag_sources"),
             patch("rag_service.rag_query_chunks", return_value=fake_hits),
         ):
@@ -483,7 +497,7 @@ class TestRagRuntime:
         ]
 
         with (
-            patch("rag_service.RAG_ENABLED", True),
+            patch("rag_service.get_runtime_setting", side_effect=_runtime_setting_mock),
             patch("rag_service.ensure_supported_rag_sources"),
             patch("rag_service.rag_query_chunks", return_value=fake_hits),
             patch("rag_service.time.time", return_value=new_timestamp),
@@ -551,7 +565,7 @@ class TestRagRuntime:
         ]
 
         with (
-            patch("rag_service.RAG_ENABLED", True),
+            patch("rag_service.get_runtime_setting", side_effect=_runtime_setting_mock),
             patch("rag_service.ensure_supported_rag_sources"),
             patch("rag_service.rag_query_chunks", return_value=fake_hits),
         ):
@@ -626,7 +640,7 @@ class TestRagRuntime:
         ]
 
         with (
-            patch("rag_service.RAG_ENABLED", True),
+            patch("rag_service.get_runtime_setting", side_effect=_runtime_setting_mock),
             patch("rag_service.ensure_supported_rag_sources"),
             patch("rag_service.rag_query_chunks", return_value=fake_hits),
             patch(
@@ -641,7 +655,7 @@ class TestRagRuntime:
 
     def test_build_rag_auto_context_overfetches_candidates_for_source_diversity(self):
         with (
-            patch("rag_service.RAG_ENABLED", True),
+            patch("rag_service.get_runtime_setting", side_effect=_runtime_setting_mock),
             patch("rag_service.ensure_supported_rag_sources"),
             patch("rag_service.rag_query_chunks", return_value=[]) as mocked_query,
             patch(
@@ -672,7 +686,7 @@ class TestRagRuntime:
         ]
 
         with (
-            patch("rag_service.RAG_ENABLED", True),
+            patch("rag_service.get_runtime_setting", side_effect=_runtime_setting_mock),
             patch("rag_service.ensure_supported_rag_sources"),
             patch(
                 "rag_service._expand_query_variants",

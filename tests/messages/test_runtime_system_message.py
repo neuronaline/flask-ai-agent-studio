@@ -802,11 +802,12 @@ class TestRuntimeSystemMessage:
             scratchpad_sections={"notes": "Persistent note"},
         )
 
-        assert len(messages) == 3
+        # Per CACHE_AND_MESSAGE_RULES.md Rule 2: exactly ONE system message.
+        # Dynamic context is appended to the last user message (user-footer pattern).
+        assert len(messages) == 2
         assert messages[0]["role"] == "system"
-        assert messages[1]["role"] == "system"
         assert "id" not in messages[0]
-        assert messages[2]["role"] == "user"
+        assert messages[1]["role"] == "user"
 
         static_content = messages[0]["content"]
         dynamic_content = messages[1]["content"]
@@ -836,7 +837,9 @@ class TestRuntimeSystemMessage:
             scratchpad_sections={"notes": "Persistent note"},
         )
 
-        assert len(messages) == 3
+        # Per CACHE_AND_MESSAGE_RULES.md Rule 2: exactly ONE system message.
+        # Dynamic context is appended to the last user message (user-footer pattern).
+        assert len(messages) == 2
         static_content = messages[0]["content"]
         dynamic_content = messages[1]["content"]
         assert "## Role" in static_content
@@ -853,8 +856,9 @@ class TestRuntimeSystemMessage:
             "## Current Date and Time"
         )
         assert dynamic_content.index("## Conversation Memory") < dynamic_content.index("## Current Date and Time")
-        assert messages[2]["role"] == "user"
-        assert messages[2]["content"] == "Hello"
+        assert messages[1]["role"] == "user"
+        assert messages[1]["content"].startswith("Hello\n")
+
 
     def test_prepend_runtime_context_places_datetime_before_conversation_summaries(self):
         messages = prepend_runtime_context(
@@ -866,12 +870,13 @@ class TestRuntimeSystemMessage:
             active_tool_names=[],
         )
 
-        assert len(messages) == 4
+        # Per CACHE_AND_MESSAGE_RULES.md Rule 2: exactly ONE system message.
+        # Dynamic context is appended to the last user message (user-footer pattern).
+        assert len(messages) == 3
         assert messages[0]["role"] == "system"
-        assert messages[1]["role"] == "system"
-        assert messages[2]["role"] == "summary"
-        assert messages[3]["role"] == "user"
-        content = messages[1]["content"]
+        assert messages[1]["role"] == "summary"
+        assert messages[2]["role"] == "user"
+        content = messages[2]["content"]
         assert "## Current Date and Time" in content
         assert "## Scratchpad (AI Persistent Memory)" in content
         assert content.index("## Current Date and Time") > content.index("## Scratchpad (AI Persistent Memory)")
@@ -950,3 +955,80 @@ class TestRuntimeSystemMessage:
         assert "## Persona Memory" in content
         assert "#5 09:15 - Repo style: Prefer concise progress updates." in content
         assert "save_to_persona_memory" in content
+
+
+class TestContextInjectionFallback:
+    """Verify that _append_injection_to_last_user_message handles edge cases safely."""
+
+    def test_appends_to_existing_user_message(self):
+        """When a user message exists, injection is appended to it."""
+        from core.messages import _append_injection_to_last_user_message
+
+        messages: list[dict] = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there!"},
+        ]
+        _append_injection_to_last_user_message(messages, "[TIMESTAMP: noon]")
+        assert "Hello\n\n[TIMESTAMP: noon]" in messages[1]["content"]
+        # Other messages unchanged
+        assert messages[0]["content"] == "You are helpful."
+        assert messages[2]["content"] == "Hi there!"
+
+    def test_creates_synthetic_user_when_no_user_message(self):
+        """When no user message exists, a synthetic user is inserted.
+
+        The synthetic user goes before the first non-system message so
+        that provider message ordering (user → assistant → tool) is
+        preserved.
+        """
+        from core.messages import _append_injection_to_last_user_message
+
+        messages: list[dict] = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "assistant", "content": "I'll search for that."},
+        ]
+        _append_injection_to_last_user_message(messages, "[TOOLS: search]")
+        assert len(messages) == 3
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+        assert "[TOOLS: search]" in messages[1]["content"]
+        assert messages[2]["role"] == "assistant"
+
+    def test_synthetic_user_before_assistant_with_tools(self):
+        """When messages have assistant + tool, synthetic user goes before assistant.
+
+        This preserves the required ordering: user → assistant (with
+        tool_calls) → tool.
+        """
+        from core.messages import _append_injection_to_last_user_message
+
+        messages: list[dict] = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "t1", "type": "function", "function": {"name": "search", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "t1", "content": "Results: ..."},
+        ]
+        _append_injection_to_last_user_message(messages, "[CONTEXT: active]")
+        assert len(messages) == 4
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"  # synthetic user inserted here
+        assert messages[2]["role"] == "assistant"
+        assert "tool_calls" in messages[2]
+        assert messages[3]["role"] == "tool"
+        assert "[CONTEXT: active]" in messages[1]["content"]
+
+    def test_noop_on_empty_messages(self):
+        """Empty message list is handled safely."""
+        from core.messages import _append_injection_to_last_user_message
+
+        messages: list[dict] = []
+        _append_injection_to_last_user_message(messages, "[STUFF]")
+        assert messages == []
+
+    def test_noop_on_empty_injection(self):
+        """Empty injection string does nothing."""
+        from core.messages import _append_injection_to_last_user_message
+
+        messages: list[dict] = [{"role": "user", "content": "Hello"}]
+        _append_injection_to_last_user_message(messages, "")
+        assert messages[0]["content"] == "Hello"

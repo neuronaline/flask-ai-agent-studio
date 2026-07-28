@@ -7,13 +7,12 @@ from core.config import (
     CLARIFICATION_DEFAULT_MAX_QUESTIONS,
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
-    CONVERSATION_MEMORY_ENABLED,
     DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
-    RAG_ENABLED,
     SEARCH_TOOL_QUERY_LIMIT_MAX,
     SEARCH_TOOL_QUERY_LIMIT_MIN,
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
+    get_runtime_setting,
 )
 from services.canvas import get_canvas_document_capabilities
 
@@ -1709,9 +1708,9 @@ def get_enabled_tool_specs(
 ) -> list[dict]:
     active_set = set(active_tool_names or [])
     specs = [tool for tool in TOOL_SPECS if tool["name"] in active_set]
-    if not RAG_ENABLED:
+    if not get_runtime_setting("RAG_ENABLED"):
         specs = [tool for tool in specs if tool["name"] != "search_knowledge_base"]
-    if not CONVERSATION_MEMORY_ENABLED:
+    if not get_runtime_setting("CONVERSATION_MEMORY_ENABLED"):
         specs = [
             tool
             for tool in specs

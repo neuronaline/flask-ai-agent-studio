@@ -26,7 +26,7 @@ _LOG_LEVELS = {
 }
 
 _CONFIGURED = False
-_CONFIGURE_LOCK = object()
+_CONFIGURE_SENTINEL = object()
 
 # Environment variable names for logging config
 _ENV_APP_LOG_ENABLED = "APP_LOG_ENABLED"
@@ -209,5 +209,5 @@ def log_trace_event(logger: logging.Logger, event: str, **details: Any) -> None:
     logger.info("TRACE %s", json.dumps(trace_data, default=str))
 
 
-# Uygulama başlatıldığında otomatik konfigure et
-configure_logging()
+# Logging is configured lazily on first get_logger() call.
+# Do NOT call configure_logging() at module import time.

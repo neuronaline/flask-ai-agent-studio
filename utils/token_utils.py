@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import logging
 import re
 from functools import lru_cache
 
 import tiktoken
 
+from utils.logging_config import get_logger
 
-LOGGER = logging.getLogger(__name__)
-TOKEN_ESTIMATION_FALLBACK_MARGIN = 1.0
+LOGGER = get_logger(__name__)
+TOKEN_ESTIMATION_FALLBACK_MARGIN = 1.2
 _FALLBACK_WARNING_EMITTED = False
 
 

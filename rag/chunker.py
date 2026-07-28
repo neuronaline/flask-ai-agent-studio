@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from core.config import RAG_CHUNK_OVERLAP, RAG_CHUNK_SIZE
+from core.config import get_runtime_setting
+from utils.logging_config import get_logger
 
-LOGGER = logging.getLogger(__name__)
+LOGGER = get_logger(__name__)
 
-DEFAULT_CHUNK_SIZE = RAG_CHUNK_SIZE
-DEFAULT_CHUNK_OVERLAP = RAG_CHUNK_OVERLAP
+DEFAULT_CHUNK_SIZE = get_runtime_setting("RAG_CHUNK_SIZE")
+DEFAULT_CHUNK_OVERLAP = get_runtime_setting("RAG_CHUNK_OVERLAP")
 MAX_METADATA_VALUE_LENGTH = 500
 _INVISIBLE_TEXT_RE = re.compile(r"[\u00ad\u200b-\u200f\u2028\u2029\ufeff]")
 _PAGE_MARKER_RE = re.compile(r"^##\s+Page\s+(\d+)\s*$", re.IGNORECASE)

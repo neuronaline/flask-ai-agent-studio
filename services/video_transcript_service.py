@@ -6,8 +6,11 @@ from urllib.parse import parse_qs, urlparse
 from core.config import (
     DOCUMENT_MAX_TEXT_CHARS,
     YOUTUBE_TRANSCRIPTS_DISABLED_FEATURE_ERROR,
-    YOUTUBE_TRANSCRIPTS_ENABLED,
+    get_runtime_setting,
 )
+from utils.logging_config import get_logger
+
+LOGGER = get_logger(__name__)
 
 _YOUTUBE_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _YOUTUBE_ALLOWED_HOSTS = {
@@ -54,7 +57,7 @@ def normalize_youtube_url(url: str) -> str:
 
 
 def read_youtube_video_reference(raw_url: str) -> tuple[str, str]:
-    if not YOUTUBE_TRANSCRIPTS_ENABLED:
+    if not get_runtime_setting("YOUTUBE_TRANSCRIPTS_ENABLED"):
         raise RuntimeError(YOUTUBE_TRANSCRIPTS_DISABLED_FEATURE_ERROR)
 
     normalized_url = normalize_youtube_url(raw_url)
@@ -139,7 +142,7 @@ def transcribe_youtube_video(source_url: str) -> dict:
         detected_language = transcript.language_code
         is_generated = transcript.is_generated
     except Exception:
-        pass
+        LOGGER.debug("Preferred language transcripts not found, falling back", exc_info=True)
 
     # Fallback: try any available transcript
     if transcript_data is None:
@@ -180,9 +183,9 @@ def transcribe_youtube_video(source_url: str) -> dict:
                 if start and duration_attr:
                     duration_seconds = int(start + duration_attr)
             except Exception:
-                pass
+                LOGGER.debug("Failed to estimate duration from transcript segments", exc_info=True)
     except Exception:
-        pass
+        LOGGER.debug("Failed to extract video duration metadata", exc_info=True)
 
     return {
         "platform": "youtube",

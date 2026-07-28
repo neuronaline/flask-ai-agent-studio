@@ -7,11 +7,13 @@ provider call to the model_invocations Activity log. All call-paths
 """
 from __future__ import annotations
 
-import logging
 import time
 from typing import Any
 
-LOGGER = logging.getLogger(__name__)
+from services.activity_types import ActivityCallParams
+from utils.logging_config import get_logger
+
+LOGGER = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -30,64 +32,53 @@ STATUS_CANCELLED = "cancelled"
 def log_activity_call(
     *,
     conversation_id: int,
-    provider: str,
-    api_model: str,
-    operation: str,
-    call_type: str = "agent_step",
-    request_payload: Any = None,
-    response_summary: Any = None,
-    response_status: str = STATUS_OK,
-    error_type: str | None = None,
-    error_message: str | None = None,
-    latency_ms: int | None = None,
-    prompt_tokens: int | None = None,
-    completion_tokens: int | None = None,
-    total_tokens: int | None = None,
-    estimated_input_tokens: int | None = None,
-    prompt_cache_hit_tokens: int | None = None,
-    prompt_cache_miss_tokens: int | None = None,
-    prompt_cache_write_tokens: int | None = None,
-    assistant_message_id: int | None = None,
-    source_message_id: int | None = None,
-    step: int = 0,
-    call_index: int = 0,
-    is_retry: bool = False,
-    retry_reason: str | None = None,
+    params: ActivityCallParams | None = None,
     conn=None,
+    **kwargs,
 ) -> int | None:
     """Insert a normalized activity record.
+
+    Accepts either *params* (an ``ActivityCallParams`` dict) or individual
+    keyword arguments (backward-compatible).  When both are provided the
+    keyword arguments take precedence over *params*.
 
     Returns the new row id, or None if logging fails (non-fatal).
     If *conn* is provided the insert runs inside the caller's transaction;
     otherwise a new connection is obtained from ``get_db()``.
     """
+    if params is None:
+        params = ActivityCallParams()
+    if kwargs:
+        _merged = dict(params)
+        _merged.update(kwargs)
+        params = ActivityCallParams(**_merged)
     try:
         from core.db import get_db, insert_model_invocation  # local to avoid circular imports
 
         kwargs = dict(
-            provider=provider,
-            api_model=api_model,
-            operation=operation,
-            call_type=call_type,
-            request_payload=request_payload or {},
-            response_summary=response_summary or {},
-            response_status=response_status,
-            error_type=error_type,
-            error_message=error_message,
-            latency_ms=latency_ms,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            estimated_input_tokens=estimated_input_tokens,
-            prompt_cache_hit_tokens=prompt_cache_hit_tokens,
-            prompt_cache_miss_tokens=prompt_cache_miss_tokens,
-            prompt_cache_write_tokens=prompt_cache_write_tokens,
-            assistant_message_id=assistant_message_id,
-            source_message_id=source_message_id,
-            step=step,
-            call_index=call_index,
-            is_retry=is_retry,
-            retry_reason=retry_reason,
+            provider=params.get("provider", ""),
+            api_model=params.get("api_model", ""),
+            operation=params.get("operation", ""),
+            call_type=params.get("call_type", "agent_step"),
+            request_payload=params.get("request_payload") or {},
+            response_summary=params.get("response_summary") or {},
+            response_status=params.get("response_status", STATUS_OK),
+            error_type=params.get("error_type"),
+            error_message=params.get("error_message"),
+            latency_ms=params.get("latency_ms"),
+            prompt_tokens=params.get("prompt_tokens"),
+            completion_tokens=params.get("completion_tokens"),
+            total_tokens=params.get("total_tokens"),
+            estimated_input_tokens=params.get("estimated_input_tokens"),
+            prompt_cache_hit_tokens=params.get("prompt_cache_hit_tokens"),
+            prompt_cache_miss_tokens=params.get("prompt_cache_miss_tokens"),
+            prompt_cache_write_tokens=params.get("prompt_cache_write_tokens"),
+            assistant_message_id=params.get("assistant_message_id"),
+            source_message_id=params.get("source_message_id"),
+            step=params.get("step", 0),
+            call_index=params.get("call_index", 0),
+            is_retry=params.get("is_retry", False),
+            retry_reason=params.get("retry_reason"),
         )
 
         if conn is not None:

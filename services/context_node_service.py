@@ -15,7 +15,6 @@ Per AI Memory and Context Management document:
 from __future__ import annotations
 
 import json
-import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -36,8 +35,9 @@ from core.db import (
     purge_context_nodes as db_purge_context_nodes,
     update_context_node,
 )
+from utils.logging_config import get_logger
 
-LOGGER = logging.getLogger(__name__)
+LOGGER = get_logger(__name__)
 
 # Hardcoded thresholds (not configurable per decisions)
 WARN_THRESHOLD = 0.70  # 70% → warning

@@ -27,14 +27,14 @@ Typical invocation::
 from __future__ import annotations
 
 import json
-import logging
 import re
 from typing import Any
 
 from core.db import get_pruning_enabled, get_pruning_aggressive_keep_count, get_pruning_failed_attempts_threshold
 from utils.token_utils import estimate_text_tokens
+from utils.logging_config import get_logger
 
-LOGGER = logging.getLogger(__name__)
+LOGGER = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration defaults

@@ -745,12 +745,15 @@ def register_page_routes(app) -> None:
 
         return None, None
 
-    @app.route("/api/settings", methods=["PATCH"])
-    def update_settings():
-        data = request.get_json(silent=True) or {}
-        general_instructions = data.get("general_instructions")
-        ai_personality = data.get("ai_personality")
-        default_persona_id_raw = data.get("default_persona_id")
+    # === Settings helper closures ===
+
+    def _apply_model_settings(
+        data: dict,
+        settings: dict,
+        existing_custom_model_ids: set[str],
+        custom_model_reference_ids: dict[str, str],
+    ) -> tuple[None, None] | tuple[dict, int]:
+        """Apply model-related settings. Returns (None, None) on success, (error_response, status_code) on error."""
         max_steps_raw = data.get("max_steps")
         max_parallel_tools_raw = data.get("max_parallel_tools")
         temperature_raw = data.get("temperature")
@@ -762,187 +765,7 @@ def register_page_routes(app) -> None:
         operation_model_fallback_preferences_raw = data.get("operation_model_fallback_preferences")
         image_processing_method_raw = data.get("image_processing_method")
         active_tools_raw = data.get("active_tools")
-        rag_auto_inject = data.get("rag_auto_inject")
-        rag_sensitivity = data.get("rag_sensitivity")
-        rag_context_size = data.get("rag_context_size")
-        rag_source_types = data.get("rag_source_types")
-        rag_auto_inject_source_types = data.get("rag_auto_inject_source_types")
-        chat_summary_mode_raw = data.get("chat_summary_mode")
-        chat_summary_detail_level_raw = data.get("chat_summary_detail_level")
-        chat_summary_trigger_raw = data.get("chat_summary_trigger_token_count")
-        summary_skip_first_raw = data.get("summary_skip_first")
-        summary_skip_last_raw = data.get("summary_skip_last")
-        prompt_max_input_tokens_raw = data.get("prompt_max_input_tokens")
-        prompt_response_token_reserve_raw = data.get("prompt_response_token_reserve")
-        prompt_recent_history_max_tokens_raw = data.get("prompt_recent_history_max_tokens")
-        prompt_summary_max_tokens_raw = data.get("prompt_summary_max_tokens")
-        prompt_preflight_summary_token_count_raw = data.get("prompt_preflight_summary_token_count")
-        prompt_rag_max_tokens_raw = data.get("prompt_rag_max_tokens")
-        prompt_tool_trace_max_tokens_raw = data.get("prompt_tool_trace_max_tokens")
-        summary_source_target_tokens_raw = data.get("summary_source_target_tokens")
-        summary_retry_min_source_tokens_raw = data.get("summary_retry_min_source_tokens")
-        context_compaction_threshold_raw = data.get("context_compaction_threshold")
-        context_compaction_keep_recent_rounds_raw = data.get("context_compaction_keep_recent_rounds")
-        reasoning_auto_collapse_raw = data.get("reasoning_auto_collapse")
-        fetch_url_token_threshold_raw = data.get("fetch_url_token_threshold")
-        fetch_url_clip_aggressiveness_raw = data.get("fetch_url_clip_aggressiveness")
-        fetch_url_summarized_max_input_chars_raw = data.get("fetch_url_summarized_max_input_chars")
-        fetch_url_summarized_max_output_tokens_raw = data.get("fetch_url_summarized_max_output_tokens")
-        canvas_prompt_max_lines_raw = data.get("canvas_prompt_max_lines")
-        canvas_prompt_max_tokens_raw = data.get("canvas_prompt_max_tokens")
-        canvas_prompt_max_chars_raw = data.get("canvas_prompt_max_chars")
-        canvas_prompt_code_line_max_chars_raw = data.get("canvas_prompt_code_line_max_chars")
-        canvas_prompt_text_line_max_chars_raw = data.get("canvas_prompt_text_line_max_chars")
-        canvas_expand_max_lines_raw = data.get("canvas_expand_max_lines")
-        canvas_scroll_window_lines_raw = data.get("canvas_scroll_window_lines")
-        web_cache_ttl_hours_raw = data.get("web_cache_ttl_hours")
-        activity_enabled_raw = data.get("activity_enabled")
-        activity_retention_days_raw = data.get("activity_retention_days")
-        openrouter_prompt_cache_enabled_raw = data.get("openrouter_prompt_cache_enabled")
-        openrouter_anthropic_cache_ttl_raw = data.get("openrouter_anthropic_cache_ttl")
-        openrouter_http_referer_raw = data.get("openrouter_http_referer")
-        openrouter_app_title_raw = data.get("openrouter_app_title")
-        login_session_timeout_minutes_raw = data.get("login_session_timeout_minutes")
-        login_max_failed_attempts_raw = data.get("login_max_failed_attempts")
-        login_lockout_seconds_raw = data.get("login_lockout_seconds")
-        login_remember_session_days_raw = data.get("login_remember_session_days")
-        conversation_memory_enabled_raw = data.get("conversation_memory_enabled")
-        ocr_enabled_raw = data.get("ocr_enabled")
-        rag_enabled_raw = data.get("rag_enabled")
-        youtube_transcripts_enabled_raw = data.get("youtube_transcripts_enabled")
         chat_summary_model_raw = data.get("chat_summary_model")
-        rag_chunk_size_raw = data.get("rag_chunk_size")
-        rag_chunk_overlap_raw = data.get("rag_chunk_overlap")
-        rag_max_chunks_per_source_raw = data.get("rag_max_chunks_per_source")
-        rag_search_top_k_raw = data.get("rag_search_top_k")
-        rag_search_min_similarity_raw = data.get("rag_search_min_similarity")
-        rag_query_expansion_enabled_raw = data.get("rag_query_expansion_enabled")
-        rag_query_expansion_max_variants_raw = data.get("rag_query_expansion_max_variants")
-        fetch_raw_max_text_chars_raw = data.get("fetch_raw_max_text_chars")
-        fetch_summary_max_chars_raw = data.get("fetch_summary_max_chars")
-        fetch_html_converter_mode_raw = data.get("fetch_html_converter_mode")
-        scratchpad = data.get("scratchpad")
-        scratchpad_sections_raw = data.get("scratchpad_sections")
-        sub_agent_max_steps_raw = data.get("sub_agent_max_steps")
-        sub_agent_timeout_seconds_raw = data.get("sub_agent_timeout_seconds")
-        sub_agent_retry_attempts_raw = data.get("sub_agent_retry_attempts")
-        sub_agent_retry_delay_seconds_raw = data.get("sub_agent_retry_delay_seconds")
-        sub_agent_max_parallel_tools_raw = data.get("sub_agent_max_parallel_tools")
-        sub_agent_canvas_auto_save_raw = data.get("sub_agent_canvas_auto_save")
-        sub_agent_canvas_auto_open_raw = data.get("sub_agent_canvas_auto_open")
-        sub_agent_allowed_tool_names_raw = data.get("sub_agent_allowed_tool_names")
-        pruning_enabled_raw = data.get("pruning_enabled")
-        pruning_aggressive_keep_count_raw = data.get("pruning_aggressive_keep_count")
-        pruning_failed_attempts_threshold_raw = data.get("pruning_failed_attempts_threshold")
-
-        provided_setting_values = (
-            general_instructions,
-            ai_personality,
-            default_persona_id_raw,
-            scratchpad,
-            scratchpad_sections_raw,
-            max_steps_raw,
-            max_parallel_tools_raw,
-            temperature_raw,
-            clarification_max_questions_raw,
-            search_tool_query_limit_raw,
-            custom_models_raw,
-            visible_model_order_raw,
-            operation_model_preferences_raw,
-            operation_model_fallback_preferences_raw,
-            image_processing_method_raw,
-            active_tools_raw,
-            rag_auto_inject,
-            rag_sensitivity,
-            rag_context_size,
-            rag_source_types,
-            rag_auto_inject_source_types,
-            chat_summary_mode_raw,
-            chat_summary_detail_level_raw,
-            chat_summary_trigger_raw,
-            summary_skip_first_raw,
-            summary_skip_last_raw,
-            prompt_max_input_tokens_raw,
-            prompt_response_token_reserve_raw,
-            prompt_recent_history_max_tokens_raw,
-            prompt_summary_max_tokens_raw,
-            prompt_preflight_summary_token_count_raw,
-            prompt_rag_max_tokens_raw,
-            prompt_tool_trace_max_tokens_raw,
-            summary_source_target_tokens_raw,
-            summary_retry_min_source_tokens_raw,
-            context_compaction_threshold_raw,
-            context_compaction_keep_recent_rounds_raw,
-            reasoning_auto_collapse_raw,
-            fetch_url_token_threshold_raw,
-            fetch_url_clip_aggressiveness_raw,
-            fetch_url_summarized_max_input_chars_raw,
-            fetch_url_summarized_max_output_tokens_raw,
-            canvas_prompt_max_lines_raw,
-            canvas_prompt_max_tokens_raw,
-            canvas_prompt_max_chars_raw,
-            canvas_prompt_code_line_max_chars_raw,
-            canvas_prompt_text_line_max_chars_raw,
-            canvas_expand_max_lines_raw,
-            canvas_scroll_window_lines_raw,
-            web_cache_ttl_hours_raw,
-            activity_enabled_raw,
-            activity_retention_days_raw,
-            openrouter_prompt_cache_enabled_raw,
-            openrouter_anthropic_cache_ttl_raw,
-            openrouter_http_referer_raw,
-            openrouter_app_title_raw,
-            login_session_timeout_minutes_raw,
-            login_max_failed_attempts_raw,
-            login_lockout_seconds_raw,
-            login_remember_session_days_raw,
-            conversation_memory_enabled_raw,
-            ocr_enabled_raw,
-            rag_enabled_raw,
-            youtube_transcripts_enabled_raw,
-            chat_summary_model_raw,
-            rag_chunk_size_raw,
-            rag_chunk_overlap_raw,
-            rag_max_chunks_per_source_raw,
-            rag_search_top_k_raw,
-            rag_search_min_similarity_raw,
-            rag_query_expansion_enabled_raw,
-            rag_query_expansion_max_variants_raw,
-            fetch_raw_max_text_chars_raw,
-            fetch_summary_max_chars_raw,
-            fetch_html_converter_mode_raw,
-            sub_agent_max_steps_raw,
-            sub_agent_timeout_seconds_raw,
-            sub_agent_retry_attempts_raw,
-            sub_agent_retry_delay_seconds_raw,
-            sub_agent_max_parallel_tools_raw,
-            sub_agent_canvas_auto_save_raw,
-            sub_agent_canvas_auto_open_raw,
-            sub_agent_allowed_tool_names_raw,
-            pruning_enabled_raw,
-            pruning_aggressive_keep_count_raw,
-            pruning_failed_attempts_threshold_raw,
-        )
-
-        if not any(value is not None for value in provided_setting_values):
-            return jsonify({"error": "No settings provided."}), 400
-
-        settings = get_app_settings()
-        default_persona = get_default_persona(settings)
-        existing_custom_model_ids = {
-            str(model.get("id") or "").strip()
-            for model in normalize_custom_models(settings.get("custom_models"))
-            if str(model.get("id") or "").strip()
-        }
-        custom_model_reference_ids: dict[str, str] = {}
-
-        err = _apply_persona_settings(data, settings, default_persona)
-        if err != (None, None):
-            return err
-
-        err = _apply_scratchpad_settings(data, settings)
-        if err != (None, None):
-            return err
 
         if max_steps_raw is not None:
             try:
@@ -1159,6 +982,26 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "Invalid active tools."}), 400
             settings["active_tools"] = json.dumps(normalize_active_tool_names(active_tools_raw), ensure_ascii=False)
 
+        if chat_summary_model_raw is not None:
+            candidate = _resolve_model_reference_id(chat_summary_model_raw, custom_model_reference_ids)
+            if candidate and get_model_record(candidate, settings) is None:
+                return jsonify({"error": "chat_summary_model must reference a known model."}), 400
+            settings["chat_summary_model"] = candidate
+
+        return None, None
+
+    def _apply_auth_display_settings(
+        data: dict,
+        settings: dict,
+    ) -> tuple[None, None] | tuple[dict, int]:
+        """Apply auth and display-related settings. Returns (None, None) on success, (error_response, status_code) on error."""
+        openrouter_http_referer_raw = data.get("openrouter_http_referer")
+        openrouter_app_title_raw = data.get("openrouter_app_title")
+        login_session_timeout_minutes_raw = data.get("login_session_timeout_minutes")
+        login_max_failed_attempts_raw = data.get("login_max_failed_attempts")
+        login_lockout_seconds_raw = data.get("login_lockout_seconds")
+        login_remember_session_days_raw = data.get("login_remember_session_days")
+
         if openrouter_http_referer_raw is not None:
             if not isinstance(openrouter_http_referer_raw, str):
                 return jsonify({"error": "openrouter_http_referer must be a string."}), 400
@@ -1205,6 +1048,18 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "login_remember_session_days must be between 1 and 3650."}), 400
             settings["login_remember_session_days"] = str(login_remember_session_days)
 
+        return None, None
+
+    def _apply_feature_toggle_settings(
+        data: dict,
+        settings: dict,
+    ) -> tuple[None, None] | tuple[dict, int]:
+        """Apply feature toggle settings (conversation, OCR, RAG, YouTube). Returns (None, None) on success."""
+        conversation_memory_enabled_raw = data.get("conversation_memory_enabled")
+        ocr_enabled_raw = data.get("ocr_enabled")
+        rag_enabled_raw = data.get("rag_enabled")
+        youtube_transcripts_enabled_raw = data.get("youtube_transcripts_enabled")
+
         if conversation_memory_enabled_raw is not None:
             settings["conversation_memory_enabled"] = _normalize_bool_setting_value(conversation_memory_enabled_raw)
 
@@ -1238,11 +1093,28 @@ def register_page_routes(app) -> None:
         if youtube_transcripts_enabled_raw is not None:
             settings["youtube_transcripts_enabled"] = _normalize_bool_setting_value(youtube_transcripts_enabled_raw)
 
-        if chat_summary_model_raw is not None:
-            candidate = _resolve_model_reference_id(chat_summary_model_raw, custom_model_reference_ids)
-            if candidate and get_model_record(candidate, settings) is None:
-                return jsonify({"error": "chat_summary_model must reference a known model."}), 400
-            settings["chat_summary_model"] = candidate
+        return None, None
+
+    def _apply_rag_settings(
+        data: dict,
+        settings: dict,
+    ) -> tuple[None, None] | tuple[dict, int]:
+        """Apply RAG-related settings. Returns (None, None) on success, (error_response, status_code) on error."""
+        rag_chunk_size_raw = data.get("rag_chunk_size")
+        rag_chunk_overlap_raw = data.get("rag_chunk_overlap")
+        rag_max_chunks_per_source_raw = data.get("rag_max_chunks_per_source")
+        rag_search_top_k_raw = data.get("rag_search_top_k")
+        rag_search_min_similarity_raw = data.get("rag_search_min_similarity")
+        rag_query_expansion_enabled_raw = data.get("rag_query_expansion_enabled")
+        rag_query_expansion_max_variants_raw = data.get("rag_query_expansion_max_variants")
+        fetch_raw_max_text_chars_raw = data.get("fetch_raw_max_text_chars")
+        fetch_summary_max_chars_raw = data.get("fetch_summary_max_chars")
+        fetch_html_converter_mode_raw = data.get("fetch_html_converter_mode")
+        rag_auto_inject = data.get("rag_auto_inject")
+        rag_sensitivity = data.get("rag_sensitivity")
+        rag_context_size = data.get("rag_context_size")
+        rag_source_types = data.get("rag_source_types")
+        rag_auto_inject_source_types = data.get("rag_auto_inject_source_types")
 
         if rag_chunk_size_raw is not None:
             try:
@@ -1395,6 +1267,31 @@ def register_page_routes(app) -> None:
             ensure_ascii=False,
         )
         settings["rag_auto_inject"] = "true" if effective_rag_auto_inject_source_types else "false"
+
+        return None, None
+
+    def _apply_prompt_summary_settings(
+        data: dict,
+        settings: dict,
+    ) -> tuple[None, None] | tuple[dict, int]:
+        """Apply prompt, summary, and compaction settings. Returns (None, None) on success, (error_response, status_code) on error."""
+        chat_summary_mode_raw = data.get("chat_summary_mode")
+        chat_summary_detail_level_raw = data.get("chat_summary_detail_level")
+        chat_summary_trigger_raw = data.get("chat_summary_trigger_token_count")
+        summary_skip_first_raw = data.get("summary_skip_first")
+        summary_skip_last_raw = data.get("summary_skip_last")
+        prompt_max_input_tokens_raw = data.get("prompt_max_input_tokens")
+        prompt_response_token_reserve_raw = data.get("prompt_response_token_reserve")
+        prompt_recent_history_max_tokens_raw = data.get("prompt_recent_history_max_tokens")
+        prompt_summary_max_tokens_raw = data.get("prompt_summary_max_tokens")
+        prompt_preflight_summary_token_count_raw = data.get("prompt_preflight_summary_token_count")
+        prompt_rag_max_tokens_raw = data.get("prompt_rag_max_tokens")
+        prompt_tool_trace_max_tokens_raw = data.get("prompt_tool_trace_max_tokens")
+        summary_source_target_tokens_raw = data.get("summary_source_target_tokens")
+        summary_retry_min_source_tokens_raw = data.get("summary_retry_min_source_tokens")
+        context_compaction_threshold_raw = data.get("context_compaction_threshold")
+        context_compaction_keep_recent_rounds_raw = data.get("context_compaction_keep_recent_rounds")
+        reasoning_auto_collapse_raw = data.get("reasoning_auto_collapse")
 
         if chat_summary_mode_raw is not None:
             normalized_summary_mode = str(chat_summary_mode_raw or "").strip().lower()
@@ -1556,6 +1453,7 @@ def register_page_routes(app) -> None:
                     else "false"
                 )
 
+        # Cross-validation of prompt token budgets
         effective_prompt_max_input_tokens = get_prompt_max_input_tokens(settings)
         configured_prompt_response_token_reserve = int(
             settings.get("prompt_response_token_reserve", get_prompt_response_token_reserve(settings))
@@ -1590,6 +1488,25 @@ def register_page_routes(app) -> None:
             return jsonify(
                 {"error": "summary_retry_min_source_tokens cannot exceed summary_source_target_tokens."}
             ), 400
+
+        return None, None
+
+    def _apply_canvas_fetch_settings(
+        data: dict,
+        settings: dict,
+    ) -> tuple[None, None] | tuple[dict, int]:
+        """Apply canvas and fetch-related settings. Returns (None, None) on success, (error_response, status_code) on error."""
+        fetch_url_token_threshold_raw = data.get("fetch_url_token_threshold")
+        fetch_url_clip_aggressiveness_raw = data.get("fetch_url_clip_aggressiveness")
+        fetch_url_summarized_max_input_chars_raw = data.get("fetch_url_summarized_max_input_chars")
+        fetch_url_summarized_max_output_tokens_raw = data.get("fetch_url_summarized_max_output_tokens")
+        canvas_prompt_max_lines_raw = data.get("canvas_prompt_max_lines")
+        canvas_prompt_max_tokens_raw = data.get("canvas_prompt_max_tokens")
+        canvas_prompt_max_chars_raw = data.get("canvas_prompt_max_chars")
+        canvas_prompt_code_line_max_chars_raw = data.get("canvas_prompt_code_line_max_chars")
+        canvas_prompt_text_line_max_chars_raw = data.get("canvas_prompt_text_line_max_chars")
+        canvas_expand_max_lines_raw = data.get("canvas_expand_max_lines")
+        canvas_scroll_window_lines_raw = data.get("canvas_scroll_window_lines")
 
         if fetch_url_token_threshold_raw is not None:
             try:
@@ -1692,6 +1609,19 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "canvas_scroll_window_lines must be between 50 and 800."}), 400
             settings["canvas_scroll_window_lines"] = str(canvas_scroll_window_lines)
 
+        return None, None
+
+    def _apply_cache_activity_settings(
+        data: dict,
+        settings: dict,
+    ) -> tuple[None, None] | tuple[dict, int]:
+        """Apply cache, activity, and OpenRouter cache settings. Returns (None, None) on success, (error_response, status_code) on error."""
+        web_cache_ttl_hours_raw = data.get("web_cache_ttl_hours")
+        activity_enabled_raw = data.get("activity_enabled")
+        activity_retention_days_raw = data.get("activity_retention_days")
+        openrouter_prompt_cache_enabled_raw = data.get("openrouter_prompt_cache_enabled")
+        openrouter_anthropic_cache_ttl_raw = data.get("openrouter_anthropic_cache_ttl")
+
         if web_cache_ttl_hours_raw is not None:
             try:
                 web_cache_ttl_hours = int(web_cache_ttl_hours_raw)
@@ -1731,6 +1661,22 @@ def register_page_routes(app) -> None:
             if normalized_ttl not in {"5m", "1h"}:
                 return jsonify({"error": "openrouter_anthropic_cache_ttl must be '5m' or '1h'."}), 400
             settings["openrouter_anthropic_cache_ttl"] = normalized_ttl
+
+        return None, None
+
+    def _apply_sub_agent_settings(
+        data: dict,
+        settings: dict,
+    ) -> tuple[None, None] | tuple[dict, int]:
+        """Apply sub-agent settings. Returns (None, None) on success, (error_response, status_code) on error."""
+        sub_agent_max_steps_raw = data.get("sub_agent_max_steps")
+        sub_agent_timeout_seconds_raw = data.get("sub_agent_timeout_seconds")
+        sub_agent_retry_attempts_raw = data.get("sub_agent_retry_attempts")
+        sub_agent_retry_delay_seconds_raw = data.get("sub_agent_retry_delay_seconds")
+        sub_agent_max_parallel_tools_raw = data.get("sub_agent_max_parallel_tools")
+        sub_agent_canvas_auto_save_raw = data.get("sub_agent_canvas_auto_save")
+        sub_agent_canvas_auto_open_raw = data.get("sub_agent_canvas_auto_open")
+        sub_agent_allowed_tool_names_raw = data.get("sub_agent_allowed_tool_names")
 
         if sub_agent_max_steps_raw is not None:
             try:
@@ -1807,7 +1753,17 @@ def register_page_routes(app) -> None:
             normalized_tool_names = normalize_active_tool_names(sub_agent_allowed_tool_names_raw)
             settings["sub_agent_allowed_tool_names"] = json.dumps(normalized_tool_names, ensure_ascii=False)
 
-        # Pruning config
+        return None, None
+
+    def _apply_pruning_settings(
+        data: dict,
+        settings: dict,
+    ) -> tuple[None, None] | tuple[dict, int]:
+        """Apply pruning configuration settings. Returns (None, None) on success, (error_response, status_code) on error."""
+        pruning_enabled_raw = data.get("pruning_enabled")
+        pruning_aggressive_keep_count_raw = data.get("pruning_aggressive_keep_count")
+        pruning_failed_attempts_threshold_raw = data.get("pruning_failed_attempts_threshold")
+
         if pruning_enabled_raw is not None:
             settings["pruning_enabled"] = _normalize_bool_setting_value(pruning_enabled_raw)
 
@@ -1828,6 +1784,170 @@ def register_page_routes(app) -> None:
             if not (1 <= pruning_failed_attempts_threshold <= 20):
                 return jsonify({"error": "pruning_failed_attempts_threshold must be between 1 and 20."}), 400
             settings["pruning_failed_attempts_threshold"] = str(pruning_failed_attempts_threshold)
+
+        return None, None
+
+    # === Slim orchestrator ===
+
+    # All setting keys recognized by the PATCH endpoint.
+    # Used to reject payloads that contain no recognized keys.
+    _RECOGNIZED_PATCH_KEYS = frozenset({
+        "active_tools",
+        "activity_enabled",
+        "activity_retention_days",
+        "ai_personality",
+        "canvas_expand_max_lines",
+        "canvas_prompt_code_line_max_chars",
+        "canvas_prompt_max_chars",
+        "canvas_prompt_max_lines",
+        "canvas_prompt_max_tokens",
+        "canvas_prompt_text_line_max_chars",
+        "canvas_scroll_window_lines",
+        "chat_summary_detail_level",
+        "chat_summary_mode",
+        "chat_summary_model",
+        "chat_summary_trigger_token_count",
+        "clarification_max_questions",
+        "context_compaction_keep_recent_rounds",
+        "context_compaction_threshold",
+        "conversation_max_message_chars",
+        "conversation_max_messages",
+        "conversation_memory_enabled",
+        "conversation_truncation_enabled",
+        "custom_models",
+        "default_persona_id",
+        "description",
+        "fetch_html_converter_mode",
+        "fetch_raw_max_text_chars",
+        "fetch_summary_max_chars",
+        "fetch_url_clip_aggressiveness",
+        "fetch_url_summarized_max_input_chars",
+        "fetch_url_summarized_max_output_tokens",
+        "fetch_url_token_threshold",
+        "general_instructions",
+        "image_processing_method",
+        "login_lockout_seconds",
+        "login_max_failed_attempts",
+        "login_remember_session_days",
+        "login_session_timeout_minutes",
+        "max_parallel_tools",
+        "max_steps",
+        "note",
+        "ocr_enabled",
+        "openrouter_anthropic_cache_ttl",
+        "openrouter_app_title",
+        "openrouter_http_referer",
+        "openrouter_prompt_cache_enabled",
+        "operation_model_fallback_preferences",
+        "operation_model_preferences",
+        "prompt_max_input_tokens",
+        "prompt_preflight_summary_token_count",
+        "prompt_rag_max_tokens",
+        "prompt_recent_history_max_tokens",
+        "prompt_response_token_reserve",
+        "prompt_summary_max_tokens",
+        "prompt_tool_trace_max_tokens",
+        "pruning_aggressive_keep_count",
+        "pruning_enabled",
+        "pruning_failed_attempts_threshold",
+        "rag_auto_inject",
+        "rag_auto_inject_source_types",
+        "rag_chunk_overlap",
+        "rag_chunk_size",
+        "rag_context_size",
+        "rag_enabled",
+        "rag_max_chunks_per_source",
+        "rag_query_expansion_enabled",
+        "rag_query_expansion_max_variants",
+        "rag_search_min_similarity",
+        "rag_search_top_k",
+        "rag_sensitivity",
+        "rag_source_types",
+        "reasoning_auto_collapse",
+        "scratchpad",
+        "scratchpad_sections",
+        "search_tool_query_limit",
+        "sub_agent_allowed_tool_names",
+        "sub_agent_canvas_auto_open",
+        "sub_agent_canvas_auto_save",
+        "sub_agent_max_parallel_tools",
+        "sub_agent_max_steps",
+        "sub_agent_retry_attempts",
+        "sub_agent_retry_delay_seconds",
+        "sub_agent_timeout_seconds",
+        "summary_retry_min_source_tokens",
+        "summary_skip_first",
+        "summary_skip_last",
+        "summary_source_target_tokens",
+        "temperature",
+        "title",
+        "visible_model_order",
+        "web_cache_ttl_hours",
+        "youtube_transcripts_enabled",
+    })
+
+    @app.route("/api/settings", methods=["PATCH"])
+    def update_settings():
+        data = request.get_json(silent=True) or {}
+        if not data:
+            return jsonify({"error": "No settings provided."}), 400
+
+        settings = get_app_settings()
+        default_persona = get_default_persona(settings)
+        existing_custom_model_ids = {
+            str(model.get("id") or "").strip()
+            for model in normalize_custom_models(settings.get("custom_models"))
+            if str(model.get("id") or "").strip()
+        }
+        custom_model_reference_ids: dict[str, str] = {}
+
+        # Check that at least one key in the payload is recognized.
+        if not any(key in _RECOGNIZED_PATCH_KEYS for key in data):
+            return jsonify({"error": "No recognized settings in payload."}), 400
+
+        err = _apply_persona_settings(data, settings, default_persona)
+        if err != (None, None):
+            return err
+
+        err = _apply_scratchpad_settings(data, settings)
+        if err != (None, None):
+            return err
+
+        err = _apply_model_settings(data, settings, existing_custom_model_ids, custom_model_reference_ids)
+        if err != (None, None):
+            return err
+
+        err = _apply_auth_display_settings(data, settings)
+        if err != (None, None):
+            return err
+
+        err = _apply_feature_toggle_settings(data, settings)
+        if err != (None, None):
+            return err
+
+        err = _apply_rag_settings(data, settings)
+        if err != (None, None):
+            return err
+
+        err = _apply_prompt_summary_settings(data, settings)
+        if err != (None, None):
+            return err
+
+        err = _apply_canvas_fetch_settings(data, settings)
+        if err != (None, None):
+            return err
+
+        err = _apply_cache_activity_settings(data, settings)
+        if err != (None, None):
+            return err
+
+        err = _apply_sub_agent_settings(data, settings)
+        if err != (None, None):
+            return err
+
+        err = _apply_pruning_settings(data, settings)
+        if err != (None, None):
+            return err
 
         save_app_settings(settings)
         return jsonify(build_settings_payload())

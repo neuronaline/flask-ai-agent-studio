@@ -19,30 +19,30 @@ from lib.request_security import install_request_security
 
 
 _RAG_STARTUP_SYNC_LOCK = Lock()
-_logger = get_logger(__name__)
+LOGGER = get_logger(__name__)
 
 
 def _sync_rag_on_startup() -> None:
-    if not config.RAG_ENABLED:
+    if not config.get_runtime_setting("RAG_ENABLED"):
         return
     from services.rag_service import sync_conversations_to_rag_safe
 
-    _logger.info("Starting RAG conversation sync...")
+    LOGGER.info("Starting RAG conversation sync...")
     sync_conversations_to_rag_safe()
 
 
 def create_app(database_path: str | None = None, *, load_persisted_runtime_settings: bool = True) -> Flask:
     configure_logging()
+    config.validate_secret_key()
 
-    _logger.info("=" * 60)
-    _logger.info("Application starting...")
-    _logger.info("=" * 60)
+    LOGGER.info("=" * 60)
+    LOGGER.info("Application starting...")
+    LOGGER.info("=" * 60)
 
     resolved_database_path = str(database_path or config.DB_PATH).strip() or config.DB_PATH
     if load_persisted_runtime_settings:
         config.apply_persisted_runtime_settings(resolved_database_path)
-        config.propagate_runtime_settings_to_loaded_modules()
-        _logger.info("Runtime settings loaded from database")
+        LOGGER.info("Runtime settings loaded from database")
 
     from core.db import close_db_connection, configure_db_path, initialize_database
     from routes import (
@@ -55,7 +55,7 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
     )
 
     resolved_database_path = configure_db_path(resolved_database_path)
-    _logger.info("Database path: %s", resolved_database_path)
+    LOGGER.info("Database path: %s", resolved_database_path)
 
     # Get project root (parent of core/) for templates and static
     import pathlib
@@ -68,17 +68,17 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
     )
     app.config["DATABASE_PATH"] = resolved_database_path
     app.config["SECRET_KEY"] = config.SECRET_KEY
-    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=config.LOGIN_REMEMBER_SESSION_DAYS)
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=config.get_runtime_setting("LOGIN_REMEMBER_SESSION_DAYS"))
     app.config["PREFERRED_URL_SCHEME"] = config.PREFERRED_URL_SCHEME
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["SESSION_COOKIE_SECURE"] = config.SESSION_COOKIE_SECURE
 
-    _logger.info("Session cookie secure: %s", config.SESSION_COOKIE_SECURE)
+    LOGGER.info("Session cookie secure: %s", config.SESSION_COOKIE_SECURE)
 
     if config.TRUST_PROXY_HEADERS:
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
-        _logger.info("Proxy headers trust enabled")
+        LOGGER.info("Proxy headers trust enabled")
 
     if config.SECURITY_HSTS_ENABLED:
         hsts_directives = [f"max-age={config.SECURITY_HSTS_MAX_AGE}"]
@@ -94,7 +94,7 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
                 response.headers.setdefault("Strict-Transport-Security", hsts_value)
             return response
 
-        _logger.info("HSTS enabled: %s", hsts_value)
+        LOGGER.info("HSTS enabled: %s", hsts_value)
 
     if config.FORCE_HTTPS:
 
@@ -105,7 +105,7 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
             secure_url = request.url.replace("http://", "https://", 1)
             return redirect(secure_url, code=308)
 
-        _logger.info("HTTPS enforcement enabled")
+        LOGGER.info("HTTPS enforcement enabled")
 
     @app.after_request
     def _inject_security_headers(response):
@@ -157,30 +157,55 @@ def create_app(database_path: str | None = None, *, load_persisted_runtime_setti
     from routes.pages import validate_tool_catalog_sync
     missing_labels, missing_descs, missing_specs = validate_tool_catalog_sync()
     if missing_labels:
-        _logger.warning("Tools missing in TOOL_PERMISSION_LABELS (UI may not display them correctly): %s", missing_labels)
+        LOGGER.warning("Tools missing in TOOL_PERMISSION_LABELS (UI may not display them correctly): %s", missing_labels)
     if missing_descs:
-        _logger.warning("Tools missing in TOOL_PERMISSION_DESCRIPTIONS (UI may not display them correctly): %s", missing_descs)
+        LOGGER.warning("Tools missing in TOOL_PERMISSION_DESCRIPTIONS (UI may not display them correctly): %s", missing_descs)
     if missing_specs:
-        _logger.warning("Tools in TOOL_PERMISSION_LABELS but not in TOOL_SPECS (stale UI entries): %s", missing_specs)
+        LOGGER.warning("Tools in TOOL_PERMISSION_LABELS but not in TOOL_SPECS (stale UI entries): %s", missing_specs)
 
-    _logger.info("All routes registered successfully")
-    _logger.info("Application startup complete")
-    _logger.info("=" * 60)
+    LOGGER.info("All routes registered successfully")
+    LOGGER.info("Application startup complete")
+    LOGGER.info("=" * 60)
 
     return app
 
 
-app = create_app()
+_app_instance: Flask | None = None
+
+
+def _get_or_create_app() -> Flask:
+    """Lazily create and cache the Flask app instance.
+
+    This avoids creating the app at module import time while still
+    supporting the ``app:app`` WSGI entrypoint convention used by
+    gunicorn, uwsgi, and other application servers.
+    """
+    global _app_instance
+    if _app_instance is None:
+        _app_instance = create_app(load_persisted_runtime_settings=True)
+    return _app_instance
+
+
+def __getattr__(name: str) -> Flask:
+    """Module-level attribute access for WSGI compatibility.
+
+    When a WSGI server (gunicorn, uwsgi) imports ``app`` from this module,
+    the lazy factory is triggered.  Direct integration tests that import
+    ``from core.app import app`` also work transparently.
+    """
+    if name == "app":
+        return _get_or_create_app()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":
     import os
     from routes import preload_dependencies
 
-    _logger.info("Running in standalone mode...")
+    LOGGER.info("Running in standalone mode...")
     runtime_app = create_app()
     preload_dependencies(runtime_app)
     runtime_app.config["RAG_STARTUP_SYNC_DONE"] = True
     _sync_rag_on_startup()
-    _logger.info("Starting Flask server on 0.0.0.0:5000")
+    LOGGER.info("Starting Flask server on 0.0.0.0:5000")
     runtime_app.run(host="0.0.0.0", debug=bool(os.environ.get("FLASK_DEBUG")), use_reloader=False)

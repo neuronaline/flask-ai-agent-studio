@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import secrets
 import time
 from collections import deque
@@ -9,10 +8,11 @@ from threading import Lock
 from flask import current_app, jsonify, request, session
 
 from core import config
+from utils.logging_config import get_logger
 
 try:
     import redis
-except Exception:  # pragma: no cover - optional runtime dependency
+except ImportError:  # pragma: no cover - optional runtime dependency
     redis = None
 
 
@@ -27,7 +27,7 @@ _RATE_LIMIT_REQUEST_COUNT = 0
 _RATE_LIMIT_REDIS_LOCK = Lock()
 _RATE_LIMIT_REDIS_CLIENT = None
 _RATE_LIMIT_REDIS_INITIALIZED = False
-LOGGER = logging.getLogger(__name__)
+LOGGER = get_logger(__name__)
 
 
 def get_csrf_token() -> str:

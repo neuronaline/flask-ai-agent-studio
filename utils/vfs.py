@@ -11,15 +11,15 @@ Per AI Memory and Context Management doc Section 2:
 from __future__ import annotations
 
 import hashlib
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from utils.token_utils import estimate_text_tokens
+from utils.logging_config import get_logger
 
-LOGGER = logging.getLogger(__name__)
+LOGGER = get_logger(__name__)
 
 # Default VFS budget: 50% of model context limit
 DEFAULT_VFS_TOKEN_BUDGET = 64_000  # 50% of 128k

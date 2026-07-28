@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import ast
 import hashlib
-import html
 import json
 import logging
 import math
@@ -19,7 +17,6 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import jsonschema
-import ijson
 from jsonschema import Draft7Validator
 
 from utils.shared_extract import extract_chat_completion_text as _extract_chat_completion_text
@@ -56,22 +53,19 @@ from core.config import (
     AGENT_TRACE_LOG_INCLUDE_RAW,
     AGENT_TOOL_RESULT_TRANSCRIPT_MAX_CHARS,
     APP_LOG_PATH,
-    CONVERSATION_MEMORY_ENABLED,
     DEFAULT_SETTINGS,
     DEFAULT_MAX_PARALLEL_TOOLS,
-    FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
     FETCH_SUMMARIZE_MAX_INPUT_CHARS,
     FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
-    FETCH_SUMMARY_MAX_CHARS,
     FETCH_SUMMARY_TOKEN_THRESHOLD,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     PROMPT_MAX_INPUT_TOKENS,
-    RAG_SEARCH_DEFAULT_TOP_K,
     RAG_TOOL_RESULT_MAX_TEXT_CHARS,
     RAG_TOOL_RESULT_SUMMARY_MAX_CHARS,
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
+    get_runtime_setting,
 )
 from core.prompts import get_prompt
 from core.db import (
@@ -145,6 +139,19 @@ from services.video_transcript_service import (
     transcribe_youtube_video,
 )
 
+from agent.tool_parsing import (
+    _coerce_text,
+    _extract_native_tool_calls,
+    _extract_partial_json_string_value,
+    _has_meaningful_stream_tool_calls,
+    _merge_stream_tool_call_delta,
+    _parse_json_like_value,
+    _parse_tool_call_arguments,
+    _prefer_content_dsml_tool_calls,
+    _read_api_field,
+    _stream_tool_call_entry_has_meaningful_content,
+)
+
 FINAL_ANSWER_ERROR_TEXT_FALLBACK = "The model returned an invalid tool instruction and no final answer could be produced."
 FINAL_ANSWER_MISSING_TEXT_FALLBACK = "The model did not produce a final answer in assistant content."
 CONTEXT_OVERFLOW_RECOVERY_ERROR_TEXT_FALLBACK = "Context window is full and cannot be compacted further. Try starting a new conversation, disabling RAG or large canvas content, or reducing the request size."
@@ -201,19 +208,7 @@ RUNTIME_CONTEXT_INJECTION_SECTION_MARKERS = (
     | set(CANVAS_RUNTIME_CONTEXT_INSERT_BEFORE_HEADINGS)
     | {"## Current Date and Time"}
 )
-DSML_INVOKE_TAG_RE = re.compile(r'<[^>]*invoke\s+name="(?P<name>[^"]+)"[^>]*>', re.IGNORECASE)
-DSML_FUNCTION_CALLS_TAG_RE = re.compile(r"<[^>]*function_calls[^>]*>", re.IGNORECASE)
-DSML_PARAMETER_TAG_RE = re.compile(
-    r'<[^>]*parameter\s+name="(?P<name>[^"]+)"(?P<attrs>[^>]*)>(?P<value>.*?)</[^>]*parameter\s*>',
-    re.IGNORECASE | re.DOTALL,
-)
-DSML_STRING_ATTR_RE = re.compile(r'\bstring\s*=\s*["\']true["\']', re.IGNORECASE)
-TOOL_ARGUMENT_CODE_FENCE_RE = re.compile(
-    r"^\s*```(?:json|javascript|js|python|py)?\s*(?P<body>.*?)\s*```\s*$",
-    re.IGNORECASE | re.DOTALL,
-)
 _VALID_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-TOOL_ARGUMENT_LANGUAGE_LABELS = {"json", "javascript", "js", "python", "py"}
 SEARCH_QUERY_BATCHED_TOOL_NAMES = {
     "search_web",
     "search_news",
@@ -620,7 +615,7 @@ def _extract_error_signal_text(error) -> str:
             try:
                 parsed = json.loads(text)
             except Exception:
-                pass
+                LOGGER.debug("Failed to parse JSON fragment in error signal", exc_info=True)
             else:
                 visit(parsed, depth + 1)
                 return
@@ -1592,7 +1587,7 @@ def _build_fetch_clipped_text(result: dict, token_threshold: int, clip_aggressiv
         return raw_content, token_estimate, {"strategy": "full_text", "excerpt_count": 1}
 
     clip_ratio = min(1.0, token_threshold / max(token_estimate, 1))
-    target_chars = max(2000, min(FETCH_SUMMARY_MAX_CHARS, int(len(raw_content) * clip_ratio)))
+    target_chars = max(2000, min(get_runtime_setting("FETCH_SUMMARY_MAX_CHARS"), int(len(raw_content) * clip_ratio)))
     clipped_content, clip_details = _clip_text_preserving_ends(raw_content, target_chars)
     result_text = clipped_content or raw_content
     return result_text, _estimate_text_tokens(result_text), clip_details
@@ -2144,7 +2139,7 @@ def _build_fetch_tool_message_content(tool_args: dict, summary: str, transcript_
     page_count = transcript_result.get("page_count")
     content_mode = str(transcript_result.get("content_mode") or "").strip()
     clip_strategy = str(transcript_result.get("clip_strategy") or "").strip()
-    body_limit = None if content_mode in {"clipped_text", "budget_compact", "budget_brief"} else FETCH_SUMMARY_MAX_CHARS
+    body_limit = None if content_mode in {"clipped_text", "budget_compact", "budget_brief"} else get_runtime_setting("FETCH_SUMMARY_MAX_CHARS")
     body = _clean_tool_text(transcript_result.get("content") or "", limit=body_limit)
 
     source_lines = []
@@ -2386,26 +2381,6 @@ def _prepare_tool_result_for_transcript(
     return result
 
 
-def _coerce_text(value) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        parts = []
-        for item in value:
-            if isinstance(item, str):
-                if item:
-                    parts.append(item)
-                continue
-            if isinstance(item, dict):
-                text = item.get("text")
-                if text:
-                    parts.append(str(text))
-        return "".join(parts)
-    return str(value)
-
-
 def _extract_reasoning_and_content(message) -> tuple[str, str]:
     reasoning_text = _extract_reasoning_text(message).strip()
     content_text = _coerce_text(getattr(message, "content", "")).strip()
@@ -2515,337 +2490,6 @@ def _close_model_response(response) -> None:
             close_response()
         except Exception:
             LOGGER.debug("Failed to close model response", exc_info=True)
-
-
-def _read_api_field(value, key: str, default=None):
-    if isinstance(value, dict):
-        return value.get(key, default)
-    return getattr(value, key, default)
-
-
-def _parse_json_like_text(text: str):
-    raw_text = str(text or "").strip()
-    if not raw_text:
-        return None
-    try:
-        return json.loads(raw_text)
-    except Exception:
-        pass
-    try:
-        return ast.literal_eval(raw_text)
-    except Exception:
-        return None
-
-
-def _strip_tool_argument_code_fence(text: str) -> str | None:
-    match = TOOL_ARGUMENT_CODE_FENCE_RE.match(str(text or ""))
-    if not match:
-        return None
-    return str(match.group("body") or "").strip()
-
-
-def _strip_tool_argument_language_label(text: str) -> str | None:
-    raw_text = str(text or "").strip()
-    if not raw_text or "\n" not in raw_text:
-        return None
-
-    first_line, remainder = raw_text.split("\n", 1)
-    if first_line.strip().lower() not in TOOL_ARGUMENT_LANGUAGE_LABELS:
-        return None
-
-    cleaned_remainder = remainder.strip()
-    if not cleaned_remainder.startswith(("{", "[", "<")):
-        return None
-    return cleaned_remainder
-
-
-def _iter_tool_argument_text_candidates(arguments_text: str):
-    raw_text = str(arguments_text or "").strip()
-    if not raw_text:
-        return
-
-    pending = [raw_text]
-    seen = set()
-
-    while pending:
-        candidate = str(pending.pop(0) or "").strip()
-        if not candidate or candidate in seen:
-            continue
-
-        seen.add(candidate)
-        yield candidate
-
-        html_unescaped = html.unescape(candidate).strip()
-        if html_unescaped and html_unescaped not in seen and html_unescaped != candidate:
-            pending.append(html_unescaped)
-
-        fence_inner = _strip_tool_argument_code_fence(candidate)
-        if fence_inner and fence_inner not in seen:
-            pending.append(fence_inner)
-
-        unlabeled = _strip_tool_argument_language_label(candidate)
-        if unlabeled and unlabeled not in seen:
-            pending.append(unlabeled)
-
-        # Strict parsing mode: do not attempt custom fragment repair.
-
-
-def _parse_dsml_argument_value(value_text: str, attrs_text: str = ""):
-    raw_value = str(value_text or "")
-    if DSML_STRING_ATTR_RE.search(str(attrs_text or "")):
-        return raw_value
-
-    parsed_value = _parse_json_like_text(raw_value)
-    if parsed_value is not None:
-        return parsed_value
-
-    return raw_value.strip()
-
-
-def _parse_dsml_argument_object(arguments_text: str) -> dict | None:
-    raw_arguments = str(arguments_text or "")
-    parsed_arguments = {}
-    found_parameter = False
-
-    for match in DSML_PARAMETER_TAG_RE.finditer(raw_arguments):
-        found_parameter = True
-        field_name = str(match.group("name") or "").strip()
-        if not field_name:
-            continue
-
-        field_value = _parse_dsml_argument_value(match.group("value"), match.group("attrs"))
-        existing_value = parsed_arguments.get(field_name)
-        if existing_value is None:
-            parsed_arguments[field_name] = field_value
-            continue
-        if isinstance(existing_value, list):
-            existing_value.append(field_value)
-            continue
-        parsed_arguments[field_name] = [existing_value, field_value]
-
-    if not found_parameter:
-        return None
-    return parsed_arguments
-
-
-def _extract_dsml_tool_calls_from_content(content_text: str) -> tuple[str, list[dict] | None]:
-    raw_content = str(content_text or "")
-    invoke_matches = list(DSML_INVOKE_TAG_RE.finditer(raw_content))
-    if not invoke_matches:
-        return raw_content, None
-
-    tool_calls = []
-    dsml_start = invoke_matches[0].start()
-    function_calls_tag_match = DSML_FUNCTION_CALLS_TAG_RE.search(raw_content)
-    if function_calls_tag_match and function_calls_tag_match.start() < dsml_start:
-        dsml_start = function_calls_tag_match.start()
-    for index, match in enumerate(invoke_matches, start=1):
-        tool_name = str(match.group("name") or "").strip()
-        if not tool_name:
-            continue
-
-        next_start = invoke_matches[index].start() if index < len(invoke_matches) else len(raw_content)
-        arguments_text = raw_content[match.end() : next_start]
-        parsed_arguments = _parse_dsml_argument_object(arguments_text) or {}
-        tool_calls.append(
-            {
-                "id": f"content-tool-call-{index}",
-                "name": tool_name,
-                "arguments": parsed_arguments,
-            }
-        )
-
-    if not tool_calls:
-        return raw_content, None
-
-    return raw_content[:dsml_start].strip(), tool_calls
-
-
-def _prefer_content_dsml_tool_calls(
-    content_text: str,
-    tool_calls: list[dict] | None,
-    tool_call_error: str | None,
-) -> tuple[str, list[dict] | None, str | None]:
-    normalized_content, content_tool_calls = _extract_dsml_tool_calls_from_content(content_text)
-    if content_tool_calls:
-        return normalized_content, content_tool_calls, None
-    return content_text, tool_calls, tool_call_error
-
-
-def _parse_tool_call_arguments(arguments_text: str, label: str) -> tuple[dict | None, str | None]:
-    raw_arguments = str(arguments_text or "").strip()
-    if not raw_arguments:
-        return {}, None
-
-    json_error = None
-    try:
-        json.loads(raw_arguments)
-    except json.JSONDecodeError as exc:
-        json_error = exc.msg
-
-    saw_non_object_candidate = False
-    for candidate in _iter_tool_argument_text_candidates(raw_arguments):
-        parsed_arguments = _parse_json_like_text(candidate)
-        if parsed_arguments is None:
-            parsed_arguments = _parse_dsml_argument_object(candidate)
-        if parsed_arguments is None:
-            continue
-        if isinstance(parsed_arguments, dict):
-            return parsed_arguments, None
-        saw_non_object_candidate = True
-
-    if saw_non_object_candidate:
-        return None, f"Tool arguments for {label} must be an object"
-
-    if raw_arguments.startswith("<"):
-        return None, f"Invalid tool arguments JSON for {label}: {json_error or 'Could not parse arguments'}"
-
-    if raw_arguments.lstrip().startswith("{"):
-        return None, f"Invalid tool arguments JSON for {label}: {json_error or 'Could not parse arguments'}"
-    return None, f"Invalid tool arguments JSON for {label}: {json_error or 'Could not parse arguments'}"
-
-
-def _extract_native_tool_calls(message) -> tuple[list[dict] | None, str | None]:
-    raw_tool_calls = _read_api_field(message, "tool_calls") or []
-    if not raw_tool_calls:
-        return None, None
-
-    normalized_calls = []
-    for index, raw_call in enumerate(raw_tool_calls, start=1):
-        function = _read_api_field(raw_call, "function")
-        tool_name = str(_read_api_field(function, "name") or "").strip()
-        if not tool_name:
-            return None, f"tool_calls[{index}] is missing a tool name"
-
-        arguments_text = _coerce_text(_read_api_field(function, "arguments", ""))
-        tool_args, parse_error = _parse_tool_call_arguments(arguments_text, tool_name)
-        if parse_error:
-            return None, parse_error
-
-        normalized_calls.append(
-            {
-                "id": str(_read_api_field(raw_call, "id") or f"tool-call-{index}"),
-                "name": tool_name,
-                "arguments": tool_args or {},
-            }
-        )
-    return normalized_calls, None
-
-
-def _merge_stream_tool_call_delta(tool_call_parts: list[dict], delta) -> None:
-    raw_tool_calls = _read_api_field(delta, "tool_calls") or []
-    for fallback_index, raw_call in enumerate(raw_tool_calls):
-        index_value = _read_api_field(raw_call, "index", fallback_index)
-        try:
-            index = max(0, int(index_value))
-        except (TypeError, ValueError):
-            index = fallback_index
-
-        while len(tool_call_parts) <= index:
-            tool_call_parts.append({"id": "", "name": "", "arguments_parts": []})
-
-        entry = tool_call_parts[index]
-        call_id = _read_api_field(raw_call, "id")
-        if call_id:
-            entry["id"] = str(call_id)
-
-        function = _read_api_field(raw_call, "function")
-        name_part = str(_read_api_field(function, "name") or "")
-        if name_part:
-            if not entry["name"]:
-                entry["name"] = name_part
-            elif not entry["name"].endswith(name_part):
-                entry["name"] += name_part
-
-        arguments_part = _coerce_text(_read_api_field(function, "arguments", ""))
-        if arguments_part:
-            entry["arguments_parts"].append(arguments_part)
-
-
-def _stream_tool_call_entry_has_meaningful_content(raw_call: dict) -> bool:
-    if not isinstance(raw_call, dict):
-        return False
-    if str(raw_call.get("name") or "").strip():
-        return True
-    arguments_parts = raw_call.get("arguments_parts") if isinstance(raw_call.get("arguments_parts"), list) else []
-    return any(str(part or "") for part in arguments_parts)
-
-
-def _has_meaningful_stream_tool_calls(tool_call_parts: list[dict]) -> bool:
-    return any(_stream_tool_call_entry_has_meaningful_content(raw_call) for raw_call in tool_call_parts)
-
-
-def _extract_partial_json_string_value(arguments_text: str, field_name: str) -> str | None:
-    """Extract a string field value from potentially incomplete JSON using streaming parser.
-
-    Uses ijson for robust streaming JSON parsing instead of fragile character-by-character lexing.
-    Falls back to regex extraction for edge cases where streaming parser can't complete.
-    """
-    raw_arguments = str(arguments_text or "")
-    raw_field_name = str(field_name or "").strip()
-    if not raw_arguments or not raw_field_name:
-        return None
-
-    # Fast path: try to parse complete JSON first
-    try:
-        parsed = json.loads(raw_arguments)
-        if isinstance(parsed, dict) and raw_field_name in parsed:
-            value = parsed.get(raw_field_name)
-            if value is not None:
-                return str(value)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    # Streaming path: use ijson to parse partial JSON
-    try:
-        parser = ijson.parse(raw_arguments)
-        current_key = None
-        in_target_field = False
-        field_value_parts: list[str] = []
-        depth = 0
-
-        for prefix, event, value in parser:
-            if event == "start_map":
-                if depth == 0 and current_key == raw_field_name:
-                    in_target_field = True
-                depth += 1
-            elif event == "end_map":
-                depth -= 1
-                if depth == 0 and in_target_field:
-                    return "".join(field_value_parts)
-                in_target_field = False
-                current_key = None
-            elif event == "map_key":
-                current_key = value
-                if current_key == raw_field_name and depth == 1:
-                    in_target_field = True
-                else:
-                    in_target_field = False
-            elif in_target_field and event == "string":
-                field_value_parts.append(value if isinstance(value, str) else str(value))
-            elif in_target_field and event in ("number", "boolean"):
-                field_value_parts.append(str(value))
-
-        # If we have partial value from streaming, return it
-        if field_value_parts:
-            return "".join(field_value_parts)
-    except Exception:
-        pass
-
-    # Fallback: regex-based extraction for malformed partial JSON
-    # This is a last resort for cases where both json.loads and ijson fail
-    try:
-        escaped_field = re.escape(raw_field_name)
-        # Match: "field_name": "value" or "field_name":"value"
-        pattern = rf'"{escaped_field}"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"'
-        match = re.search(pattern, raw_arguments, re.DOTALL)
-        if match:
-            # Unescape the matched value
-            return json.loads(f'"{match.group(1)}"')
-    except Exception:
-        pass
-
-    return None
 
 
 def _coerce_streaming_canvas_preview_int(value) -> int | None:
@@ -3095,6 +2739,16 @@ def _strip_intermediate_tool_call_content(messages: list[dict]) -> list[dict]:
     return result
 
 
+def _is_deepseek_model_target(model_target: dict | None) -> bool:
+    """Return True if *model_target* uses the DeepSeek provider."""
+    if not isinstance(model_target, dict):
+        return False
+    record = model_target.get("record")
+    if not isinstance(record, dict):
+        return False
+    return str(record.get("provider") or "").strip() == DEEPSEEK_PROVIDER
+
+
 def _has_native_reasoning_details(messages: list[dict]) -> bool:
     for message in reversed(messages or []):
         if not isinstance(message, dict):
@@ -3114,14 +2768,6 @@ def _serialize_tool_message_content(payload) -> str:
         return json.dumps(payload, ensure_ascii=False)
     except TypeError:
         return json.dumps({"value": str(payload)}, ensure_ascii=False)
-
-
-def _parse_json_like_value(value):
-    if isinstance(value, (dict, list)):
-        return value
-    if not isinstance(value, str):
-        return None
-    return _parse_json_like_text(value)
 
 
 def _drop_null_tool_fields(value):
@@ -3290,7 +2936,7 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
 
             if isinstance(max_items, int) and len(value) > max_items:
                 if key == "queries" and tool_name in SEARCH_QUERY_BATCHED_TOOL_NAMES:
-                    pass
+                    pass  # Batched search queries are handled separately — exceeding max_items is allowed here
                 elif tool_name == "ask_clarifying_question" and key == "questions":
                     value = value[:max_items]
                     tool_args[key] = value
@@ -3320,22 +2966,27 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
 
 
 def _build_final_answer_instruction() -> dict:
+    # Per CACHE_AND_MESSAGE_RULES.md Rule 2: exactly ONE system message.
+    # All dynamic/inline instructions use role "user" to avoid breaking
+    # prefix cache matching across providers.
     return {
-        "role": "system",
+        "role": "user",
         "content": get_prompt("agent.final_answer.instruction"),
     }
 
 
 def _build_minimal_final_answer_instruction() -> dict:
+    # Per CACHE_AND_MESSAGE_RULES.md Rule 2: exactly ONE system message.
     return {
-        "role": "system",
+        "role": "user",
         "content": get_prompt("agent.minimal_final_answer.instruction"),
     }
 
 
 def _build_missing_final_answer_instruction() -> dict:
+    # Per CACHE_AND_MESSAGE_RULES.md Rule 2: exactly ONE system message.
     return {
-        "role": "system",
+        "role": "user",
         "content": get_prompt("agent.missing_final_answer.instruction"),
     }
 
@@ -3381,7 +3032,8 @@ def _build_tool_execution_result_message(transcript_results: list[dict]) -> dict
             }:
                 parts.append(f"  Recovery: {recovery_hint}")
 
-    return {"role": "system", "content": "\n".join(parts)}
+    # Per CACHE_AND_MESSAGE_RULES.md Rule 2: exactly ONE system message.
+    return {"role": "user", "content": "\n".join(parts)}
 
 
 def _merge_tool_execution_result_message(messages: list[dict], tool_execution_result_message: dict | None) -> None:
@@ -3624,7 +3276,7 @@ def _execute_streaming_tool_with_event_buffer(tool_name: str, tool_args: dict, r
             if warning is not None:
                 return {"error": warning.message, "blocked": True}, f"Execution blocked: {warning.message}", []
         except Exception:
-            pass
+            LOGGER.debug("Failed to check execution cost for tool %s", tool_name, exc_info=True)
 
     result, summary = _execute_tool(tool_name, tool_args, runtime_state=runtime_state)
     return result, summary, []
@@ -3680,7 +3332,7 @@ def _run_search_knowledge_base(tool_args: dict, runtime_state: dict):
     result = search_knowledge_base_tool(
         tool_args.get("query", ""),
         category=tool_args.get("category"),
-        top_k=tool_args.get("top_k", RAG_SEARCH_DEFAULT_TOP_K),
+        top_k=tool_args.get("top_k", get_runtime_setting("RAG_SEARCH_DEFAULT_TOP_K")),
         allowed_source_types=get_rag_source_types(),
         min_similarity=tool_args.get("min_similarity"),
     )
@@ -4299,10 +3951,6 @@ _TOOL_EXECUTORS = {
     "purge_context_nodes": _run_purge_context_nodes,
     "merge_context_nodes": _run_merge_context_nodes,
     "compress_context_node": _run_compress_context_node,
-    # Virtual File System tools (per AI Memory and Context Management doc)
-    "materialise_file": _run_materialise_file,
-    "search_codebase": _run_search_codebase,
-    "delegate_task": _run_delegate_task,
 }
 
 
@@ -4310,8 +3958,6 @@ _TOOL_EXECUTORS = {
 # Virtual File System (VFS) tool executors
 # ---------------------------------------------------------------------------
 from utils.vfs import get_vfs
-
-
 def _run_materialise_file(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
     """Handler for materialise_file tool.
 
@@ -4390,6 +4036,14 @@ def _run_delegate_task(tool_args: dict, runtime_state: dict) -> tuple[dict, str]
     }
     summary = f"delegate_task: '{goal[:60]}' delegated with {len(scope_paths)} scope files"
     return result, summary
+
+
+# Register VFS tool executors now that their functions are defined.
+_TOOL_EXECUTORS.update({
+    "materialise_file": _run_materialise_file,
+    "search_codebase": _run_search_codebase,
+    "delegate_task": _run_delegate_task,
+})
 
 
 def _execute_tool(tool_name: str, tool_args: dict, runtime_state: dict | None = None):
@@ -4825,7 +4479,7 @@ def _build_tool_result_storage_entry(
             )
             raw_content = _clean_tool_text(
                 result.get("raw_content") or result.get("content") or "",
-                limit=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
+                limit=get_runtime_setting("FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS"),
             )
             parts = []
             title = str(result.get("title") or "").strip()
@@ -4909,10 +4563,10 @@ def _build_tool_result_storage_entry(
         display_result = transcript_result if isinstance(transcript_result, dict) else result
         raw_content = _clean_tool_text(
             result.get("raw_content") or result.get("content") or "",
-            limit=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
+            limit=get_runtime_setting("FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS"),
         )
         display_content = _clean_tool_text(
-            display_result.get("content") or "", limit=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS
+            display_result.get("content") or "", limit=get_runtime_setting("FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS")
         )
         content_mode = str(display_result.get("content_mode") or "").strip()
         summary_notice = _clean_tool_text(display_result.get("summary_notice") or "", limit=300)
@@ -5159,7 +4813,7 @@ def _apply_tool_output_budget(
 
     per_entry_tokens = max(40, available_tokens // max(1, len(successful_entries)))
     compact_char_limit = max(160, min(900, per_entry_tokens * 4))
-    fetch_char_limit = max(240, min(FETCH_SUMMARY_MAX_CHARS, per_entry_tokens * 5))
+    fetch_char_limit = max(240, min(get_runtime_setting("FETCH_SUMMARY_MAX_CHARS"), per_entry_tokens * 5))
     base_threshold = _normalize_fetch_token_threshold(fetch_url_token_threshold)
     base_aggressiveness = _normalize_fetch_clip_aggressiveness(fetch_url_clip_aggressiveness)
 
@@ -5361,7 +5015,8 @@ def _build_reasoning_replay_instruction(reasoning_state: dict, current_goal: str
 
     parts.extend(reversed(selected_sections))
 
-    return {"role": "system", "content": "\n\n".join(parts)}
+    # Per CACHE_AND_MESSAGE_RULES.md Rule 2: exactly ONE system message.
+    return {"role": "user", "content": "\n\n".join(parts)}
 
 
 def _build_working_state_instruction(working_state: dict) -> dict | None:
@@ -5402,7 +5057,8 @@ def _build_working_state_instruction(working_state: dict) -> dict | None:
     parts.append(
         get_prompt("agent.working_state.prefer_different")
     )
-    return {"role": "system", "content": "\n\n".join(parts)}
+    # Per CACHE_AND_MESSAGE_RULES.md Rule 2: exactly ONE system message.
+    return {"role": "user", "content": "\n\n".join(parts)}
 
 
 def _get_tool_step_limit(_tool_name: str, max_steps: int = 5) -> int:
@@ -6400,7 +6056,12 @@ def run_agent_stream(
         if working_memory_instruction:
             extra_messages.append(working_memory_instruction)
         turn_messages, _ = apply_context_compaction(extra_messages, reason="pre_model_turn")
-        turn_messages = _strip_intermediate_tool_call_content(turn_messages)
+        # Per CACHE_AND_MESSAGE_RULES.md "Content Key" Rule:
+        # ONLY DeepSeek rejects `content` alongside `tool_calls`.
+        # OpenAI/Anthropic use `content` for CoT text and cache_control markers.
+        # Global content stripping destroys both reasoning memory and cache hit rates.
+        if _is_deepseek_model_target(model_target):
+            turn_messages = _strip_intermediate_tool_call_content(turn_messages)
 
         try:
             turn_result = yield from stream_model_turn(
@@ -7433,7 +7094,10 @@ def run_agent_stream(
             final_extra_messages = [working_memory_instruction] if working_memory_instruction is not None else []
             final_messages, _ = apply_context_compaction(final_extra_messages, reason="pre_final_answer")
             final_messages = [*final_messages, final_instruction_builder()]
-            final_messages = _strip_intermediate_tool_call_content(final_messages)
+            # Per CACHE_AND_MESSAGE_RULES.md "Content Key" Rule:
+            # ONLY DeepSeek rejects `content` alongside `tool_calls`.
+            if _is_deepseek_model_target(model_target):
+                final_messages = _strip_intermediate_tool_call_content(final_messages)
             turn_result = yield from stream_model_turn(
                 final_messages,
                 allow_tools=False,

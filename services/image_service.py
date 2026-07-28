@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 
-from core.config import IMAGE_UPLOADS_DISABLED_FEATURE_ERROR, IMAGE_UPLOADS_ENABLED, OCR_ENABLED
+from core.config import IMAGE_UPLOADS_DISABLED_FEATURE_ERROR, get_runtime_setting
 from core.prompts import get_prompt
 from utils.image_utils import (
     build_image_analysis_prompt,
@@ -106,6 +106,7 @@ def _run_helper_llm_image_analysis(
 
     request_kwargs = apply_model_target_request_options(request_kwargs, target)
     from services.activity_service import ActivityTimer, STATUS_OK, STATUS_ERROR, extract_usage_from_response, log_activity_call
+    from services.activity_types import ActivityCallParams
     _timer = ActivityTimer()
     try:
         with _timer:
@@ -113,30 +114,36 @@ def _run_helper_llm_image_analysis(
     except Exception as _exc:
         log_activity_call(
             conversation_id=max(0, int(conversation_id or 0)),
-            provider=str((target.get("record") or {}).get("provider") or ""),
-            api_model=str(target.get("api_model") or ""),
-            operation="image_analysis",
-            call_type="image_analysis",
-            request_payload=request_kwargs,
-            response_status=STATUS_ERROR,
-            error_type=type(_exc).__name__,
-            error_message=str(_exc),
-            latency_ms=_timer.elapsed_ms,
-            source_message_id=source_message_id,
+            params={
+                "provider": str((target.get("record") or {}).get("provider") or ""),
+                "api_model": str(target.get("api_model") or ""),
+                "operation": "image_analysis",
+                "call_type": "image_analysis",
+                "request_payload": request_kwargs,
+                "response_status": STATUS_ERROR,
+                "error_type": type(_exc).__name__,
+                "error_message": str(_exc),
+                "latency_ms": _timer.elapsed_ms,
+                "source_message_id": source_message_id,
+            },
         )
         raise
     _usage = extract_usage_from_response(response)
+    _log_params: ActivityCallParams = {
+        "provider": str((target.get("record") or {}).get("provider") or ""),
+        "api_model": str(target.get("api_model") or ""),
+        "operation": "image_analysis",
+        "call_type": "image_analysis",
+        "request_payload": request_kwargs,
+        "response_status": STATUS_OK,
+        "latency_ms": _timer.elapsed_ms,
+        "source_message_id": source_message_id,
+    }
+    if _usage:
+        _log_params.update(_usage)
     log_activity_call(
         conversation_id=max(0, int(conversation_id or 0)),
-        provider=str((target.get("record") or {}).get("provider") or ""),
-        api_model=str(target.get("api_model") or ""),
-        operation="image_analysis",
-        call_type="image_analysis",
-        request_payload=request_kwargs,
-        response_status=STATUS_OK,
-        latency_ms=_timer.elapsed_ms,
-        source_message_id=source_message_id,
-        **_usage,
+        params=_log_params,
     )
     choice = response.choices[0] if getattr(response, "choices", None) else None
     message = getattr(choice, "message", None) if choice else None
@@ -159,7 +166,7 @@ def _prepare_direct_multimodal_analysis(model_id: str, settings: dict | None = N
 
 
 def _run_local_ocr_analysis(image_bytes: bytes, mime_type: str) -> dict:
-    if not OCR_ENABLED:
+    if not get_runtime_setting("OCR_ENABLED"):
         raise RuntimeError("Local OCR is disabled.")
     return {
         "ocr_text": extract_image_text(image_bytes, mime_type),
@@ -194,7 +201,7 @@ def analyze_uploaded_image(
     conversation_id: int | None = None,
     source_message_id: int | None = None,
 ) -> dict:
-    if not IMAGE_UPLOADS_ENABLED:
+    if not get_runtime_setting("IMAGE_UPLOADS_ENABLED"):
         raise RuntimeError(IMAGE_UPLOADS_DISABLED_FEATURE_ERROR)
 
     normalized_method = normalize_image_processing_method(processing_method)
@@ -272,6 +279,7 @@ def answer_image_question(
     }
     request_kwargs = apply_model_target_request_options(request_kwargs, target)
     from services.activity_service import ActivityTimer, STATUS_OK, STATUS_ERROR, extract_usage_from_response, log_activity_call
+    from services.activity_types import ActivityCallParams
     _timer = ActivityTimer()
     try:
         with _timer:
@@ -279,30 +287,36 @@ def answer_image_question(
     except Exception as _exc:
         log_activity_call(
             conversation_id=max(0, int(conversation_id or 0)),
-            provider=str((target.get("record") or {}).get("provider") or ""),
-            api_model=str(target.get("api_model") or ""),
-            operation="image_question",
-            call_type="image_question",
-            request_payload=request_kwargs,
-            response_status=STATUS_ERROR,
-            error_type=type(_exc).__name__,
-            error_message=str(_exc),
-            latency_ms=_timer.elapsed_ms,
-            source_message_id=source_message_id,
+            params={
+                "provider": str((target.get("record") or {}).get("provider") or ""),
+                "api_model": str(target.get("api_model") or ""),
+                "operation": "image_question",
+                "call_type": "image_question",
+                "request_payload": request_kwargs,
+                "response_status": STATUS_ERROR,
+                "error_type": type(_exc).__name__,
+                "error_message": str(_exc),
+                "latency_ms": _timer.elapsed_ms,
+                "source_message_id": source_message_id,
+            },
         )
         raise
     _usage = extract_usage_from_response(response)
+    _log_params: ActivityCallParams = {
+        "provider": str((target.get("record") or {}).get("provider") or ""),
+        "api_model": str(target.get("api_model") or ""),
+        "operation": "image_question",
+        "call_type": "image_question",
+        "request_payload": request_kwargs,
+        "response_status": STATUS_OK,
+        "latency_ms": _timer.elapsed_ms,
+        "source_message_id": source_message_id,
+    }
+    if _usage:
+        _log_params.update(_usage)
     log_activity_call(
         conversation_id=max(0, int(conversation_id or 0)),
-        provider=str((target.get("record") or {}).get("provider") or ""),
-        api_model=str(target.get("api_model") or ""),
-        operation="image_question",
-        call_type="image_question",
-        request_payload=request_kwargs,
-        response_status=STATUS_OK,
-        latency_ms=_timer.elapsed_ms,
-        source_message_id=source_message_id,
-        **_usage,
+        params=_log_params,
     )
     choice = response.choices[0] if getattr(response, "choices", None) else None
     message = getattr(choice, "message", None) if choice else None

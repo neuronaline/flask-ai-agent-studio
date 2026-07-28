@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import io
-import logging
 import os
 import re
 import unicodedata
@@ -16,8 +15,9 @@ from core.config import (
     DOCUMENT_ALLOWED_MIME_TYPES,
     DOCUMENT_MAX_BYTES,
     DOCUMENT_MAX_TEXT_CHARS,
-    OCR_ENABLED,
+    get_runtime_setting,
 )
+from utils.logging_config import get_logger
 
 MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MIME_PDF = "application/pdf"
@@ -62,7 +62,7 @@ _CODE_LANGUAGE_BY_EXTENSION: dict[str, str] = {
     ".yml": "yaml",
 }
 
-LOGGER = logging.getLogger(__name__)
+LOGGER = get_logger(__name__)
 
 
 def guess_document_mime_type(filename: str, declared_mime: str) -> str:
@@ -162,7 +162,7 @@ def _extract_text_from_pdf_ocr(page) -> tuple[str, str]:
         return extracted_text, ("ok" if extracted_text else "empty")
     except RuntimeError as exc:
         LOGGER.warning("PDF OCR fallback runtime failure: %s", exc)
-        if not OCR_ENABLED or "disabled" in str(exc).lower():
+        if not get_runtime_setting("OCR_ENABLED") or "disabled" in str(exc).lower():
             return "", "disabled"
         return "", "failed"
     except Exception as exc:

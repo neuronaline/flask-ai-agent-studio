@@ -5,6 +5,7 @@ import ipaddress
 import json
 import os
 import sqlite3
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
@@ -46,15 +47,20 @@ def hash_login_pin_value(value: str) -> str:
 
 def _read_secret_key() -> str:
     secret_value = (os.getenv("FLASK_SECRET_KEY") or os.getenv("SECRET_KEY") or "").strip()
-    if not secret_value or secret_value.lower() in _INSECURE_SECRET_KEY_VALUES:
-        raise RuntimeError(
-            "FLASK_SECRET_KEY must be configured with a strong non-default value. "
-            "Set it in .env or the environment before starting the app."
-        )
     return secret_value
 
 
 SECRET_KEY = _read_secret_key()
+
+
+def validate_secret_key() -> None:
+    """Validate SECRET_KEY is configured properly. Called during app creation,
+    not at import time, so modules can import config without needing the key."""
+    if not SECRET_KEY or SECRET_KEY.lower() in _INSECURE_SECRET_KEY_VALUES:
+        raise RuntimeError(
+            "FLASK_SECRET_KEY must be configured with a strong non-default value. "
+            "Set it in .env or the environment before starting the app."
+        )
 _login_pin_env = (os.getenv("LOGIN_PIN") or "").strip()
 LOGIN_PIN_HASH = _hash_sensitive_value(_login_pin_env) if _login_pin_env else ""
 LOGIN_PIN = None
@@ -179,47 +185,70 @@ OCR_PRELOAD_ON_STARTUP = _parse_bool_env("OCR_PRELOAD", True)
 IMAGE_UPLOADS_ENABLED = OCR_ENABLED or bool(OPENROUTER_API_KEY) or bool(DEEPSEEK_API_KEY)
 OCR_SUPPORTED_PROVIDERS = ["paddleocr"]
 
-MAX_PARALLEL_TOOLS_MIN = 1
-MAX_PARALLEL_TOOLS_MAX = 12
-DEFAULT_MAX_PARALLEL_TOOLS = 4
+# ── Limits & defaults shared across settings validation ──
+_MAX_STEPS = 1
+_MAX_STEPS_MAX = 12
+_DEFAULT_MAX_STEPS = 5
+_MAX_PARALLEL_TOOLS_MIN_ = 1
+_MAX_PARALLEL_TOOLS_MAX_ = 12
+_DEFAULT_MAX_PARALLEL_TOOLS = 4
+_TIMEOUT_SECONDS_MIN = 5
+_TIMEOUT_SECONDS_MAX = 900
+_RETRY_ATTEMPTS_MIN = 0
+_RETRY_ATTEMPTS_MAX = 5
+_RETRY_DELAY_SECONDS_MIN = 0
+_RETRY_DELAY_SECONDS_MAX = 60
+_CLARIFICATION_QUESTION_MIN = 1
+_CLARIFICATION_QUESTION_MAX = 25
+_SEARCH_QUERY_LIMIT_MIN = 1
+_SEARCH_QUERY_LIMIT_MAX = 20
+_WEB_CACHE_TTL_HOURS_MIN = 0
+_WEB_CACHE_TTL_HOURS_MAX = 168
+_CONVERSATION_MIN_MESSAGES = 3
+_CONVERSATION_MIN_MESSAGE_CHARS = 100
+_CONTEXT_NODE_COMPRESSION_MIN_CHARS = 500
+
+MAX_PARALLEL_TOOLS_MIN = _MAX_PARALLEL_TOOLS_MIN_
+MAX_PARALLEL_TOOLS_MAX = _MAX_PARALLEL_TOOLS_MAX_
+DEFAULT_MAX_PARALLEL_TOOLS = _DEFAULT_MAX_PARALLEL_TOOLS
 
 # Sub-agent settings
-SUB_AGENT_MAX_STEPS_MIN = 1
-SUB_AGENT_MAX_STEPS_MAX = 12
+SUB_AGENT_MAX_STEPS_MIN = _MAX_STEPS
+SUB_AGENT_MAX_STEPS_MAX = _MAX_STEPS_MAX
 DEFAULT_SUB_AGENT_MAX_STEPS = 6
-SUB_AGENT_TIMEOUT_SECONDS_MIN = 5
-SUB_AGENT_TIMEOUT_SECONDS_MAX = 900
+SUB_AGENT_TIMEOUT_SECONDS_MIN = _TIMEOUT_SECONDS_MIN
+SUB_AGENT_TIMEOUT_SECONDS_MAX = _TIMEOUT_SECONDS_MAX
 DEFAULT_SUB_AGENT_TIMEOUT_SECONDS = 240
-SUB_AGENT_RETRY_ATTEMPTS_MIN = 0
-SUB_AGENT_RETRY_ATTEMPTS_MAX = 5
+SUB_AGENT_RETRY_ATTEMPTS_MIN = _RETRY_ATTEMPTS_MIN
+SUB_AGENT_RETRY_ATTEMPTS_MAX = _RETRY_ATTEMPTS_MAX
 DEFAULT_SUB_AGENT_RETRY_ATTEMPTS = 2
-SUB_AGENT_RETRY_DELAY_SECONDS_MIN = 0
-SUB_AGENT_RETRY_DELAY_SECONDS_MAX = 60
+SUB_AGENT_RETRY_DELAY_SECONDS_MIN = _RETRY_DELAY_SECONDS_MIN
+SUB_AGENT_RETRY_DELAY_SECONDS_MAX = _RETRY_DELAY_SECONDS_MAX
 DEFAULT_SUB_AGENT_RETRY_DELAY_SECONDS = 5
-SUB_AGENT_MAX_PARALLEL_TOOLS_MIN = 1
-SUB_AGENT_MAX_PARALLEL_TOOLS_MAX = 12
+SUB_AGENT_MAX_PARALLEL_TOOLS_MIN = _MAX_PARALLEL_TOOLS_MIN_
+SUB_AGENT_MAX_PARALLEL_TOOLS_MAX = _MAX_PARALLEL_TOOLS_MAX_
 DEFAULT_SUB_AGENT_MAX_PARALLEL_TOOLS = 2
 
 CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL = "balanced"
 CHAT_SUMMARY_DETAIL_LEVELS = {"very_concise", "concise", "balanced", "detailed", "comprehensive"}
-CLARIFICATION_QUESTION_LIMIT_MIN = 1
-CLARIFICATION_QUESTION_LIMIT_MAX = 25
+CLARIFICATION_QUESTION_LIMIT_MIN = _CLARIFICATION_QUESTION_MIN
+CLARIFICATION_QUESTION_LIMIT_MAX = _CLARIFICATION_QUESTION_MAX
 CLARIFICATION_DEFAULT_MAX_QUESTIONS = 5
 
 # Conversation Truncation Policy (configurable per Conversation Truncation Policy.md)
 CONVERSATION_TRUNCATION_ENABLED = _parse_bool_env("CONVERSATION_TRUNCATION_ENABLED", True)
-CONVERSATION_MAX_MESSAGES = max(3, _parse_int_env("CONVERSATION_MAX_MESSAGES", 20))
-CONVERSATION_MAX_MESSAGE_CHARS = max(100, _parse_int_env("CONVERSATION_MAX_MESSAGE_CHARS", 500))
+CONVERSATION_MAX_MESSAGES = max(_CONVERSATION_MIN_MESSAGES, _parse_int_env("CONVERSATION_MAX_MESSAGES", 20))
+CONVERSATION_MAX_MESSAGE_CHARS = max(_CONVERSATION_MIN_MESSAGE_CHARS, _parse_int_env("CONVERSATION_MAX_MESSAGE_CHARS", 500))
 CONVERSATION_TRUNCATION_KEEP_SYSTEM = _parse_bool_env("CONVERSATION_TRUNCATION_KEEP_SYSTEM", True)
 
 # Context Node compression threshold (chars) — payloads below this are kept intact
-CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS = max(500, _parse_int_env("CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS", 3000))
-SEARCH_TOOL_QUERY_LIMIT_MIN = 1
-SEARCH_TOOL_QUERY_LIMIT_MAX = 20
+CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS = max(_CONTEXT_NODE_COMPRESSION_MIN_CHARS, _parse_int_env("CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS", 3000))
+SEARCH_TOOL_QUERY_LIMIT_MIN = _SEARCH_QUERY_LIMIT_MIN
+SEARCH_TOOL_QUERY_LIMIT_MAX = _SEARCH_QUERY_LIMIT_MAX
 DEFAULT_SEARCH_TOOL_QUERY_LIMIT = 5
 
-WEB_CACHE_TTL_HOURS_MIN = 0
-WEB_CACHE_TTL_HOURS_MAX = 168
+WEB_CACHE_TTL_HOURS_MIN = _WEB_CACHE_TTL_HOURS_MIN
+WEB_CACHE_TTL_HOURS_MAX = _WEB_CACHE_TTL_HOURS_MAX
 DEFAULT_WEB_CACHE_TTL_HOURS = 24
 OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED = True
 OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT = "5m"  # "5m" (ephemeral, 5 min) or "1h" (ephemeral, 1 hour)
@@ -545,29 +574,82 @@ DEFAULT_SETTINGS = {
 }
 
 
-_RUNTIME_BASE_VALUES = {
-    "OPENROUTER_HTTP_REFERER": OPENROUTER_HTTP_REFERER,
-    "OPENROUTER_APP_TITLE": OPENROUTER_APP_TITLE,
-    "LOGIN_SESSION_TIMEOUT_MINUTES": LOGIN_SESSION_TIMEOUT_MINUTES,
-    "LOGIN_MAX_FAILED_ATTEMPTS": LOGIN_MAX_FAILED_ATTEMPTS,
-    "LOGIN_LOCKOUT_SECONDS": LOGIN_LOCKOUT_SECONDS,
-    "LOGIN_REMEMBER_SESSION_DAYS": LOGIN_REMEMBER_SESSION_DAYS,
-    "CONVERSATION_MEMORY_ENABLED": CONVERSATION_MEMORY_ENABLED,
-    "OCR_ENABLED": OCR_ENABLED,
-    "IMAGE_UPLOADS_ENABLED": IMAGE_UPLOADS_ENABLED,
-    "YOUTUBE_TRANSCRIPTS_ENABLED": YOUTUBE_TRANSCRIPTS_ENABLED,
-    "RAG_ENABLED": RAG_ENABLED,
-    "CHAT_SUMMARY_MODEL": CHAT_SUMMARY_MODEL,
-    "RAG_CHUNK_SIZE": RAG_CHUNK_SIZE,
-    "RAG_CHUNK_OVERLAP": RAG_CHUNK_OVERLAP,
-    "RAG_MAX_CHUNKS_PER_SOURCE": RAG_MAX_CHUNKS_PER_SOURCE,
-    "RAG_SEARCH_DEFAULT_TOP_K": RAG_SEARCH_DEFAULT_TOP_K,
-    "RAG_SEARCH_MIN_SIMILARITY": RAG_SEARCH_MIN_SIMILARITY,
-    "RAG_QUERY_EXPANSION_ENABLED": RAG_QUERY_EXPANSION_ENABLED,
-    "RAG_QUERY_EXPANSION_MAX_VARIANTS": RAG_QUERY_EXPANSION_MAX_VARIANTS,
-    "FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS": FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
-    "FETCH_SUMMARY_MAX_CHARS": FETCH_SUMMARY_MAX_CHARS,
-}
+@dataclass
+class RuntimeSettings:
+    """Mutable container for runtime-configurable settings.
+
+    Defaults match the initial env-derived module globals.
+    Use RuntimeSettings.from_defaults() to capture current globals.
+    """
+
+    OPENROUTER_HTTP_REFERER: str = ""
+    OPENROUTER_APP_TITLE: str = ""
+    LOGIN_SESSION_TIMEOUT_MINUTES: int = 30
+    LOGIN_MAX_FAILED_ATTEMPTS: int = 3
+    LOGIN_LOCKOUT_SECONDS: int = 300
+    LOGIN_REMEMBER_SESSION_DAYS: int = 30
+    CONVERSATION_MEMORY_ENABLED: bool = True
+    OCR_ENABLED: bool = True
+    IMAGE_UPLOADS_ENABLED: bool = True
+    YOUTUBE_TRANSCRIPTS_ENABLED: bool = False
+    RAG_ENABLED: bool = True
+    CHAT_SUMMARY_MODEL: str = ""
+    RAG_CHUNK_SIZE: int = 1800
+    RAG_CHUNK_OVERLAP: int = 250
+    RAG_MAX_CHUNKS_PER_SOURCE: int = 2
+    RAG_SEARCH_DEFAULT_TOP_K: int = 5
+    RAG_SEARCH_MIN_SIMILARITY: float = 0.35
+    RAG_QUERY_EXPANSION_ENABLED: bool = True
+    RAG_QUERY_EXPANSION_MAX_VARIANTS: int = 2
+    FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS: int = 24000
+    FETCH_SUMMARY_MAX_CHARS: int = 8000
+
+    @classmethod
+    def from_defaults(cls) -> "RuntimeSettings":
+        """Create an instance from current module globals (env-derived values).
+
+        This captures the initial env-based values that were set at module
+        load time, before any persisted overrides are applied.
+        """
+        return cls(
+            OPENROUTER_HTTP_REFERER=OPENROUTER_HTTP_REFERER,
+            OPENROUTER_APP_TITLE=OPENROUTER_APP_TITLE,
+            LOGIN_SESSION_TIMEOUT_MINUTES=LOGIN_SESSION_TIMEOUT_MINUTES,
+            LOGIN_MAX_FAILED_ATTEMPTS=LOGIN_MAX_FAILED_ATTEMPTS,
+            LOGIN_LOCKOUT_SECONDS=LOGIN_LOCKOUT_SECONDS,
+            LOGIN_REMEMBER_SESSION_DAYS=LOGIN_REMEMBER_SESSION_DAYS,
+            CONVERSATION_MEMORY_ENABLED=CONVERSATION_MEMORY_ENABLED,
+            OCR_ENABLED=OCR_ENABLED,
+            IMAGE_UPLOADS_ENABLED=IMAGE_UPLOADS_ENABLED,
+            YOUTUBE_TRANSCRIPTS_ENABLED=YOUTUBE_TRANSCRIPTS_ENABLED,
+            RAG_ENABLED=RAG_ENABLED,
+            CHAT_SUMMARY_MODEL=CHAT_SUMMARY_MODEL,
+            RAG_CHUNK_SIZE=RAG_CHUNK_SIZE,
+            RAG_CHUNK_OVERLAP=RAG_CHUNK_OVERLAP,
+            RAG_MAX_CHUNKS_PER_SOURCE=RAG_MAX_CHUNKS_PER_SOURCE,
+            RAG_SEARCH_DEFAULT_TOP_K=RAG_SEARCH_DEFAULT_TOP_K,
+            RAG_SEARCH_MIN_SIMILARITY=RAG_SEARCH_MIN_SIMILARITY,
+            RAG_QUERY_EXPANSION_ENABLED=RAG_QUERY_EXPANSION_ENABLED,
+            RAG_QUERY_EXPANSION_MAX_VARIANTS=RAG_QUERY_EXPANSION_MAX_VARIANTS,
+            FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS=FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
+            FETCH_SUMMARY_MAX_CHARS=FETCH_SUMMARY_MAX_CHARS,
+        )
+
+
+_runtime_settings: RuntimeSettings | None = None
+
+
+def _init_runtime_settings() -> None:
+    """Initialize the runtime settings from current module globals."""
+    global _runtime_settings
+    _runtime_settings = RuntimeSettings.from_defaults()
+
+
+_init_runtime_settings()
+
+# Backward-compatible empty dict — test fixtures may still write to it.
+# apply_persisted_runtime_settings() reads from _runtime_settings, not this.
+_RUNTIME_BASE_VALUES: dict[str, object] = {}
 
 
 def _read_persisted_runtime_settings(database_path: str | None = None) -> dict[str, str]:
@@ -587,150 +669,143 @@ def _read_persisted_runtime_settings(database_path: str | None = None) -> dict[s
 def apply_persisted_runtime_settings(database_path: str | None = None) -> dict[str, str]:
     persisted = _read_persisted_runtime_settings(database_path)
 
-    global OPENROUTER_HTTP_REFERER
-    global OPENROUTER_APP_TITLE
-    global LOGIN_SESSION_TIMEOUT_MINUTES
-    global LOGIN_MAX_FAILED_ATTEMPTS
-    global LOGIN_LOCKOUT_SECONDS
-    global LOGIN_REMEMBER_SESSION_DAYS
-    global CONVERSATION_MEMORY_ENABLED
-    global OCR_ENABLED
-    global IMAGE_UPLOADS_ENABLED
-    global YOUTUBE_TRANSCRIPTS_ENABLED
-    global RAG_ENABLED
-    global CHAT_SUMMARY_MODEL
-    global RAG_CHUNK_SIZE
-    global RAG_CHUNK_OVERLAP
-    global RAG_MAX_CHUNKS_PER_SOURCE
-    global RAG_SEARCH_DEFAULT_TOP_K
-    global RAG_SEARCH_MIN_SIMILARITY
-    global RAG_QUERY_EXPANSION_ENABLED
-    global RAG_QUERY_EXPANSION_MAX_VARIANTS
-    global FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS
-    global FETCH_SUMMARY_MAX_CHARS
+    global _runtime_settings
+    # Always start from clean env-derived defaults so that when a persisted
+    # setting is deleted or missing the value resets correctly instead of
+    # keeping a stale in-memory override.
+    rs = RuntimeSettings.from_defaults()
 
-    OPENROUTER_HTTP_REFERER = str(
-        persisted.get("openrouter_http_referer", _RUNTIME_BASE_VALUES["OPENROUTER_HTTP_REFERER"]) or ""
+    rs.OPENROUTER_HTTP_REFERER = str(
+        persisted.get("openrouter_http_referer", rs.OPENROUTER_HTTP_REFERER) or ""
     ).strip()
-    OPENROUTER_APP_TITLE = str(
-        persisted.get("openrouter_app_title", _RUNTIME_BASE_VALUES["OPENROUTER_APP_TITLE"]) or ""
+    rs.OPENROUTER_APP_TITLE = str(
+        persisted.get("openrouter_app_title", rs.OPENROUTER_APP_TITLE) or ""
     ).strip()
-    LOGIN_SESSION_TIMEOUT_MINUTES = _runtime_setting_int(
+    rs.LOGIN_SESSION_TIMEOUT_MINUTES = _runtime_setting_int(
         persisted.get("login_session_timeout_minutes"),
-        _RUNTIME_BASE_VALUES["LOGIN_SESSION_TIMEOUT_MINUTES"],
+        rs.LOGIN_SESSION_TIMEOUT_MINUTES,
         1,
         10_080,
     )
-    LOGIN_MAX_FAILED_ATTEMPTS = _runtime_setting_int(
+    rs.LOGIN_MAX_FAILED_ATTEMPTS = _runtime_setting_int(
         persisted.get("login_max_failed_attempts"),
-        _RUNTIME_BASE_VALUES["LOGIN_MAX_FAILED_ATTEMPTS"],
+        rs.LOGIN_MAX_FAILED_ATTEMPTS,
         1,
         50,
     )
-    LOGIN_LOCKOUT_SECONDS = _runtime_setting_int(
+    rs.LOGIN_LOCKOUT_SECONDS = _runtime_setting_int(
         persisted.get("login_lockout_seconds"),
-        _RUNTIME_BASE_VALUES["LOGIN_LOCKOUT_SECONDS"],
+        rs.LOGIN_LOCKOUT_SECONDS,
         1,
         86_400,
     )
-    LOGIN_REMEMBER_SESSION_DAYS = _runtime_setting_int(
+    rs.LOGIN_REMEMBER_SESSION_DAYS = _runtime_setting_int(
         persisted.get("login_remember_session_days"),
-        _RUNTIME_BASE_VALUES["LOGIN_REMEMBER_SESSION_DAYS"],
+        rs.LOGIN_REMEMBER_SESSION_DAYS,
         1,
         3_650,
     )
-    CONVERSATION_MEMORY_ENABLED = _runtime_setting_bool(
+    rs.CONVERSATION_MEMORY_ENABLED = _runtime_setting_bool(
         persisted.get("conversation_memory_enabled"),
-        _RUNTIME_BASE_VALUES["CONVERSATION_MEMORY_ENABLED"],
+        rs.CONVERSATION_MEMORY_ENABLED,
     )
-    OCR_ENABLED = _runtime_setting_bool(persisted.get("ocr_enabled"), _RUNTIME_BASE_VALUES["OCR_ENABLED"])
-    YOUTUBE_TRANSCRIPTS_ENABLED = _runtime_setting_bool(
+    rs.OCR_ENABLED = _runtime_setting_bool(persisted.get("ocr_enabled"), rs.OCR_ENABLED)
+    rs.YOUTUBE_TRANSCRIPTS_ENABLED = _runtime_setting_bool(
         persisted.get("youtube_transcripts_enabled"),
-        _RUNTIME_BASE_VALUES["YOUTUBE_TRANSCRIPTS_ENABLED"],
+        rs.YOUTUBE_TRANSCRIPTS_ENABLED,
     )
-    RAG_ENABLED = _runtime_setting_bool(persisted.get("rag_enabled"), _RUNTIME_BASE_VALUES["RAG_ENABLED"])
-    CHAT_SUMMARY_MODEL = (
-        str(persisted.get("chat_summary_model", _RUNTIME_BASE_VALUES["CHAT_SUMMARY_MODEL"]) or "").strip()
+    rs.RAG_ENABLED = _runtime_setting_bool(persisted.get("rag_enabled"), rs.RAG_ENABLED)
+    rs.CHAT_SUMMARY_MODEL = (
+        str(persisted.get("chat_summary_model", rs.CHAT_SUMMARY_MODEL) or "").strip()
         or DEFAULT_CHAT_MODEL
     )
-    RAG_CHUNK_SIZE = _runtime_setting_int(
+    rs.RAG_CHUNK_SIZE = _runtime_setting_int(
         persisted.get("rag_chunk_size"),
-        _RUNTIME_BASE_VALUES["RAG_CHUNK_SIZE"],
+        rs.RAG_CHUNK_SIZE,
         300,
         CONTENT_MAX_CHARS,
     )
-    RAG_CHUNK_OVERLAP = _runtime_setting_int(
+    rs.RAG_CHUNK_OVERLAP = _runtime_setting_int(
         persisted.get("rag_chunk_overlap"),
-        _RUNTIME_BASE_VALUES["RAG_CHUNK_OVERLAP"],
+        rs.RAG_CHUNK_OVERLAP,
         0,
-        max(0, RAG_CHUNK_SIZE // 2),
+        max(0, rs.RAG_CHUNK_SIZE // 2),
     )
-    RAG_MAX_CHUNKS_PER_SOURCE = _runtime_setting_int(
+    rs.RAG_MAX_CHUNKS_PER_SOURCE = _runtime_setting_int(
         persisted.get("rag_max_chunks_per_source"),
-        _RUNTIME_BASE_VALUES["RAG_MAX_CHUNKS_PER_SOURCE"],
+        rs.RAG_MAX_CHUNKS_PER_SOURCE,
         1,
         20,
     )
-    RAG_SEARCH_DEFAULT_TOP_K = _runtime_setting_int(
+    rs.RAG_SEARCH_DEFAULT_TOP_K = _runtime_setting_int(
         persisted.get("rag_search_top_k"),
-        _RUNTIME_BASE_VALUES["RAG_SEARCH_DEFAULT_TOP_K"],
+        rs.RAG_SEARCH_DEFAULT_TOP_K,
         1,
         50,
     )
-    RAG_SEARCH_MIN_SIMILARITY = _runtime_setting_float(
+    rs.RAG_SEARCH_MIN_SIMILARITY = _runtime_setting_float(
         persisted.get("rag_search_min_similarity"),
-        _RUNTIME_BASE_VALUES["RAG_SEARCH_MIN_SIMILARITY"],
+        rs.RAG_SEARCH_MIN_SIMILARITY,
         0.0,
         1.0,
     )
-    RAG_QUERY_EXPANSION_ENABLED = _runtime_setting_bool(
+    rs.RAG_QUERY_EXPANSION_ENABLED = _runtime_setting_bool(
         persisted.get("rag_query_expansion_enabled"),
-        _RUNTIME_BASE_VALUES["RAG_QUERY_EXPANSION_ENABLED"],
+        rs.RAG_QUERY_EXPANSION_ENABLED,
     )
-    RAG_QUERY_EXPANSION_MAX_VARIANTS = _runtime_setting_int(
+    rs.RAG_QUERY_EXPANSION_MAX_VARIANTS = _runtime_setting_int(
         persisted.get("rag_query_expansion_max_variants"),
-        _RUNTIME_BASE_VALUES["RAG_QUERY_EXPANSION_MAX_VARIANTS"],
+        rs.RAG_QUERY_EXPANSION_MAX_VARIANTS,
         1,
         10,
     )
-    FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS = _runtime_setting_int(
+    rs.FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS = _runtime_setting_int(
         persisted.get("fetch_raw_max_text_chars"),
-        _RUNTIME_BASE_VALUES["FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS"],
+        rs.FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
         1_000,
         CONTENT_MAX_CHARS,
     )
-    FETCH_SUMMARY_MAX_CHARS = _runtime_setting_int(
+    rs.FETCH_SUMMARY_MAX_CHARS = _runtime_setting_int(
         persisted.get("fetch_summary_max_chars"),
-        _RUNTIME_BASE_VALUES["FETCH_SUMMARY_MAX_CHARS"],
+        rs.FETCH_SUMMARY_MAX_CHARS,
         500,
         CONTENT_MAX_CHARS,
     )
-    IMAGE_UPLOADS_ENABLED = OCR_ENABLED or bool(OPENROUTER_API_KEY) or bool(DEEPSEEK_API_KEY) or bool(MINIMAX_API_KEY)
+    rs.IMAGE_UPLOADS_ENABLED = (
+        rs.OCR_ENABLED
+        or bool(OPENROUTER_API_KEY)
+        or bool(DEEPSEEK_API_KEY)
+        or bool(MINIMAX_API_KEY)
+    )
+
+    # Store back to module-level runtime settings
+    _runtime_settings = rs
 
     DEFAULT_SETTINGS.update(
         {
-            "openrouter_http_referer": OPENROUTER_HTTP_REFERER,
-            "openrouter_app_title": OPENROUTER_APP_TITLE,
-            "login_session_timeout_minutes": str(LOGIN_SESSION_TIMEOUT_MINUTES),
-            "login_max_failed_attempts": str(LOGIN_MAX_FAILED_ATTEMPTS),
-            "login_lockout_seconds": str(LOGIN_LOCKOUT_SECONDS),
-            "login_remember_session_days": str(LOGIN_REMEMBER_SESSION_DAYS),
-            "conversation_memory_enabled": "true" if CONVERSATION_MEMORY_ENABLED else "false",
-            "ocr_enabled": "true" if OCR_ENABLED else "false",
-            "rag_enabled": "true" if RAG_ENABLED else "false",
-            "youtube_transcripts_enabled": "true" if YOUTUBE_TRANSCRIPTS_ENABLED else "false",
-            "chat_summary_model": CHAT_SUMMARY_MODEL,
-            "rag_chunk_size": str(RAG_CHUNK_SIZE),
-            "rag_chunk_overlap": str(RAG_CHUNK_OVERLAP),
-            "rag_max_chunks_per_source": str(RAG_MAX_CHUNKS_PER_SOURCE),
-            "rag_search_top_k": str(RAG_SEARCH_DEFAULT_TOP_K),
-            "rag_search_min_similarity": str(RAG_SEARCH_MIN_SIMILARITY),
-            "rag_query_expansion_enabled": "true" if RAG_QUERY_EXPANSION_ENABLED else "false",
-            "rag_query_expansion_max_variants": str(RAG_QUERY_EXPANSION_MAX_VARIANTS),
-            "fetch_raw_max_text_chars": str(FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS),
-            "fetch_summary_max_chars": str(FETCH_SUMMARY_MAX_CHARS),
+            "openrouter_http_referer": rs.OPENROUTER_HTTP_REFERER,
+            "openrouter_app_title": rs.OPENROUTER_APP_TITLE,
+            "login_session_timeout_minutes": str(rs.LOGIN_SESSION_TIMEOUT_MINUTES),
+            "login_max_failed_attempts": str(rs.LOGIN_MAX_FAILED_ATTEMPTS),
+            "login_lockout_seconds": str(rs.LOGIN_LOCKOUT_SECONDS),
+            "login_remember_session_days": str(rs.LOGIN_REMEMBER_SESSION_DAYS),
+            "conversation_memory_enabled": "true" if rs.CONVERSATION_MEMORY_ENABLED else "false",
+            "ocr_enabled": "true" if rs.OCR_ENABLED else "false",
+            "rag_enabled": "true" if rs.RAG_ENABLED else "false",
+            "youtube_transcripts_enabled": "true" if rs.YOUTUBE_TRANSCRIPTS_ENABLED else "false",
+            "chat_summary_model": rs.CHAT_SUMMARY_MODEL,
+            "rag_chunk_size": str(rs.RAG_CHUNK_SIZE),
+            "rag_chunk_overlap": str(rs.RAG_CHUNK_OVERLAP),
+            "rag_max_chunks_per_source": str(rs.RAG_MAX_CHUNKS_PER_SOURCE),
+            "rag_search_top_k": str(rs.RAG_SEARCH_DEFAULT_TOP_K),
+            "rag_search_min_similarity": str(rs.RAG_SEARCH_MIN_SIMILARITY),
+            "rag_query_expansion_enabled": "true" if rs.RAG_QUERY_EXPANSION_ENABLED else "false",
+            "rag_query_expansion_max_variants": str(rs.RAG_QUERY_EXPANSION_MAX_VARIANTS),
+            "fetch_raw_max_text_chars": str(rs.FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS),
+            "fetch_summary_max_chars": str(rs.FETCH_SUMMARY_MAX_CHARS),
         }
     )
+
     return persisted
 
 
@@ -758,77 +833,18 @@ _RUNTIME_PROPAGATION_NAMES = {
     "YOUTUBE_TRANSCRIPTS_ENABLED",
 }
 
-_RUNTIME_PROPAGATION_MODULES = (
-    "agent",
-    "db",
-    "doc_service",
-    "image_service",
-    "messages",
-    "ocr_service",
-
-    "rag_service",
-    "routes.chat",
-    "routes.conversations",
-    "routes.pages",
-    "tool_registry",
-    "video_transcript_service",
-)
-
-
-def propagate_runtime_settings_to_loaded_modules() -> None:
-    import sys
-
-    for module_name in _RUNTIME_PROPAGATION_MODULES:
-        module = sys.modules.get(module_name)
-        if module is None:
-            continue
-        for attr_name in _RUNTIME_PROPAGATION_NAMES:
-            if hasattr(module, attr_name):
-                setattr(module, attr_name, globals()[attr_name])
-
-    model_registry_module = sys.modules.get("model_registry")
-    refreshed_deepseek_client = None
-    if model_registry_module is not None:
-        get_provider_client = getattr(model_registry_module, "get_provider_client", None)
-        cache_clear = getattr(get_provider_client, "cache_clear", None)
-        if callable(cache_clear):
-            cache_clear()
-        deepseek_provider = getattr(model_registry_module, "DEEPSEEK_PROVIDER", None)
-        if callable(get_provider_client) and deepseek_provider:
-            try:
-                refreshed_deepseek_client = get_provider_client(deepseek_provider)
-            except Exception:
-                refreshed_deepseek_client = None
-
-    if refreshed_deepseek_client is not None:
-        for module_name in ("agent", "routes.conversations"):
-            module = sys.modules.get(module_name)
-            if module is not None and hasattr(module, "client"):
-                setattr(module, "client", refreshed_deepseek_client)
-
-    ocr_service_module = sys.modules.get("ocr_service")
-    if ocr_service_module is not None and hasattr(ocr_service_module, "_ocr_engine"):
-        ocr_service_module._ocr_engine = None
-
-    video_transcript_module = sys.modules.get("video_transcript_service")
-    if video_transcript_module is not None:
-        if hasattr(video_transcript_module, "_WHISPER_MODEL"):
-            video_transcript_module._WHISPER_MODEL = None
-        if hasattr(video_transcript_module, "_WHISPER_MODEL_KEY"):
-            video_transcript_module._WHISPER_MODEL_KEY = None
-
-
 def get_feature_flags(settings: dict | None = None) -> dict:
     source = settings if isinstance(settings, dict) else {}
-    rag_enabled = _runtime_setting_bool(source.get("rag_enabled"), RAG_ENABLED)
-    ocr_enabled = _runtime_setting_bool(source.get("ocr_enabled"), OCR_ENABLED)
+    rs = _runtime_settings if _runtime_settings is not None else RuntimeSettings()
+    rag_enabled = _runtime_setting_bool(source.get("rag_enabled"), rs.RAG_ENABLED)
+    ocr_enabled = _runtime_setting_bool(source.get("ocr_enabled"), rs.OCR_ENABLED)
     conversation_memory_enabled = _runtime_setting_bool(
         source.get("conversation_memory_enabled"),
-        CONVERSATION_MEMORY_ENABLED,
+        rs.CONVERSATION_MEMORY_ENABLED,
     )
     youtube_transcripts_enabled = _runtime_setting_bool(
         source.get("youtube_transcripts_enabled"),
-        YOUTUBE_TRANSCRIPTS_ENABLED,
+        rs.YOUTUBE_TRANSCRIPTS_ENABLED,
     )
     image_uploads_enabled = ocr_enabled or bool(OPENROUTER_API_KEY) or bool(DEEPSEEK_API_KEY) or bool(MINIMAX_API_KEY)
     return {
@@ -847,33 +863,35 @@ def get_feature_flags(settings: dict | None = None) -> dict:
 
 
 def get_runtime_setting(key: str):
-    """Merkezi runtime ayar erişim noktası.
+    """Central runtime setting access point.
 
-    Bu fonksiyon, _RUNTIME_PROPAGATION_NAMES'daki ayarlara her zaman güncel
-    değerleri döndürür. "from config import X" yerine bu fonksiyonun
-    kullanılması, global state'in modüler bağımlılıklarını azaltır.
+    This function always returns the current value for settings listed in
+    _RUNTIME_PROPAGATION_NAMES. Using this function instead of
+    "from config import X" reduces the modular dependency on global state.
 
     Args:
-        key: Ayar adı (örn: "RAG_ENABLED", "CHAT_SUMMARY_MODEL")
+        key: Setting name (e.g., "RAG_ENABLED", "CHAT_SUMMARY_MODEL")
 
     Returns:
-        Ayarın güncel değeri
+        Current value of the setting
 
     Raises:
-        KeyError: Anahtar _RUNTIME_PROPAGATION_NAMES'da bulunamadığında
+        KeyError: If the key is not found in _RUNTIME_PROPAGATION_NAMES
     """
     if key not in _RUNTIME_PROPAGATION_NAMES:
         raise KeyError(f"'{key}' is not a runtime setting")
-    return globals()[key]
+    rs = _runtime_settings if _runtime_settings is not None else RuntimeSettings()
+    return getattr(rs, key)
 
 
 def __getattr__(name: str):
-    """Module-level attribute erişimi için lazy lookup.
+    """Lazy lookup for module-level attribute access.
 
-    Bu, "import config; config.RAG_ENABLED" gibi erişimlerde
-    her zaman güncel değer döndürür. "from config import X" kullanan
-    kodlar için bu geçerli değildir (o andaki değer yakalanır).
+    This ensures that accesses like "import config; config.RAG_ENABLED"
+    always return the current value. For code using "from config import X",
+    this does not apply (the value is captured at import time).
     """
     if name in _RUNTIME_PROPAGATION_NAMES:
-        return globals()[name]
+        rs = _runtime_settings if _runtime_settings is not None else RuntimeSettings()
+        return getattr(rs, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

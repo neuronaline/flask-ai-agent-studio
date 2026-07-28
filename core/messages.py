@@ -4,12 +4,12 @@ import base64
 from core import config
 import hashlib
 import json
-import logging
 import os
 import re
 from datetime import datetime, timezone
+from utils.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+LOGGER = get_logger(__name__)
 
 from core.prompts import get_prompt
 
@@ -506,7 +506,7 @@ def format_knowledge_base_auto_context(retrieved_context) -> str:
 
 
 def _build_knowledge_base_payload(retrieved_context, active_tool_names: list[str]) -> dict | None:
-    if not config.RAG_ENABLED:
+    if not config.get_runtime_setting("RAG_ENABLED"):
         return None
 
     if not retrieved_context:
@@ -1348,7 +1348,7 @@ def _inject_reasoning_before_orphan_tools(api_messages: list[dict]) -> list[dict
     debug_tool_count = sum(1 for m in api_messages if m.get("role") == "tool")
     debug_assistant_count = sum(1 for m in api_messages if m.get("role") == "assistant")
     debug_reasoning_providers = [m.get("reasoning_content", "")[:50] for m in api_messages if m.get("role") == "assistant" and m.get("reasoning_content")]
-    logger.debug(
+    LOGGER.debug(
         "_inject_reasoning_before_orphan_tools: tools=%d assistants=%d last_reasoning=%s reasoning_assistants=%s",
         debug_tool_count,
         debug_assistant_count,
@@ -1377,6 +1377,43 @@ def _inject_reasoning_before_orphan_tools(api_messages: list[dict]) -> list[dict
         prev_role = role
 
     return result
+
+
+def _append_injection_to_last_user_message(api_messages: list[dict], injection: str) -> None:
+    """Append *injection* to the last user message in *api_messages*.
+
+    Per the "Static System / Dynamic Footer" pattern, dynamic per-turn content
+    (timestamps, active tools, tool execution history) MUST be injected as text
+    appended to the final user message -- never as a second system message.
+    A second system message breaks prefix cache matching across all providers
+    (Anthropic, DeepSeek, OpenAI).
+    """
+    if not api_messages or not injection:
+        return
+    # Find the last user message
+    for msg in reversed(api_messages):
+        if isinstance(msg, dict) and str(msg.get("role") or "").strip() == "user":
+            content = msg.get("content")
+            if isinstance(content, str):
+                msg["content"] = f"{content}\n\n{injection}"
+            elif isinstance(content, list):
+                # Multimodal content: append as a text block
+                msg["content"] = [*content, {"type": "text", "text": f"\n\n{injection}"}]
+            else:
+                msg["content"] = injection
+            return
+
+    # No user message found — insert a synthetic user message before the
+    # first non-system message (or append at end) so that required runtime
+    # context is never silently dropped in recovery / tool-only /
+    # final-answer flows.
+    synthetic_msg = {"role": "user", "content": injection}
+    insert_at = 0
+    for i, msg in enumerate(api_messages):
+        if isinstance(msg, dict) and str(msg.get("role") or "").strip() != "system":
+            insert_at = i
+            break
+    api_messages.insert(insert_at, synthetic_msg)
 
 
 def build_api_messages(
@@ -1559,26 +1596,21 @@ def build_api_messages(
             api_message["tool_call_id"] = tool_call_id
 
         api_messages.append(api_message)
-        # For non-latest user messages with context_injection, add it as system message
-        # immediately after the user message (historical context is already stable).
+        # For non-latest user messages with context_injection, fold it into the
+        # user message content instead of creating a separate system message.
+        # This follows the "Static System / Dynamic Footer" pattern: dynamic
+        # per-turn content belongs at the end of the user message, never as a
+        # second system message (which breaks prefix cache matching).
         if role == "user" and context_injection and index != latest_user_message_index:
-            api_messages.append(
-                {
-                    "role": "system",
-                    "content": context_injection,
-                }
-            )
+            _append_injection_to_last_user_message(api_messages, context_injection)
 
-    # Append latest user message's context_injection at the END of the message list.
-    # This follows the "Prefix Alignment" rule: dynamic per-turn content (timestamps,
-    # active tools) should be at the END to keep the stable prefix cacheable.
+    # Append latest user message's context_injection to the LAST user message's
+    # content — NOT as a separate system message.
+    # This follows the "User-Footer" pattern: dynamic per-turn content (timestamps,
+    # active tools) is injected as text appended to the final user message to keep
+    # the stable prefix cacheable.
     if latest_user_context_injection:
-        api_messages.append(
-            {
-                "role": "system",
-                "content": latest_user_context_injection,
-            }
-        )
+        _append_injection_to_last_user_message(api_messages, latest_user_context_injection)
 
     return _inject_reasoning_before_orphan_tools(_sanitize_tool_call_chain(api_messages))
 
@@ -3157,16 +3189,19 @@ def prepend_runtime_context(
     if not injection_content:
         return [runtime_message, *messages]
 
-    # Keep static runtime instructions and dynamic per-turn context in separate
-    # system messages so the leading static prefix remains cache-friendly.
-    return [
-        runtime_message,
-        {
-            "role": "system",
-            "content": injection_content,
-        },
-        *messages,
-    ]
+    # Per the "Static System / Dynamic Footer" pattern, dynamic per-turn
+    # context (timestamps, active tools, tool execution history) MUST be
+    # appended to the last user message — never as a second system message.
+    # A second system message breaks prefix cache matching across all
+    # providers (Anthropic, DeepSeek, OpenAI).
+    #
+    # Deep-copy every message dict to avoid mutating caller-owned objects
+    # (a shallow list() is not enough when the function modifies dict contents
+    # such as msg["content"]).
+    import copy
+    messages = copy.deepcopy(list(messages))
+    _append_injection_to_last_user_message(messages, injection_content)
+    return [runtime_message, *messages]
 
 
 def _normalize_search_tool_query_limit(value: int | None) -> int:

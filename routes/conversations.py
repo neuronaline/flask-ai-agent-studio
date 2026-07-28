@@ -35,12 +35,7 @@ from web.conversation_export import (
     build_conversation_markdown_download,
     build_conversation_pdf_download,
 )
-from core.config import (
-    CONVERSATION_MEMORY_ENABLED,
-    RAG_DISABLED_FEATURE_ERROR,
-    RAG_ENABLED,
-    RAG_SEARCH_DEFAULT_TOP_K,
-)
+from core.config import RAG_DISABLED_FEATURE_ERROR, get_runtime_setting
 from core.db import (
     create_persona,
     delete_persona,
@@ -210,7 +205,7 @@ def _apply_export_reasoning_map(messages: list[dict] | None, reasoning_by_messag
 def _load_conversation_memory_payload(conv_id: int, limit: int = 200) -> dict:
     memory_entries = get_conversation_memory(conv_id, limit=limit)
     return {
-        "conversation_memory_enabled": CONVERSATION_MEMORY_ENABLED,
+        "conversation_memory_enabled": get_runtime_setting("CONVERSATION_MEMORY_ENABLED"),
         "memory": memory_entries,
         "memory_count": len(memory_entries),
     }
@@ -493,1270 +488,1302 @@ def _generate_upload_metadata_suggestion(
     }
 
 
-def register_conversation_routes(app) -> None:
-    @app.route("/api/conversations", methods=["GET"])
-    def list_conversations():
-        with get_db() as conn:
-            rows = conn.execute(
-                """
-                SELECT c.id, c.title, c.title_source, c.title_overridden, c.tool_overrides, c.parameter_overrides, c.model, c.persona_id,
-                                             p.name AS persona_name, c.updated_at,
-                       COUNT(m.id) AS message_count
-                FROM conversations c
-                                    LEFT JOIN personas p ON p.id = c.persona_id
-                  LEFT JOIN messages m ON m.conversation_id = c.id AND m.deleted_at IS NULL
-                GROUP BY c.id
-                ORDER BY c.updated_at DESC
-                """
-            ).fetchall()
-        result = []
-        for row in rows:
-            item = dict(row)
-            tool_overrides_raw = item.get("tool_overrides")
-            if tool_overrides_raw:
-                try:
-                    item["tool_overrides"] = json.loads(tool_overrides_raw)
-                except Exception:
-                    item["tool_overrides"] = None
-            else:
-                item["tool_overrides"] = None
-            item["parameter_overrides"] = _deserialize_parameter_overrides(item.get("parameter_overrides"))
-            result.append(item)
-        return jsonify(result)
 
-    @app.route("/api/personas", methods=["GET"])
-    def list_personas_route():
-        return jsonify(_build_persona_response_payload())
-
-    @app.route("/api/personas", methods=["POST"])
-    def create_persona_route():
-        data = request.get_json(silent=True) or {}
-        name = data.get("name")
-        general_instructions = data.get("general_instructions")
-        ai_personality = data.get("ai_personality")
-
-        if not isinstance(name, str):
-            return jsonify({"error": "Persona name is required."}), 400
-        if general_instructions is not None and not isinstance(general_instructions, str):
-            return jsonify({"error": "general_instructions must be a string."}), 400
-        if ai_personality is not None and not isinstance(ai_personality, str):
-            return jsonify({"error": "ai_personality must be a string."}), 400
-
-        try:
-            persona = create_persona(
-                name,
-                general_instructions=general_instructions or "",
-                ai_personality=ai_personality or "",
-            )
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
-
-        return jsonify(_build_persona_response_payload(persona=persona)), 201
-
-    @app.route("/api/personas/<int:persona_id>", methods=["PATCH"])
-    def update_persona_route(persona_id):
-        data = request.get_json(silent=True) or {}
-        if not any(key in data for key in ("name", "general_instructions", "ai_personality")):
-            return jsonify({"error": "No persona fields provided."}), 400
-
-        name = data.get("name") if "name" in data else None
-        general_instructions = data.get("general_instructions") if "general_instructions" in data else None
-        ai_personality = data.get("ai_personality") if "ai_personality" in data else None
-
-        if name is not None and not isinstance(name, str):
-            return jsonify({"error": "name must be a string."}), 400
-        if general_instructions is not None and not isinstance(general_instructions, str):
-            return jsonify({"error": "general_instructions must be a string."}), 400
-        if ai_personality is not None and not isinstance(ai_personality, str):
-            return jsonify({"error": "ai_personality must be a string."}), 400
-
-        try:
-            persona = update_persona(
-                persona_id,
-                name=name,
-                general_instructions=general_instructions,
-                ai_personality=ai_personality,
-            )
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
-
-        if not persona:
-            return jsonify({"error": "Persona not found."}), 404
-
-        return jsonify(_build_persona_response_payload(persona=persona))
-
-    @app.route("/api/personas/<int:persona_id>", methods=["DELETE"])
-    def delete_persona_route(persona_id):
-        deleted = delete_persona(persona_id)
-        if not deleted:
-            return jsonify({"error": "Persona not found."}), 404
-        return jsonify(_build_persona_response_payload(deleted_persona_id=persona_id))
-
-    @app.route("/api/personas/<int:persona_id>/memory", methods=["GET"])
-    def list_persona_memory_route(persona_id):
-        persona = get_persona(persona_id)
-        if not persona:
-            return jsonify({"error": "Persona not found."}), 404
-        payload = _load_persona_memory_payload(persona_id)
-        payload["persona"] = persona
-        return jsonify(payload)
-
-    @app.route("/api/personas/<int:persona_id>/memory", methods=["POST"])
-    def create_persona_memory_route(persona_id):
-        persona = get_persona(persona_id)
-        if not persona:
-            return jsonify({"error": "Persona not found."}), 404
-
-        data = request.get_json(silent=True) or {}
-        key = str(data.get("key") or "").strip()
-        value = str(data.get("value") or "").strip()
-        message_id = _parse_optional_int(data.get("message_id"))
-
-        try:
-            entry = insert_persona_memory_entry(
-                persona_id,
-                key,
-                value,
-                message_id=message_id,
-            )
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
-
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE personas SET updated_at = datetime('now') WHERE id = ?",
-                (persona_id,),
-            )
-
-        payload = _load_persona_memory_payload(persona_id)
-        payload.update({"entry": entry, "persona": get_persona(persona_id)})
-        return jsonify(payload), 201
-
-    @app.route("/api/personas/<int:persona_id>/memory/<int:entry_id>", methods=["PATCH"])
-    def update_persona_memory_route(persona_id, entry_id):
-        persona = get_persona(persona_id)
-        if not persona:
-            return jsonify({"error": "Persona not found."}), 404
-
-        data = request.get_json(silent=True) or {}
-        current_entry = get_persona_memory_entry(entry_id, persona_id)
-        if not current_entry:
-            return jsonify({"error": "Memory entry not found."}), 404
-
-        key = str(data.get("key") or current_entry["key"]).strip()
-        value = str(data.get("value") or current_entry["value"]).strip()
-        message_id = _parse_optional_int(data.get("message_id"))
-        if message_id is None:
-            message_id = current_entry["message_id"]
-
-        try:
-            entry = update_persona_memory_entry(
-                entry_id,
-                persona_id,
-                key,
-                value,
-                message_id=message_id,
-            )
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
-
-        if not entry:
-            return jsonify({"error": "Memory entry not found."}), 404
-
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE personas SET updated_at = datetime('now') WHERE id = ?",
-                (persona_id,),
-            )
-
-        payload = _load_persona_memory_payload(persona_id)
-        payload.update({"entry": entry, "persona": get_persona(persona_id)})
-        return jsonify(payload)
-
-    @app.route("/api/personas/<int:persona_id>/memory/<int:entry_id>", methods=["DELETE"])
-    def delete_persona_memory_route(persona_id, entry_id):
-        persona = get_persona(persona_id)
-        if not persona:
-            return jsonify({"error": "Persona not found."}), 404
-
-        deleted = delete_persona_memory_entry(entry_id, persona_id)
-        if not deleted:
-            return jsonify({"error": "Memory entry not found."}), 404
-
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE personas SET updated_at = datetime('now') WHERE id = ?",
-                (persona_id,),
-            )
-
-        payload = _load_persona_memory_payload(persona_id)
-        payload.update({"deleted_entry_id": entry_id, "persona": get_persona(persona_id)})
-        return jsonify(payload)
-
-    @app.route("/api/conversations", methods=["POST"])
-    def create_conversation():
-        data = request.get_json(silent=True) or {}
-        raw_persona_id = data.get("persona_id") if "persona_id" in data else None
-        persona_id = _parse_optional_int(raw_persona_id)
-        settings = get_app_settings()
-        model = normalize_model_id(data.get("model"), default=get_default_chat_model_id(settings))
-        if not is_valid_model_id(model):
-            return jsonify({"error": "Invalid model."}), 400
-        if raw_persona_id not in (None, "") and persona_id is None:
-            return jsonify({"error": "persona_id must be an integer or empty."}), 400
-        if persona_id is not None and get_persona(persona_id) is None:
-            return jsonify({"error": "Persona not found."}), 400
-
-        title, title_source, title_overridden = _resolve_initial_conversation_title(data, persona_id)
-
-        with get_db() as conn:
-            cursor = conn.execute(
-                "INSERT INTO conversations (title, title_source, title_overridden, model, persona_id) VALUES (?, ?, ?, ?, ?)",
-                (title, title_source, 1 if title_overridden else 0, model, persona_id),
-            )
-            conversation_id = cursor.lastrowid
-        if RAG_ENABLED:
-            sync_conversations_to_rag_safe(conversation_id=conversation_id)
-        return jsonify(
-            {
-                "id": conversation_id,
-                "title": title,
-                "title_source": title_source,
-                "title_overridden": title_overridden,
-                "model": model,
-                "persona_id": persona_id,
-                "model_label": get_model_label(model, settings),
-            }
-        ), 201
-
-    @app.route("/api/conversations/<int:conv_id>", methods=["GET"])
-    def get_conversation(conv_id):
-        conversation, messages = _load_conversation_payload(conv_id)
-        if not conversation:
-            return jsonify({"error": "Not found."}), 404
-        settings = get_app_settings()
-        conversation_payload = dict(conversation)
-        conversation_payload["model_label"] = get_model_label(conversation_payload.get("model") or "", settings)
-        conversation_payload["persona"] = get_conversation_persona(conv_id)
-        tool_overrides_raw = conversation_payload.get("tool_overrides")
+def list_conversations():
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.id, c.title, c.title_source, c.title_overridden, c.tool_overrides, c.parameter_overrides, c.model, c.persona_id,
+                                         p.name AS persona_name, c.updated_at,
+                   COUNT(m.id) AS message_count
+            FROM conversations c
+                                LEFT JOIN personas p ON p.id = c.persona_id
+              LEFT JOIN messages m ON m.conversation_id = c.id AND m.deleted_at IS NULL
+            GROUP BY c.id
+            ORDER BY c.updated_at DESC
+            """
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        tool_overrides_raw = item.get("tool_overrides")
         if tool_overrides_raw:
             try:
-                conversation_payload["tool_overrides"] = json.loads(tool_overrides_raw)
+                item["tool_overrides"] = json.loads(tool_overrides_raw)
             except Exception:
-                conversation_payload["tool_overrides"] = None
+                item["tool_overrides"] = None
         else:
+            item["tool_overrides"] = None
+        item["parameter_overrides"] = _deserialize_parameter_overrides(item.get("parameter_overrides"))
+        result.append(item)
+    return jsonify(result)
+
+
+def list_personas_route():
+    return jsonify(_build_persona_response_payload())
+
+
+def create_persona_route():
+    data = request.get_json(silent=True) or {}
+    name = data.get("name")
+    general_instructions = data.get("general_instructions")
+    ai_personality = data.get("ai_personality")
+
+    if not isinstance(name, str):
+        return jsonify({"error": "Persona name is required."}), 400
+    if general_instructions is not None and not isinstance(general_instructions, str):
+        return jsonify({"error": "general_instructions must be a string."}), 400
+    if ai_personality is not None and not isinstance(ai_personality, str):
+        return jsonify({"error": "ai_personality must be a string."}), 400
+
+    try:
+        persona = create_persona(
+            name,
+            general_instructions=general_instructions or "",
+            ai_personality=ai_personality or "",
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(_build_persona_response_payload(persona=persona)), 201
+
+
+def update_persona_route(persona_id):
+    data = request.get_json(silent=True) or {}
+    if not any(key in data for key in ("name", "general_instructions", "ai_personality")):
+        return jsonify({"error": "No persona fields provided."}), 400
+
+    name = data.get("name") if "name" in data else None
+    general_instructions = data.get("general_instructions") if "general_instructions" in data else None
+    ai_personality = data.get("ai_personality") if "ai_personality" in data else None
+
+    if name is not None and not isinstance(name, str):
+        return jsonify({"error": "name must be a string."}), 400
+    if general_instructions is not None and not isinstance(general_instructions, str):
+        return jsonify({"error": "general_instructions must be a string."}), 400
+    if ai_personality is not None and not isinstance(ai_personality, str):
+        return jsonify({"error": "ai_personality must be a string."}), 400
+
+    try:
+        persona = update_persona(
+            persona_id,
+            name=name,
+            general_instructions=general_instructions,
+            ai_personality=ai_personality,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    if not persona:
+        return jsonify({"error": "Persona not found."}), 404
+
+    return jsonify(_build_persona_response_payload(persona=persona))
+
+
+def delete_persona_route(persona_id):
+    deleted = delete_persona(persona_id)
+    if not deleted:
+        return jsonify({"error": "Persona not found."}), 404
+    return jsonify(_build_persona_response_payload(deleted_persona_id=persona_id))
+
+
+def list_persona_memory_route(persona_id):
+    persona = get_persona(persona_id)
+    if not persona:
+        return jsonify({"error": "Persona not found."}), 404
+    payload = _load_persona_memory_payload(persona_id)
+    payload["persona"] = persona
+    return jsonify(payload)
+
+
+def create_persona_memory_route(persona_id):
+    persona = get_persona(persona_id)
+    if not persona:
+        return jsonify({"error": "Persona not found."}), 404
+
+    data = request.get_json(silent=True) or {}
+    key = str(data.get("key") or "").strip()
+    value = str(data.get("value") or "").strip()
+    message_id = _parse_optional_int(data.get("message_id"))
+
+    try:
+        entry = insert_persona_memory_entry(
+            persona_id,
+            key,
+            value,
+            message_id=message_id,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE personas SET updated_at = datetime('now') WHERE id = ?",
+            (persona_id,),
+        )
+
+    payload = _load_persona_memory_payload(persona_id)
+    payload.update({"entry": entry, "persona": get_persona(persona_id)})
+    return jsonify(payload), 201
+
+
+def update_persona_memory_route(persona_id, entry_id):
+    persona = get_persona(persona_id)
+    if not persona:
+        return jsonify({"error": "Persona not found."}), 404
+
+    data = request.get_json(silent=True) or {}
+    current_entry = get_persona_memory_entry(entry_id, persona_id)
+    if not current_entry:
+        return jsonify({"error": "Memory entry not found."}), 404
+
+    key = str(data.get("key") or current_entry["key"]).strip()
+    value = str(data.get("value") or current_entry["value"]).strip()
+    message_id = _parse_optional_int(data.get("message_id"))
+    if message_id is None:
+        message_id = current_entry["message_id"]
+
+    try:
+        entry = update_persona_memory_entry(
+            entry_id,
+            persona_id,
+            key,
+            value,
+            message_id=message_id,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    if not entry:
+        return jsonify({"error": "Memory entry not found."}), 404
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE personas SET updated_at = datetime('now') WHERE id = ?",
+            (persona_id,),
+        )
+
+    payload = _load_persona_memory_payload(persona_id)
+    payload.update({"entry": entry, "persona": get_persona(persona_id)})
+    return jsonify(payload)
+
+
+def delete_persona_memory_route(persona_id, entry_id):
+    persona = get_persona(persona_id)
+    if not persona:
+        return jsonify({"error": "Persona not found."}), 404
+
+    deleted = delete_persona_memory_entry(entry_id, persona_id)
+    if not deleted:
+        return jsonify({"error": "Memory entry not found."}), 404
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE personas SET updated_at = datetime('now') WHERE id = ?",
+            (persona_id,),
+        )
+
+    payload = _load_persona_memory_payload(persona_id)
+    payload.update({"deleted_entry_id": entry_id, "persona": get_persona(persona_id)})
+    return jsonify(payload)
+
+
+def create_conversation():
+    data = request.get_json(silent=True) or {}
+    raw_persona_id = data.get("persona_id") if "persona_id" in data else None
+    persona_id = _parse_optional_int(raw_persona_id)
+    settings = get_app_settings()
+    model = normalize_model_id(data.get("model"), default=get_default_chat_model_id(settings))
+    if not is_valid_model_id(model):
+        return jsonify({"error": "Invalid model."}), 400
+    if raw_persona_id not in (None, "") and persona_id is None:
+        return jsonify({"error": "persona_id must be an integer or empty."}), 400
+    if persona_id is not None and get_persona(persona_id) is None:
+        return jsonify({"error": "Persona not found."}), 400
+
+    title, title_source, title_overridden = _resolve_initial_conversation_title(data, persona_id)
+
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO conversations (title, title_source, title_overridden, model, persona_id) VALUES (?, ?, ?, ?, ?)",
+            (title, title_source, 1 if title_overridden else 0, model, persona_id),
+        )
+        conversation_id = cursor.lastrowid
+    if get_runtime_setting("RAG_ENABLED"):
+        sync_conversations_to_rag_safe(conversation_id=conversation_id)
+    return jsonify(
+        {
+            "id": conversation_id,
+            "title": title,
+            "title_source": title_source,
+            "title_overridden": title_overridden,
+            "model": model,
+            "persona_id": persona_id,
+            "model_label": get_model_label(model, settings),
+        }
+    ), 201
+
+
+def get_conversation(conv_id):
+    conversation, messages = _load_conversation_payload(conv_id)
+    if not conversation:
+        return jsonify({"error": "Not found."}), 404
+    settings = get_app_settings()
+    conversation_payload = dict(conversation)
+    conversation_payload["model_label"] = get_model_label(conversation_payload.get("model") or "", settings)
+    conversation_payload["persona"] = get_conversation_persona(conv_id)
+    tool_overrides_raw = conversation_payload.get("tool_overrides")
+    if tool_overrides_raw:
+        try:
+            conversation_payload["tool_overrides"] = json.loads(tool_overrides_raw)
+        except Exception:
             conversation_payload["tool_overrides"] = None
-        conversation_payload["parameter_overrides"] = _deserialize_parameter_overrides(
-            conversation_payload.get("parameter_overrides")
+    else:
+        conversation_payload["tool_overrides"] = None
+    conversation_payload["parameter_overrides"] = _deserialize_parameter_overrides(
+        conversation_payload.get("parameter_overrides")
+    )
+    return jsonify(
+        {
+            "conversation": conversation_payload,
+            "messages": messages,
+            **_load_conversation_memory_payload(conv_id),
+        }
+    )
+
+
+def create_conversation_memory_entry(conv_id):
+    if not get_runtime_setting("CONVERSATION_MEMORY_ENABLED"):
+        return jsonify({"error": "Conversation memory is disabled."}), 400
+
+    data = request.get_json(silent=True) or {}
+    conversation, _ = _load_conversation_payload(conv_id)
+    if not conversation:
+        return jsonify({"error": "Not found."}), 404
+
+    entry_type = str(data.get("entry_type") or "").strip()
+    key = str(data.get("key") or "").strip()
+    value = str(data.get("value") or "").strip()
+    message_id = _parse_optional_int(data.get("message_id"))
+
+    try:
+        entry = insert_conversation_memory_entry(
+            conv_id,
+            entry_type,
+            key,
+            value,
+            message_id=message_id,
+            mutation_context={"source_message_id": message_id},
         )
-        return jsonify(
-            {
-                "conversation": conversation_payload,
-                "messages": messages,
-                **_load_conversation_memory_payload(conv_id),
-            }
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+            (conv_id,),
         )
 
-    @app.route("/api/conversations/<int:conv_id>/memory", methods=["POST"])
-    def create_conversation_memory_entry(conv_id):
-        if not CONVERSATION_MEMORY_ENABLED:
-            return jsonify({"error": "Conversation memory is disabled."}), 400
+    payload = _load_conversation_memory_payload(conv_id)
+    payload.update({"entry": entry})
+    return jsonify(payload), 201
 
-        data = request.get_json(silent=True) or {}
-        conversation, _ = _load_conversation_payload(conv_id)
-        if not conversation:
-            return jsonify({"error": "Not found."}), 404
 
-        entry_type = str(data.get("entry_type") or "").strip()
-        key = str(data.get("key") or "").strip()
-        value = str(data.get("value") or "").strip()
-        message_id = _parse_optional_int(data.get("message_id"))
+def update_conversation_memory(conv_id, entry_id):
+    if not get_runtime_setting("CONVERSATION_MEMORY_ENABLED"):
+        return jsonify({"error": "Conversation memory is disabled."}), 400
 
-        try:
-            entry = insert_conversation_memory_entry(
-                conv_id,
-                entry_type,
-                key,
-                value,
-                message_id=message_id,
-                mutation_context={"source_message_id": message_id},
-            )
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
+    data = request.get_json(silent=True) or {}
+    conversation, _ = _load_conversation_payload(conv_id)
+    if not conversation:
+        return jsonify({"error": "Not found."}), 404
 
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-                (conv_id,),
-            )
+    current_entry = get_conversation_memory_entry(entry_id, conv_id)
+    if not current_entry:
+        return jsonify({"error": "Memory entry not found."}), 404
 
-        payload = _load_conversation_memory_payload(conv_id)
-        payload.update({"entry": entry})
-        return jsonify(payload), 201
+    entry_type = str(data.get("entry_type") or current_entry["entry_type"]).strip()
+    key = str(data.get("key") or current_entry["key"]).strip()
+    value = str(data.get("value") or current_entry["value"]).strip()
+    message_id = _parse_optional_int(data.get("message_id"))
+    if message_id is None:
+        message_id = current_entry["message_id"]
 
-    @app.route("/api/conversations/<int:conv_id>/memory/<int:entry_id>", methods=["PATCH"])
-    def update_conversation_memory(conv_id, entry_id):
-        if not CONVERSATION_MEMORY_ENABLED:
-            return jsonify({"error": "Conversation memory is disabled."}), 400
-
-        data = request.get_json(silent=True) or {}
-        conversation, _ = _load_conversation_payload(conv_id)
-        if not conversation:
-            return jsonify({"error": "Not found."}), 404
-
-        current_entry = get_conversation_memory_entry(entry_id, conv_id)
-        if not current_entry:
-            return jsonify({"error": "Memory entry not found."}), 404
-
-        entry_type = str(data.get("entry_type") or current_entry["entry_type"]).strip()
-        key = str(data.get("key") or current_entry["key"]).strip()
-        value = str(data.get("value") or current_entry["value"]).strip()
-        message_id = _parse_optional_int(data.get("message_id"))
-        if message_id is None:
-            message_id = current_entry["message_id"]
-
-        try:
-            entry = update_conversation_memory_entry(
-                entry_id,
-                conv_id,
-                entry_type,
-                key,
-                value,
-                message_id=message_id,
-                mutation_context={"source_message_id": message_id},
-            )
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
-
-        if not entry:
-            return jsonify({"error": "Memory entry not found."}), 404
-
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-                (conv_id,),
-            )
-
-        payload = _load_conversation_memory_payload(conv_id)
-        payload.update({"entry": entry})
-        return jsonify(payload)
-
-    @app.route("/api/conversations/<int:conv_id>/memory/<int:entry_id>", methods=["DELETE"])
-    def delete_conversation_memory(conv_id, entry_id):
-        if not CONVERSATION_MEMORY_ENABLED:
-            return jsonify({"error": "Conversation memory is disabled."}), 400
-
-        conversation, _ = _load_conversation_payload(conv_id)
-        if not conversation:
-            return jsonify({"error": "Not found."}), 404
-
-        current_entry = get_conversation_memory_entry(entry_id, conv_id)
-        deleted = delete_conversation_memory_entry(
+    try:
+        entry = update_conversation_memory_entry(
             entry_id,
             conv_id,
-            mutation_context={"source_message_id": current_entry.get("message_id") if current_entry else None},
+            entry_type,
+            key,
+            value,
+            message_id=message_id,
+            mutation_context={"source_message_id": message_id},
         )
-        if not deleted:
-            return jsonify({"error": "Memory entry not found."}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-                (conv_id,),
+    if not entry:
+        return jsonify({"error": "Memory entry not found."}), 404
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+            (conv_id,),
+        )
+
+    payload = _load_conversation_memory_payload(conv_id)
+    payload.update({"entry": entry})
+    return jsonify(payload)
+
+
+def delete_conversation_memory(conv_id, entry_id):
+    if not get_runtime_setting("CONVERSATION_MEMORY_ENABLED"):
+        return jsonify({"error": "Conversation memory is disabled."}), 400
+
+    conversation, _ = _load_conversation_payload(conv_id)
+    if not conversation:
+        return jsonify({"error": "Not found."}), 404
+
+    current_entry = get_conversation_memory_entry(entry_id, conv_id)
+    deleted = delete_conversation_memory_entry(
+        entry_id,
+        conv_id,
+        mutation_context={"source_message_id": current_entry.get("message_id") if current_entry else None},
+    )
+    if not deleted:
+        return jsonify({"error": "Memory entry not found."}), 404
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+            (conv_id,),
+        )
+
+    payload = _load_conversation_memory_payload(conv_id)
+    payload.update({"deleted_entry_id": entry_id})
+    return jsonify(payload)
+
+
+def export_conversation(conv_id):
+    format_name = str(request.args.get("format") or "md").strip().lower()
+    export_request_payload = request.get_json(silent=True) if request.method == "POST" else {}
+    reasoning_by_message_id = _normalize_export_reasoning_map(
+        (export_request_payload or {}).get("reasoning_by_message_id")
+    )
+    conversation, messages = _load_conversation_payload(conv_id, include_private_metadata=True)
+    if not conversation:
+        return jsonify({"error": "Not found."}), 404
+    messages = _apply_export_reasoning_map(messages, reasoning_by_message_id)
+
+    base_name = _sanitize_download_filename(conversation["title"] or "conversation", fallback="conversation")
+    payload_conversation = dict(conversation)
+    try:
+        if format_name == "md":
+            payload = build_conversation_markdown_download(payload_conversation, messages)
+            mime_type = "text/markdown; charset=utf-8"
+            filename = f"{base_name}.md"
+        elif format_name == "json":
+            payload = build_conversation_json_download(
+                payload_conversation,
+                messages,
+                list_conversation_model_invocations(conv_id),
             )
+            mime_type = "application/json; charset=utf-8"
+            filename = f"{base_name}.json"
+        elif format_name == "docx":
+            payload = build_conversation_docx_download(payload_conversation, messages)
+            mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            filename = f"{base_name}.docx"
+        elif format_name == "pdf":
+            payload = build_conversation_pdf_download(payload_conversation, messages)
+            mime_type = "application/pdf"
+            filename = f"{base_name}.pdf"
+        else:
+            return jsonify({"error": "format must be md, json, docx, or pdf."}), 400
+    except Exception:
+        current_app.logger.exception("Failed to export conversation %s as %s", conv_id, format_name)
+        return jsonify({"error": "Conversation export failed."}), 500
 
-        payload = _load_conversation_memory_payload(conv_id)
-        payload.update({"deleted_entry_id": entry_id})
-        return jsonify(payload)
+    return Response(
+        payload,
+        content_type=mime_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
 
-    @app.route("/api/conversations/<int:conv_id>/export", methods=["GET", "POST"])
-    def export_conversation(conv_id):
-        format_name = str(request.args.get("format") or "md").strip().lower()
-        export_request_payload = request.get_json(silent=True) if request.method == "POST" else {}
-        reasoning_by_message_id = _normalize_export_reasoning_map(
-            (export_request_payload or {}).get("reasoning_by_message_id")
+
+def export_canvas_document(conv_id):
+    format_name = str(request.args.get("format") or "md").strip().lower()
+    document_id = str(request.args.get("document_id") or "").strip() or None
+
+    conversation, messages = _load_conversation_payload(conv_id)
+    if not conversation:
+        return jsonify({"error": "Not found."}), 404
+
+    document = find_latest_canvas_document(messages, document_id=document_id)
+    if not document:
+        return jsonify({"error": "Canvas document not found."}), 404
+
+    base_name = _sanitize_download_filename(document.get("title") or conversation["title"] or "canvas")
+    try:
+        if format_name == "md":
+            payload = build_markdown_download(document)
+            mime_type = "text/markdown; charset=utf-8"
+            filename = f"{base_name}.md"
+        elif format_name == "html":
+            payload = build_html_download(document)
+            mime_type = "text/html; charset=utf-8"
+            filename = f"{base_name}.html"
+        elif format_name == "pdf":
+            payload = build_pdf_download(document)
+            mime_type = "application/pdf"
+            filename = f"{base_name}.pdf"
+        else:
+            return jsonify({"error": "format must be md, html, or pdf."}), 400
+    except Exception:
+        current_app.logger.exception(
+            "Failed to export canvas document %s as %s for conversation %s", document_id, format_name, conv_id
         )
-        conversation, messages = _load_conversation_payload(conv_id, include_private_metadata=True)
-        if not conversation:
-            return jsonify({"error": "Not found."}), 404
-        messages = _apply_export_reasoning_map(messages, reasoning_by_message_id)
+        return jsonify({"error": "Export failed due to an internal error."}), 500
 
-        base_name = _sanitize_download_filename(conversation["title"] or "conversation", fallback="conversation")
-        payload_conversation = dict(conversation)
+    return Response(
+        payload,
+        content_type=mime_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
+def get_conversation_image_asset(conv_id, image_id):
+    conversation, _ = _load_conversation_payload(conv_id)
+    if not conversation:
+        return jsonify({"error": "Not found."}), 404
+
+    asset, image_bytes = read_image_asset_bytes(image_id, conversation_id=conv_id)
+    if not asset or not image_bytes:
+        return jsonify({"error": "Image asset not found."}), 404
+
+    return Response(
+        image_bytes,
+        content_type=str(asset.get("mime_type") or "image/jpeg").strip() or "image/jpeg",
+        headers={
+            "Content-Disposition": f'inline; filename="{_sanitize_download_filename(asset.get("filename") or image_id, fallback="image")}"',
+            "Cache-Control": "private, max-age=3600",
+        },
+    )
+
+
+def delete_canvas(conv_id):
+    clear_all = str(request.args.get("clear_all") or "").strip().lower() in {"1", "true", "yes", "on"}
+    document_id = str(request.args.get("document_id") or "").strip() or None
+    document_path = str(request.args.get("document_path") or "").strip() or None
+
+    conversation, messages = _load_conversation_payload(conv_id)
+    if not conversation:
+        return jsonify({"error": "Not found."}), 404
+
+    latest_canvas_state = find_latest_canvas_state(messages)
+    runtime_state = create_canvas_runtime_state(
+        latest_canvas_state.get("documents"),
+        active_document_id=latest_canvas_state.get("active_document_id"),
+    )
+    current_documents = get_canvas_runtime_documents(runtime_state)
+    if not current_documents:
+        return jsonify({"error": "Canvas document not found."}), 404
+
+    try:
+        if clear_all:
+            documents = get_canvas_runtime_documents(runtime_state)
+            cleared_count = len(documents)
+            runtime_state["documents"] = []
+            runtime_state["active_document_id"] = None
+            runtime_state["viewports"] = {}
+            runtime_state["mode"] = "document"
+            result = {"status": "ok", "action": "cleared", "cleared_count": cleared_count}
+        else:
+            result = delete_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+
+    next_documents = get_canvas_runtime_documents(runtime_state)
+    metadata = serialize_message_metadata(
+        {
+            "canvas_documents": next_documents,
+            "active_document_id": get_canvas_runtime_active_document_id(runtime_state),
+            "canvas_viewports": runtime_state.get("viewports")
+            if isinstance(runtime_state.get("viewports"), dict)
+            else {},
+            "canvas_cleared": not next_documents,
+        }
+    )
+
+    with get_db() as conn:
+        insert_message(
+            conn,
+            conv_id,
+            "tool",
+            "",
+            metadata=metadata,
+        )
+        conn.execute(
+            "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+            (conv_id,),
+        )
+
+    if get_runtime_setting("RAG_ENABLED"):
+        if current_app.testing:
+            sync_conversations_to_rag_safe(conversation_id=conv_id)
+        else:
+            sync_conversations_to_rag_background(current_app._get_current_object(), conversation_id=conv_id)
+
+    _, updated_messages = _load_conversation_payload(conv_id)
+    active_document_id = get_canvas_runtime_active_document_id(runtime_state)
+    return jsonify(
+        {
+            "cleared": not next_documents,
+            "documents": next_documents,
+            "active_document_id": active_document_id,
+            "remaining_count": len(next_documents),
+            "deleted_document_id": result.get("deleted_id"),
+            "messages": updated_messages,
+        }
+    )
+
+
+def create_canvas(conv_id):
+    uploaded_file = None
+    if request.mimetype and request.mimetype.startswith("multipart/form-data"):
+        data = request.form or {}
+        uploaded_file = request.files.get("file")
+    else:
+        data = request.get_json(silent=True) or {}
+
+    title = str(data.get("title") or "Canvas").strip() or "Canvas"
+    content = str(data.get("content") or "")
+    format_name = str(data.get("format") or "").strip() or ""
+    language = str(data.get("language") or "").strip() or None
+    path = str(data.get("path") or "").strip() or None
+    role = str(data.get("role") or "").strip() or None
+    project_id = str(data.get("project_id") or "").strip() or None
+    workspace_id = str(data.get("workspace_id") or "").strip() or None
+    summary = str(data.get("summary") or "").strip() or None
+    source_assistant_message_id = _parse_optional_int(data.get("source_assistant_message_id"))
+
+    if uploaded_file and getattr(uploaded_file, "filename", ""):
         try:
-            if format_name == "md":
-                payload = build_conversation_markdown_download(payload_conversation, messages)
-                mime_type = "text/markdown; charset=utf-8"
-                filename = f"{base_name}.md"
-            elif format_name == "json":
-                payload = build_conversation_json_download(
-                    payload_conversation,
-                    messages,
-                    list_conversation_model_invocations(conv_id),
-                )
-                mime_type = "application/json; charset=utf-8"
-                filename = f"{base_name}.json"
-            elif format_name == "docx":
-                payload = build_conversation_docx_download(payload_conversation, messages)
-                mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                filename = f"{base_name}.docx"
-            elif format_name == "pdf":
-                payload = build_conversation_pdf_download(payload_conversation, messages)
-                mime_type = "application/pdf"
-                filename = f"{base_name}.pdf"
-            else:
-                return jsonify({"error": "format must be md, json, docx, or pdf."}), 400
-        except Exception:
-            app.logger.exception("Failed to export conversation %s as %s", conv_id, format_name)
-            return jsonify({"error": "Conversation export failed."}), 500
-
-        return Response(
-            payload,
-            content_type=mime_type,
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-            },
-        )
-
-    @app.route("/api/conversations/<int:conv_id>/canvas/export", methods=["GET"])
-    def export_canvas_document(conv_id):
-        format_name = str(request.args.get("format") or "md").strip().lower()
-        document_id = str(request.args.get("document_id") or "").strip() or None
-
-        conversation, messages = _load_conversation_payload(conv_id)
-        if not conversation:
-            return jsonify({"error": "Not found."}), 404
-
-        document = find_latest_canvas_document(messages, document_id=document_id)
-        if not document:
-            return jsonify({"error": "Canvas document not found."}), 404
-
-        base_name = _sanitize_download_filename(document.get("title") or conversation["title"] or "canvas")
-        try:
-            if format_name == "md":
-                payload = build_markdown_download(document)
-                mime_type = "text/markdown; charset=utf-8"
-                filename = f"{base_name}.md"
-            elif format_name == "html":
-                payload = build_html_download(document)
-                mime_type = "text/html; charset=utf-8"
-                filename = f"{base_name}.html"
-            elif format_name == "pdf":
-                payload = build_pdf_download(document)
-                mime_type = "application/pdf"
-                filename = f"{base_name}.pdf"
-            else:
-                return jsonify({"error": "format must be md, html, or pdf."}), 400
-        except Exception:
-            app.logger.exception(
-                "Failed to export canvas document %s as %s for conversation %s", document_id, format_name, conv_id
-            )
-            return jsonify({"error": "Export failed due to an internal error."}), 500
-
-        return Response(
-            payload,
-            content_type=mime_type,
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "Cache-Control": "no-store, max-age=0",
-                "Pragma": "no-cache",
-                "Expires": "0",
-            },
-        )
-
-    @app.route("/api/conversations/<int:conv_id>/images/<image_id>", methods=["GET"])
-    def get_conversation_image_asset(conv_id, image_id):
-        conversation, _ = _load_conversation_payload(conv_id)
-        if not conversation:
-            return jsonify({"error": "Not found."}), 404
-
-        asset, image_bytes = read_image_asset_bytes(image_id, conversation_id=conv_id)
-        if not asset or not image_bytes:
-            return jsonify({"error": "Image asset not found."}), 404
-
-        return Response(
-            image_bytes,
-            content_type=str(asset.get("mime_type") or "image/jpeg").strip() or "image/jpeg",
-            headers={
-                "Content-Disposition": f'inline; filename="{_sanitize_download_filename(asset.get("filename") or image_id, fallback="image")}"',
-                "Cache-Control": "private, max-age=3600",
-            },
-        )
-
-    @app.route("/api/conversations/<int:conv_id>/canvas", methods=["DELETE"])
-    def delete_canvas(conv_id):
-        clear_all = str(request.args.get("clear_all") or "").strip().lower() in {"1", "true", "yes", "on"}
-        document_id = str(request.args.get("document_id") or "").strip() or None
-        document_path = str(request.args.get("document_path") or "").strip() or None
-
-        conversation, messages = _load_conversation_payload(conv_id)
-        if not conversation:
-            return jsonify({"error": "Not found."}), 404
-
-        latest_canvas_state = find_latest_canvas_state(messages)
-        runtime_state = create_canvas_runtime_state(
-            latest_canvas_state.get("documents"),
-            active_document_id=latest_canvas_state.get("active_document_id"),
-        )
-        current_documents = get_canvas_runtime_documents(runtime_state)
-        if not current_documents:
-            return jsonify({"error": "Canvas document not found."}), 404
-
-        try:
-            if clear_all:
-                documents = get_canvas_runtime_documents(runtime_state)
-                cleared_count = len(documents)
-                runtime_state["documents"] = []
-                runtime_state["active_document_id"] = None
-                runtime_state["viewports"] = {}
-                runtime_state["mode"] = "document"
-                result = {"status": "ok", "action": "cleared", "cleared_count": cleared_count}
-            else:
-                result = delete_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
+            filename, mime_type, doc_bytes = read_uploaded_document(uploaded_file)
+            extracted_text = extract_document_text(doc_bytes, mime_type)
         except ValueError as exc:
-            return jsonify({"error": str(exc)}), 404
-
-        next_documents = get_canvas_runtime_documents(runtime_state)
-        metadata = serialize_message_metadata(
-            {
-                "canvas_documents": next_documents,
-                "active_document_id": get_canvas_runtime_active_document_id(runtime_state),
-                "canvas_viewports": runtime_state.get("viewports")
-                if isinstance(runtime_state.get("viewports"), dict)
-                else {},
-                "canvas_cleared": not next_documents,
-            }
-        )
-
-        with get_db() as conn:
-            insert_message(
-                conn,
-                conv_id,
-                "tool",
-                "",
-                metadata=metadata,
-            )
-            conn.execute(
-                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-                (conv_id,),
-            )
-
-        if RAG_ENABLED:
-            if current_app.testing:
-                sync_conversations_to_rag_safe(conversation_id=conv_id)
-            else:
-                sync_conversations_to_rag_background(current_app._get_current_object(), conversation_id=conv_id)
-
-        _, updated_messages = _load_conversation_payload(conv_id)
-        active_document_id = get_canvas_runtime_active_document_id(runtime_state)
-        return jsonify(
-            {
-                "cleared": not next_documents,
-                "documents": next_documents,
-                "active_document_id": active_document_id,
-                "remaining_count": len(next_documents),
-                "deleted_document_id": result.get("deleted_id"),
-                "messages": updated_messages,
-            }
-        )
-
-    @app.route("/api/conversations/<int:conv_id>/canvas", methods=["POST"])
-    def create_canvas(conv_id):
-        uploaded_file = None
-        if request.mimetype and request.mimetype.startswith("multipart/form-data"):
-            data = request.form or {}
-            uploaded_file = request.files.get("file")
+            return jsonify({"error": str(exc)}), 400
+        title = os.path.basename(str(data.get("title") or filename).strip()) or filename
+        path = str(data.get("path") or path or filename).strip() or filename
+        resolved_format = format_name or infer_canvas_format(title)
+        resolved_language = language if language is not None else infer_canvas_language(title)
+        if resolved_format == "markdown" and mime_type == "application/pdf":
+            content = extracted_text
         else:
-            data = request.get_json(silent=True) or {}
+            content = (
+                build_canvas_markdown(title, extracted_text) if resolved_format == "markdown" else extracted_text
+            )
+        format_name = resolved_format
+        language = resolved_language
+    else:
+        format_name = format_name or "markdown"
 
-        title = str(data.get("title") or "Canvas").strip() or "Canvas"
-        content = str(data.get("content") or "")
-        format_name = str(data.get("format") or "").strip() or ""
-        language = str(data.get("language") or "").strip() or None
-        path = str(data.get("path") or "").strip() or None
-        role = str(data.get("role") or "").strip() or None
-        project_id = str(data.get("project_id") or "").strip() or None
-        workspace_id = str(data.get("workspace_id") or "").strip() or None
-        summary = str(data.get("summary") or "").strip() or None
-        source_assistant_message_id = _parse_optional_int(data.get("source_assistant_message_id"))
+    conversation, messages = _load_conversation_payload(conv_id)
+    if not conversation:
+        return jsonify({"error": "Not found."}), 404
 
-        if uploaded_file and getattr(uploaded_file, "filename", ""):
-            try:
-                filename, mime_type, doc_bytes = read_uploaded_document(uploaded_file)
-                extracted_text = extract_document_text(doc_bytes, mime_type)
-            except ValueError as exc:
-                return jsonify({"error": str(exc)}), 400
-            title = os.path.basename(str(data.get("title") or filename).strip()) or filename
-            path = str(data.get("path") or path or filename).strip() or filename
-            resolved_format = format_name or infer_canvas_format(title)
-            resolved_language = language if language is not None else infer_canvas_language(title)
-            if resolved_format == "markdown" and mime_type == "application/pdf":
-                content = extracted_text
-            else:
-                content = (
-                    build_canvas_markdown(title, extracted_text) if resolved_format == "markdown" else extracted_text
-                )
-            format_name = resolved_format
-            language = resolved_language
-        else:
-            format_name = format_name or "markdown"
+    latest_canvas_state = find_latest_canvas_state(messages)
+    runtime_state = create_canvas_runtime_state(
+        latest_canvas_state.get("documents"),
+        active_document_id=latest_canvas_state.get("active_document_id"),
+    )
 
-        conversation, messages = _load_conversation_payload(conv_id)
-        if not conversation:
-            return jsonify({"error": "Not found."}), 404
+    try:
+        document = create_canvas_document(
+            runtime_state,
+            title=title,
+            content=content,
+            format_name=format_name,
+            language_name=language,
+            path=path,
+            role=role,
+            summary=summary,
+            project_id=project_id,
+            workspace_id=workspace_id,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
-        latest_canvas_state = find_latest_canvas_state(messages)
-        runtime_state = create_canvas_runtime_state(
-            latest_canvas_state.get("documents"),
-            active_document_id=latest_canvas_state.get("active_document_id"),
+    next_documents = get_canvas_runtime_documents(runtime_state)
+    metadata = serialize_message_metadata(
+        {
+            "canvas_documents": next_documents,
+            "active_document_id": get_canvas_runtime_active_document_id(runtime_state),
+            "canvas_viewports": runtime_state.get("viewports")
+            if isinstance(runtime_state.get("viewports"), dict)
+            else {},
+            "canvas_cleared": not next_documents,
+        }
+    )
+
+    with get_db() as conn:
+        insert_message(
+            conn,
+            conv_id,
+            "tool",
+            "",
+            metadata=metadata,
+        )
+        conn.execute(
+            "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+            (conv_id,),
         )
 
-        try:
-            document = create_canvas_document(
+    if get_runtime_setting("RAG_ENABLED"):
+        sync_conversations_to_rag_safe(conversation_id=conv_id)
+
+    _, updated_messages = _load_conversation_payload(conv_id)
+    return jsonify(
+        {
+            "document": document,
+            "documents": next_documents,
+            "active_document_id": document.get("id"),
+            "messages": updated_messages,
+        }
+    ), 201
+
+
+def update_canvas(conv_id):
+    data = request.get_json(silent=True) or {}
+    document_id = str(data.get("document_id") or "").strip() or None
+    document_path = str(data.get("document_path") or "").strip() or None
+    content = data.get("content")
+    title = data.get("title")
+    format_name = data.get("format")
+    language = data.get("language")
+    always_expanded = data.get("always_expanded")  # bool or None
+
+    if content is None and title is None and format_name is None and language is None and always_expanded is None:
+        return jsonify({"error": "Provide at least one canvas field to update."}), 400
+
+    conversation, messages = _load_conversation_payload(conv_id)
+    if not conversation:
+        return jsonify({"error": "Not found."}), 404
+
+    latest_canvas_state = find_latest_canvas_state(messages)
+    runtime_state = create_canvas_runtime_state(
+        latest_canvas_state.get("documents"),
+        active_document_id=latest_canvas_state.get("active_document_id"),
+    )
+    current_documents = get_canvas_runtime_documents(runtime_state)
+    if not current_documents:
+        return jsonify({"error": "Canvas document not found."}), 404
+
+    try:
+        active_document = find_latest_canvas_document(
+            messages, document_id=document_id, document_path=document_path
+        )
+        if not active_document:
+            return jsonify({"error": "Canvas document not found."}), 404
+
+        # always_expanded-only update: patch the document in-place without a full rewrite
+        if (
+            always_expanded is not None
+            and content is None
+            and title is None
+            and format_name is None
+            and language is None
+        ):
+            patched_doc = dict(active_document)
+            # Set explicitly so normalize_canvas_document sees the key and applies the elif branch
+            patched_doc["always_expanded"] = always_expanded
+            patched_doc = normalize_canvas_document(patched_doc)
+            if not patched_doc:
+                return jsonify({"error": "Canvas document normalisation failed."}), 400
+            next_documents = [patched_doc if d.get("id") == patched_doc["id"] else d for d in current_documents]
+            result = patched_doc
+        else:
+            result = rewrite_canvas_document(
                 runtime_state,
+                content=active_document.get("content") if content is None else str(content),
+                document_id=document_id,
+                document_path=document_path,
                 title=title,
-                content=content,
                 format_name=format_name,
                 language_name=language,
-                path=path,
-                role=role,
-                summary=summary,
-                project_id=project_id,
-                workspace_id=workspace_id,
             )
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
+            if always_expanded is not None:
+                result["always_expanded"] = always_expanded
+                result = normalize_canvas_document(result) or result
+            next_documents = get_canvas_runtime_documents(runtime_state)
+            # Propagate always_expanded change into the runtime documents list too
+            if always_expanded is not None:
+                next_documents = [
+                    {**d, "always_expanded": always_expanded} if d.get("id") == result.get("id") else d
+                    for d in next_documents
+                ]
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
-        next_documents = get_canvas_runtime_documents(runtime_state)
-        metadata = serialize_message_metadata(
-            {
-                "canvas_documents": next_documents,
-                "active_document_id": get_canvas_runtime_active_document_id(runtime_state),
-                "canvas_viewports": runtime_state.get("viewports")
-                if isinstance(runtime_state.get("viewports"), dict)
-                else {},
-                "canvas_cleared": not next_documents,
-            }
+    active_document_id_out = (
+        result.get("id")
+        or get_canvas_runtime_active_document_id(runtime_state)
+        or latest_canvas_state.get("active_document_id")
+    )
+    metadata = serialize_message_metadata(
+        {
+            "canvas_documents": next_documents,
+            "active_document_id": active_document_id_out,
+            "canvas_viewports": runtime_state.get("viewports")
+            if isinstance(runtime_state.get("viewports"), dict)
+            else {},
+            "canvas_cleared": not next_documents,
+        }
+    )
+
+    with get_db() as conn:
+        insert_message(
+            conn,
+            conv_id,
+            "tool",
+            "",
+            metadata=metadata,
+        )
+        conn.execute(
+            "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+            (conv_id,),
         )
 
-        with get_db() as conn:
-            insert_message(
-                conn,
-                conv_id,
-                "tool",
-                "",
-                metadata=metadata,
-            )
-            conn.execute(
-                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-                (conv_id,),
-            )
+    if get_runtime_setting("RAG_ENABLED"):
+        sync_conversations_to_rag_safe(conversation_id=conv_id)
 
-        if RAG_ENABLED:
-            sync_conversations_to_rag_safe(conversation_id=conv_id)
+    _, updated_messages = _load_conversation_payload(conv_id)
+    return jsonify(
+        {
+            "document": result,
+            "documents": next_documents,
+            "active_document_id": active_document_id_out,
+            "messages": updated_messages,
+        }
+    )
 
-        _, updated_messages = _load_conversation_payload(conv_id)
-        return jsonify(
-            {
-                "document": document,
-                "documents": next_documents,
-                "active_document_id": document.get("id"),
-                "messages": updated_messages,
-            }
-        ), 201
 
-    @app.route("/api/conversations/<int:conv_id>/canvas", methods=["PATCH"])
-    def update_canvas(conv_id):
-        data = request.get_json(silent=True) or {}
-        document_id = str(data.get("document_id") or "").strip() or None
-        document_path = str(data.get("document_path") or "").strip() or None
-        content = data.get("content")
-        title = data.get("title")
-        format_name = data.get("format")
-        language = data.get("language")
-        always_expanded = data.get("always_expanded")  # bool or None
+def update_conversation_message(message_id):
+    data = request.get_json(silent=True) or {}
+    if "content" not in data:
+        return jsonify({"error": "content is required."}), 400
 
-        if content is None and title is None and format_name is None and language is None and always_expanded is None:
-            return jsonify({"error": "Provide at least one canvas field to update."}), 400
+    conversation_id_raw = data.get("conversation_id")
+    conversation_id = None
+    if conversation_id_raw not in (None, ""):
+        try:
+            conversation_id = int(conversation_id_raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "conversation_id must be an integer."}), 400
 
-        conversation, messages = _load_conversation_payload(conv_id)
+    normalized_content = str(data.get("content") or "").replace("\r\n", "\n")
+
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT id, conversation_id, role, content, metadata, tool_calls, tool_call_id,
+                      prompt_tokens, completion_tokens, total_tokens, deleted_at
+               FROM messages WHERE id = ?""",
+            (message_id,),
+        ).fetchone()
+        if not row or row["deleted_at"] is not None:
+            return jsonify({"error": "Message not found."}), 404
+
+        row_conversation_id = int(row["conversation_id"] or 0)
+        if conversation_id is not None and row_conversation_id != conversation_id:
+            return jsonify({"error": "Message does not belong to the provided conversation."}), 400
+
+        role = str(row["role"] or "").strip()
+        if role not in {"user", "assistant"}:
+            return jsonify({"error": "Only user and assistant messages can be edited."}), 400
+
+        if role == "assistant" and parse_message_tool_calls(row["tool_calls"]):
+            return jsonify({"error": "Assistant tool-call messages cannot be edited."}), 400
+
+        metadata = parse_message_metadata(row["metadata"])
+        updated_metadata = metadata
+        if role == "user":
+            metadata_payload = data.get("metadata") if "metadata" in data else metadata
+            updated_metadata = sanitize_edited_user_message_metadata(metadata_payload)
+
+        if not normalized_content.strip() and (role != "user" or not updated_metadata):
+            return jsonify({"error": "Message content cannot be empty."}), 400
+
+        conn.execute(
+            "UPDATE messages SET content = ?, metadata = ? WHERE id = ?",
+            (normalized_content, serialize_message_metadata(updated_metadata), message_id),
+        )
+        conn.execute(
+            "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+            (row_conversation_id,),
+        )
+        updated_row = conn.execute(
+            """SELECT id, position, role, content, metadata, tool_calls, tool_call_id,
+                      prompt_tokens, completion_tokens, total_tokens, created_at, deleted_at
+               FROM messages WHERE id = ?""",
+            (message_id,),
+        ).fetchone()
+
+    if get_runtime_setting("RAG_ENABLED"):
+        sync_conversations_to_rag_safe(conversation_id=row_conversation_id)
+
+    return jsonify({"updated": True, "message": message_row_to_dict(updated_row)})
+
+
+def delete_conversation_message(message_id):
+    data = request.get_json(silent=True) or {}
+    conversation_id_raw = data.get("conversation_id")
+    conversation_id = None
+    if conversation_id_raw not in (None, ""):
+        try:
+            conversation_id = int(conversation_id_raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "conversation_id must be an integer."}), 400
+
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT id, conversation_id, role, tool_calls, deleted_at
+               FROM messages WHERE id = ?""",
+            (message_id,),
+        ).fetchone()
+        if not row or row["deleted_at"] is not None:
+            return jsonify({"error": "Message not found."}), 404
+
+        row_conversation_id = int(row["conversation_id"] or 0)
+        if conversation_id is not None and row_conversation_id != conversation_id:
+            return jsonify({"error": "Message does not belong to the provided conversation."}), 400
+
+        role = str(row["role"] or "").strip()
+        if role not in {"user", "assistant"}:
+            return jsonify({"error": "Only user and assistant messages can be deleted."}), 400
+
+        if role == "assistant" and parse_message_tool_calls(row["tool_calls"]):
+            return jsonify({"error": "Assistant tool-call messages cannot be deleted."}), 400
+
+    branch_cleanup = rollback_conversation_branch(
+        row_conversation_id,
+        message_id,
+        include_anchor=True,
+    )
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
+            (row_conversation_id,),
+        )
+
+    if get_runtime_setting("RAG_ENABLED"):
+        sync_conversations_to_rag_safe(conversation_id=row_conversation_id, force=True)
+
+    _, updated_messages = _load_conversation_payload(row_conversation_id)
+    return jsonify(
+        {
+            "deleted": True,
+            "message_id": message_id,
+            "conversation_id": row_conversation_id,
+            "deleted_message_ids": branch_cleanup.get("deleted_message_ids") or [message_id],
+            "messages": updated_messages,
+        }
+    )
+
+
+def delete_conversation(conv_id):
+    with get_db() as conn:
+        conversation = conn.execute("SELECT id FROM conversations WHERE id = ?", (conv_id,)).fetchone()
         if not conversation:
             return jsonify({"error": "Not found."}), 404
 
-        latest_canvas_state = find_latest_canvas_state(messages)
-        runtime_state = create_canvas_runtime_state(
-            latest_canvas_state.get("documents"),
-            active_document_id=latest_canvas_state.get("active_document_id"),
-        )
-        current_documents = get_canvas_runtime_documents(runtime_state)
-        if not current_documents:
-            return jsonify({"error": "Canvas document not found."}), 404
+    revert_conversation_state_mutations(conv_id)
+    try:
+        purge_conversation_rag_sources(conv_id, include_archived=True)
+    except Exception:
+        current_app.logger.exception("Conversation RAG cleanup failed for conversation_id=%s", conv_id)
+    delete_conversation_image_assets(conv_id)
+    delete_conversation_file_assets(conv_id)
+    delete_conversation_video_assets(conv_id)
+    with get_db() as conn:
+        conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
+    return "", 204
 
+
+def update_conversation(conv_id):
+    data = request.get_json(silent=True) or {}
+    title_provided = "title" in data
+    persona_provided = "persona_id" in data
+    tool_overrides_provided = "tool_overrides" in data
+    parameter_overrides_provided = "parameter_overrides" in data
+    if (
+        not title_provided
+        and not persona_provided
+        and not tool_overrides_provided
+        and not parameter_overrides_provided
+    ):
+        return jsonify({"error": "Provide title, persona_id, tool_overrides, and/or parameter_overrides."}), 400
+
+    title = None
+    if title_provided:
+        title = (data.get("title") or "").strip()[:120]
+        if not title:
+            return jsonify({"error": "Title required."}), 400
+
+    raw_persona_id = data.get("persona_id") if persona_provided else None
+    persona_id = _parse_optional_int(raw_persona_id) if persona_provided else None
+    if persona_provided and raw_persona_id not in (None, "") and persona_id is None:
+        return jsonify({"error": "persona_id must be an integer or empty."}), 400
+    if persona_provided and persona_id is not None and get_persona(persona_id) is None:
+        return jsonify({"error": "Persona not found."}), 400
+
+    next_tool_overrides = None
+    if tool_overrides_provided:
+        raw_tool_overrides = data.get("tool_overrides")
+        if raw_tool_overrides is None:
+            next_tool_overrides = None
+        elif isinstance(raw_tool_overrides, list):
+            normalized = normalize_active_tool_names(raw_tool_overrides)
+            next_tool_overrides = json.dumps(normalized) if normalized else None
+        else:
+            return jsonify({"error": "tool_overrides must be a list or null."}), 400
+
+    next_parameter_overrides = None
+    if parameter_overrides_provided:
         try:
-            active_document = find_latest_canvas_document(
-                messages, document_id=document_id, document_path=document_path
-            )
-            if not active_document:
-                return jsonify({"error": "Canvas document not found."}), 404
-
-            # always_expanded-only update: patch the document in-place without a full rewrite
-            if (
-                always_expanded is not None
-                and content is None
-                and title is None
-                and format_name is None
-                and language is None
-            ):
-                patched_doc = dict(active_document)
-                # Set explicitly so normalize_canvas_document sees the key and applies the elif branch
-                patched_doc["always_expanded"] = always_expanded
-                patched_doc = normalize_canvas_document(patched_doc)
-                if not patched_doc:
-                    return jsonify({"error": "Canvas document normalisation failed."}), 400
-                next_documents = [patched_doc if d.get("id") == patched_doc["id"] else d for d in current_documents]
-                result = patched_doc
-            else:
-                result = rewrite_canvas_document(
-                    runtime_state,
-                    content=active_document.get("content") if content is None else str(content),
-                    document_id=document_id,
-                    document_path=document_path,
-                    title=title,
-                    format_name=format_name,
-                    language_name=language,
-                )
-                if always_expanded is not None:
-                    result["always_expanded"] = always_expanded
-                    result = normalize_canvas_document(result) or result
-                next_documents = get_canvas_runtime_documents(runtime_state)
-                # Propagate always_expanded change into the runtime documents list too
-                if always_expanded is not None:
-                    next_documents = [
-                        {**d, "always_expanded": always_expanded} if d.get("id") == result.get("id") else d
-                        for d in next_documents
-                    ]
+            normalized_parameter_overrides = normalize_chat_parameter_overrides(data.get("parameter_overrides"))
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
-
-        active_document_id_out = (
-            result.get("id")
-            or get_canvas_runtime_active_document_id(runtime_state)
-            or latest_canvas_state.get("active_document_id")
-        )
-        metadata = serialize_message_metadata(
-            {
-                "canvas_documents": next_documents,
-                "active_document_id": active_document_id_out,
-                "canvas_viewports": runtime_state.get("viewports")
-                if isinstance(runtime_state.get("viewports"), dict)
-                else {},
-                "canvas_cleared": not next_documents,
-            }
+        next_parameter_overrides = (
+            json.dumps(normalized_parameter_overrides, ensure_ascii=False)
+            if normalized_parameter_overrides
+            else None
         )
 
-        with get_db() as conn:
-            insert_message(
-                conn,
-                conv_id,
-                "tool",
-                "",
-                metadata=metadata,
-            )
-            conn.execute(
-                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-                (conv_id,),
-            )
-
-        if RAG_ENABLED:
-            sync_conversations_to_rag_safe(conversation_id=conv_id)
-
-        _, updated_messages = _load_conversation_payload(conv_id)
-        return jsonify(
-            {
-                "document": result,
-                "documents": next_documents,
-                "active_document_id": active_document_id_out,
-                "messages": updated_messages,
-            }
-        )
-
-    @app.route("/api/messages/<int:message_id>", methods=["PATCH"])
-    def update_conversation_message(message_id):
-        data = request.get_json(silent=True) or {}
-        if "content" not in data:
-            return jsonify({"error": "content is required."}), 400
-
-        conversation_id_raw = data.get("conversation_id")
-        conversation_id = None
-        if conversation_id_raw not in (None, ""):
-            try:
-                conversation_id = int(conversation_id_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "conversation_id must be an integer."}), 400
-
-        normalized_content = str(data.get("content") or "").replace("\r\n", "\n")
-
-        with get_db() as conn:
-            row = conn.execute(
-                """SELECT id, conversation_id, role, content, metadata, tool_calls, tool_call_id,
-                          prompt_tokens, completion_tokens, total_tokens, deleted_at
-                   FROM messages WHERE id = ?""",
-                (message_id,),
-            ).fetchone()
-            if not row or row["deleted_at"] is not None:
-                return jsonify({"error": "Message not found."}), 404
-
-            row_conversation_id = int(row["conversation_id"] or 0)
-            if conversation_id is not None and row_conversation_id != conversation_id:
-                return jsonify({"error": "Message does not belong to the provided conversation."}), 400
-
-            role = str(row["role"] or "").strip()
-            if role not in {"user", "assistant"}:
-                return jsonify({"error": "Only user and assistant messages can be edited."}), 400
-
-            if role == "assistant" and parse_message_tool_calls(row["tool_calls"]):
-                return jsonify({"error": "Assistant tool-call messages cannot be edited."}), 400
-
-            metadata = parse_message_metadata(row["metadata"])
-            updated_metadata = metadata
-            if role == "user":
-                metadata_payload = data.get("metadata") if "metadata" in data else metadata
-                updated_metadata = sanitize_edited_user_message_metadata(metadata_payload)
-
-            if not normalized_content.strip() and (role != "user" or not updated_metadata):
-                return jsonify({"error": "Message content cannot be empty."}), 400
-
-            conn.execute(
-                "UPDATE messages SET content = ?, metadata = ? WHERE id = ?",
-                (normalized_content, serialize_message_metadata(updated_metadata), message_id),
-            )
-            conn.execute(
-                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-                (row_conversation_id,),
-            )
-            updated_row = conn.execute(
-                """SELECT id, position, role, content, metadata, tool_calls, tool_call_id,
-                          prompt_tokens, completion_tokens, total_tokens, created_at, deleted_at
-                   FROM messages WHERE id = ?""",
-                (message_id,),
-            ).fetchone()
-
-        if RAG_ENABLED:
-            sync_conversations_to_rag_safe(conversation_id=row_conversation_id)
-
-        return jsonify({"updated": True, "message": message_row_to_dict(updated_row)})
-
-    @app.route("/api/messages/<int:message_id>", methods=["DELETE"])
-    def delete_conversation_message(message_id):
-        data = request.get_json(silent=True) or {}
-        conversation_id_raw = data.get("conversation_id")
-        conversation_id = None
-        if conversation_id_raw not in (None, ""):
-            try:
-                conversation_id = int(conversation_id_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "conversation_id must be an integer."}), 400
-
-        with get_db() as conn:
-            row = conn.execute(
-                """SELECT id, conversation_id, role, tool_calls, deleted_at
-                   FROM messages WHERE id = ?""",
-                (message_id,),
-            ).fetchone()
-            if not row or row["deleted_at"] is not None:
-                return jsonify({"error": "Message not found."}), 404
-
-            row_conversation_id = int(row["conversation_id"] or 0)
-            if conversation_id is not None and row_conversation_id != conversation_id:
-                return jsonify({"error": "Message does not belong to the provided conversation."}), 400
-
-            role = str(row["role"] or "").strip()
-            if role not in {"user", "assistant"}:
-                return jsonify({"error": "Only user and assistant messages can be deleted."}), 400
-
-            if role == "assistant" and parse_message_tool_calls(row["tool_calls"]):
-                return jsonify({"error": "Assistant tool-call messages cannot be deleted."}), 400
-
-        branch_cleanup = rollback_conversation_branch(
-            row_conversation_id,
-            message_id,
-            include_anchor=True,
-        )
-
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-                (row_conversation_id,),
-            )
-
-        if RAG_ENABLED:
-            sync_conversations_to_rag_safe(conversation_id=row_conversation_id, force=True)
-
-        _, updated_messages = _load_conversation_payload(row_conversation_id)
-        return jsonify(
-            {
-                "deleted": True,
-                "message_id": message_id,
-                "conversation_id": row_conversation_id,
-                "deleted_message_ids": branch_cleanup.get("deleted_message_ids") or [message_id],
-                "messages": updated_messages,
-            }
-        )
-
-    @app.route("/api/conversations/<int:conv_id>", methods=["DELETE"])
-    def delete_conversation(conv_id):
-        with get_db() as conn:
-            conversation = conn.execute("SELECT id FROM conversations WHERE id = ?", (conv_id,)).fetchone()
-            if not conversation:
-                return jsonify({"error": "Not found."}), 404
-
-        revert_conversation_state_mutations(conv_id)
-        try:
-            purge_conversation_rag_sources(conv_id, include_archived=True)
-        except Exception:
-            current_app.logger.exception("Conversation RAG cleanup failed for conversation_id=%s", conv_id)
-        delete_conversation_image_assets(conv_id)
-        delete_conversation_file_assets(conv_id)
-        delete_conversation_video_assets(conv_id)
-        with get_db() as conn:
-            conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
-        return "", 204
-
-    @app.route("/api/conversations/<int:conv_id>", methods=["PATCH"])
-    def update_conversation(conv_id):
-        data = request.get_json(silent=True) or {}
-        title_provided = "title" in data
-        persona_provided = "persona_id" in data
-        tool_overrides_provided = "tool_overrides" in data
-        parameter_overrides_provided = "parameter_overrides" in data
-        if (
-            not title_provided
-            and not persona_provided
-            and not tool_overrides_provided
-            and not parameter_overrides_provided
-        ):
-            return jsonify({"error": "Provide title, persona_id, tool_overrides, and/or parameter_overrides."}), 400
-
-        title = None
-        if title_provided:
-            title = (data.get("title") or "").strip()[:120]
-            if not title:
-                return jsonify({"error": "Title required."}), 400
-
-        raw_persona_id = data.get("persona_id") if persona_provided else None
-        persona_id = _parse_optional_int(raw_persona_id) if persona_provided else None
-        if persona_provided and raw_persona_id not in (None, "") and persona_id is None:
-            return jsonify({"error": "persona_id must be an integer or empty."}), 400
-        if persona_provided and persona_id is not None and get_persona(persona_id) is None:
-            return jsonify({"error": "Persona not found."}), 400
-
-        next_tool_overrides = None
-        if tool_overrides_provided:
-            raw_tool_overrides = data.get("tool_overrides")
-            if raw_tool_overrides is None:
-                next_tool_overrides = None
-            elif isinstance(raw_tool_overrides, list):
-                normalized = normalize_active_tool_names(raw_tool_overrides)
-                next_tool_overrides = json.dumps(normalized) if normalized else None
-            else:
-                return jsonify({"error": "tool_overrides must be a list or null."}), 400
-
-        next_parameter_overrides = None
-        if parameter_overrides_provided:
-            try:
-                normalized_parameter_overrides = normalize_chat_parameter_overrides(data.get("parameter_overrides"))
-            except ValueError as exc:
-                return jsonify({"error": str(exc)}), 400
-            next_parameter_overrides = (
-                json.dumps(normalized_parameter_overrides, ensure_ascii=False)
-                if normalized_parameter_overrides
-                else None
-            )
-
-        with get_db() as conn:
-            conversation = conn.execute(
-                "SELECT id, title, title_source, title_overridden, persona_id, tool_overrides, parameter_overrides FROM conversations WHERE id = ?",
-                (conv_id,),
-            ).fetchone()
-            if not conversation:
-                return jsonify({"error": "Not found."}), 404
-
-            next_persona_id = persona_id if persona_provided else conversation["persona_id"]
-
-            if title_provided:
-                next_title = title
-                next_title_source = TITLE_SOURCE_MANUAL
-                next_title_overridden = 1
-            else:
-                next_title = str(conversation["title"] or "New Chat").strip() or "New Chat"
-                next_title_source = normalize_title_source(conversation["title_source"])
-                next_title_overridden = int(conversation["title_overridden"] or 0)
-
-                if persona_provided and next_title_overridden == 0:
-                    if next_persona_id is not None:
-                        persona = get_persona(next_persona_id)
-                        persona_name = str((persona or {}).get("name") or "").strip()[:120]
-                        if persona_name:
-                            next_title = persona_name
-                            next_title_source = TITLE_SOURCE_PERSONA
-                    elif next_title_source == TITLE_SOURCE_PERSONA:
-                        next_title = "New Chat"
-                        next_title_source = TITLE_SOURCE_SYSTEM
-
-            conn.execute(
-                """
-                UPDATE conversations
-                   SET title = ?,
-                       title_source = ?,
-                       title_overridden = ?,
-                       persona_id = ?,
-                       updated_at = datetime('now')
-                 WHERE id = ?
-                """,
-                (next_title, next_title_source, next_title_overridden, next_persona_id, conv_id),
-            )
-            if tool_overrides_provided:
-                conn.execute(
-                    "UPDATE conversations SET tool_overrides = ? WHERE id = ?",
-                    (next_tool_overrides, conv_id),
-                )
-            if parameter_overrides_provided:
-                conn.execute(
-                    "UPDATE conversations SET parameter_overrides = ? WHERE id = ?",
-                    (next_parameter_overrides, conv_id),
-                )
-        if RAG_ENABLED:
-            sync_conversations_to_rag_safe(conversation_id=conv_id)
-        response_tool_overrides = None
-        if tool_overrides_provided:
-            response_tool_overrides = next_tool_overrides
-            if response_tool_overrides:
-                try:
-                    response_tool_overrides = json.loads(response_tool_overrides)
-                except Exception:
-                    response_tool_overrides = None
-        response_parameter_overrides = None
-        if parameter_overrides_provided:
-            response_parameter_overrides = _deserialize_parameter_overrides(next_parameter_overrides)
-        return jsonify(
-            {
-                "id": conv_id,
-                "title": next_title,
-                "title_source": next_title_source,
-                "title_overridden": bool(next_title_overridden),
-                "persona_id": int(next_persona_id) if next_persona_id is not None else None,
-                "tool_overrides": response_tool_overrides,
-                "parameter_overrides": response_parameter_overrides,
-            }
-        )
-
-    @app.route("/api/rag/documents", methods=["GET"])
-    def list_rag_documents():
-        if not RAG_ENABLED:
-            return jsonify({"error": RAG_DISABLED_FEATURE_ERROR}), 410
-        try:
-            return jsonify(list_rag_documents_db())
-        except Exception as exc:
-            LOGGER.exception("Failed to list RAG documents: %s", exc)
-            return jsonify({"error": "Failed to retrieve RAG documents. The vector store may be temporarily unavailable."}), 503
-
-    @app.route("/api/rag/search", methods=["GET"])
-    def rag_search():
-        if not RAG_ENABLED:
-            return jsonify({"error": RAG_DISABLED_FEATURE_ERROR}), 410
-        query = (request.args.get("q") or "").strip()
-        category = (request.args.get("category") or "").strip() or None
-        raw_source_types = request.args.getlist("source_type") or request.args.get("source_types")
-        metadata_filter_keys = (
-            "workspace_id",
-            "project_id",
-            "document_id",
-            "document_path",
-            "section_id",
-            "section_title",
-        )
-        metadata_filters: dict[str, list[str]] = {}
-        for key in metadata_filter_keys:
-            values = _parse_rag_metadata_filter_value(request.args.getlist(key) or request.args.get(key))
-            if values:
-                metadata_filters[key] = values
-        metadata_filter_mode, invalid_metadata_filter_mode = _parse_rag_metadata_filter_mode(
-            request.args.get("metadata_filter_mode") or request.args.get("filter_mode")
-        )
-        if invalid_metadata_filter_mode:
-            return jsonify({"error": "metadata_filter_mode must be either 'and' or 'or'."}), 400
-        try:
-            top_k = int(request.args.get("top_k") or RAG_SEARCH_DEFAULT_TOP_K)
-        except (TypeError, ValueError):
-            top_k = RAG_SEARCH_DEFAULT_TOP_K
-        top_k = max(1, min(100, top_k))
-        try:
-            min_similarity = request.args.get("min_similarity")
-            min_similarity = float(min_similarity) if min_similarity not in (None, "") else None
-        except (TypeError, ValueError):
-            return jsonify({"error": "min_similarity must be a number between 0.0 and 1.0."}), 400
-        if min_similarity is not None and not (0.0 <= min_similarity <= 1.0):
-            return jsonify({"error": "min_similarity must be a number between 0.0 and 1.0."}), 400
-
-        selected_source_types, invalid_source_types = _parse_rag_source_type_filter(raw_source_types)
-        if invalid_source_types:
-            return jsonify({"error": "source_types contains unsupported source types."}), 400
-
-        allowed_source_types = selected_source_types
-        if raw_source_types is None:
-            allowed_source_types = get_rag_source_types()
-
-        try:
-            return jsonify(
-                search_knowledge_base_tool(
-                    query,
-                    category=category,
-                    top_k=top_k,
-                    allowed_source_types=allowed_source_types,
-                    min_similarity=min_similarity,
-                    metadata_filters=metadata_filters or None,
-                    metadata_filter_mode=metadata_filter_mode,
-                )
-            )
-        except Exception:
-            current_app.logger.exception("Knowledge base search failed for query=%s", query)
-            return jsonify({"error": "Knowledge base search failed."}), 500
-
-    @app.route("/api/rag/ingest", methods=["POST"])
-    def ingest_rag_document():
-        if not RAG_ENABLED:
-            return jsonify({"error": RAG_DISABLED_FEATURE_ERROR}), 410
-
-        source_name = ""
-        description = ""
-        auto_inject_enabled = True
-        text = ""
-        filename = "uploaded.txt"
-        mime_type = "text/plain"
-
-        try:
-            if request.mimetype and request.mimetype.startswith("multipart/form-data"):
-                uploaded_document = request.files.get("document")
-                source_name = str(request.form.get("source_name") or "").strip()
-                description = str(request.form.get("description") or "").strip()
-                auto_inject_enabled = _parse_truthy_form_value(
-                    request.form.get("auto_inject_enabled"),
-                    default=True,
-                )
-                raw_text = request.form.get("text")
-
-                if uploaded_document and getattr(uploaded_document, "filename", ""):
-                    filename, mime_type, doc_bytes = read_uploaded_document(uploaded_document)
-                    text = extract_document_text(doc_bytes, mime_type)
-                else:
-                    text = str(raw_text or "")
-                    filename = (
-                        os.path.basename(str(request.form.get("filename") or "uploaded.txt").strip()) or "uploaded.txt"
-                    )
-                    mime_type = "text/plain"
-            else:
-                data = request.get_json(silent=True) or {}
-                source_name = str(data.get("source_name") or "").strip()
-                description = str(data.get("description") or "").strip()
-                auto_inject_enabled = _parse_truthy_form_value(data.get("auto_inject_enabled"), default=True)
-                text = str(data.get("text") or "")
-                filename = os.path.basename(str(data.get("filename") or "uploaded.txt").strip()) or "uploaded.txt"
-                mime_type = str(data.get("mime_type") or "text/plain").strip() or "text/plain"
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
-
-        if not text.strip():
-            return jsonify({"error": "Provide a document upload or non-empty text."}), 400
-
-        try:
-            document = ingest_uploaded_rag_document(
-                filename,
-                text,
-                source_name=source_name or None,
-                description=description,
-                auto_inject_enabled=auto_inject_enabled,
-            )
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
-        except Exception:
-            current_app.logger.exception("RAG document ingestion failed for filename=%s", filename)
-            return jsonify({"error": "Document ingestion failed."}), 500
-
-        return jsonify(
-            {
-                "document": document,
-                "file_name": filename,
-                "mime_type": mime_type,
-                "text_length": len(text),
-            }
-        ), 201
-
-    @app.route("/api/rag/upload-metadata", methods=["POST"])
-    def suggest_rag_upload_metadata():
-        if not RAG_ENABLED:
-            return jsonify({"error": RAG_DISABLED_FEATURE_ERROR}), 410
-
-        try:
-            uploaded_document = request.files.get("document")
-            if not uploaded_document or not getattr(uploaded_document, "filename", ""):
-                return jsonify({"error": "Choose a document to analyze."}), 400
-
-            source_name = str(request.form.get("source_name") or "").strip()
-            description = str(request.form.get("description") or "").strip()
-            filename, mime_type, doc_bytes = read_uploaded_document(uploaded_document)
-            text = extract_document_text(doc_bytes, mime_type)
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
-
-        suggestion = _generate_upload_metadata_suggestion(
-            filename,
-            mime_type,
-            text,
-            source_name=source_name,
-            description=description,
-        )
-        return jsonify(suggestion)
-
-    @app.route("/api/rag/sync-conversations", methods=["POST"])
-    def sync_rag_conversations():
-        if not RAG_ENABLED:
-            return jsonify({"error": RAG_DISABLED_FEATURE_ERROR}), 410
-        data = request.get_json(silent=True) or {}
-        raw_conversation_id = data.get("conversation_id")
-
-        try:
-            conversation_id = int(raw_conversation_id) if raw_conversation_id not in (None, "", "all") else None
-        except (TypeError, ValueError):
-            return jsonify({"error": "conversation_id must be an integer or 'all'."}), 400
-
-        try:
-            ensure_supported_rag_sources(force=True)
-            synced = sync_conversations_to_rag(conversation_id=conversation_id, force=True)
-        except Exception:
-            current_app.logger.exception("Conversation-to-RAG sync failed for conversation_id=%s", conversation_id)
-            return jsonify({"error": "Conversation sync failed."}), 500
-
-        return jsonify({"count": len(synced), "documents": synced})
-
-    @app.route("/api/rag/documents/<source_key>", methods=["DELETE"])
-    def delete_rag_document(source_key):
-        if not RAG_ENABLED:
-            return jsonify({"error": RAG_DISABLED_FEATURE_ERROR}), 410
-        row = get_rag_document_record(source_key)
-        if not row:
+    with get_db() as conn:
+        conversation = conn.execute(
+            "SELECT id, title, title_source, title_overridden, persona_id, tool_overrides, parameter_overrides FROM conversations WHERE id = ?",
+            (conv_id,),
+        ).fetchone()
+        if not conversation:
             return jsonify({"error": "Not found."}), 404
 
-        try:
-            deleted_chunks = rag_delete_source(source_key)
-        except Exception:
-            current_app.logger.exception("RAG source deletion failed for source_key=%s", source_key)
-            return jsonify({"error": "Knowledge base deletion failed."}), 500
+        next_persona_id = persona_id if persona_provided else conversation["persona_id"]
 
-        delete_rag_document_record(source_key)
-        return jsonify(
-            {
-                "source_key": source_key,
-                "source_name": row["source_name"],
-                "deleted_chunks": deleted_chunks,
-            }
+        if title_provided:
+            next_title = title
+            next_title_source = TITLE_SOURCE_MANUAL
+            next_title_overridden = 1
+        else:
+            next_title = str(conversation["title"] or "New Chat").strip() or "New Chat"
+            next_title_source = normalize_title_source(conversation["title_source"])
+            next_title_overridden = int(conversation["title_overridden"] or 0)
+
+            if persona_provided and next_title_overridden == 0:
+                if next_persona_id is not None:
+                    persona = get_persona(next_persona_id)
+                    persona_name = str((persona or {}).get("name") or "").strip()[:120]
+                    if persona_name:
+                        next_title = persona_name
+                        next_title_source = TITLE_SOURCE_PERSONA
+                elif next_title_source == TITLE_SOURCE_PERSONA:
+                    next_title = "New Chat"
+                    next_title_source = TITLE_SOURCE_SYSTEM
+
+        conn.execute(
+            """
+            UPDATE conversations
+               SET title = ?,
+                   title_source = ?,
+                   title_overridden = ?,
+                   persona_id = ?,
+                   updated_at = datetime('now')
+             WHERE id = ?
+            """,
+            (next_title, next_title_source, next_title_overridden, next_persona_id, conv_id),
         )
+        if tool_overrides_provided:
+            conn.execute(
+                "UPDATE conversations SET tool_overrides = ? WHERE id = ?",
+                (next_tool_overrides, conv_id),
+            )
+        if parameter_overrides_provided:
+            conn.execute(
+                "UPDATE conversations SET parameter_overrides = ? WHERE id = ?",
+                (next_parameter_overrides, conv_id),
+            )
+    if get_runtime_setting("RAG_ENABLED"):
+        sync_conversations_to_rag_safe(conversation_id=conv_id)
+    response_tool_overrides = None
+    if tool_overrides_provided:
+        response_tool_overrides = next_tool_overrides
+        if response_tool_overrides:
+            try:
+                response_tool_overrides = json.loads(response_tool_overrides)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                response_tool_overrides = None
+    response_parameter_overrides = None
+    if parameter_overrides_provided:
+        response_parameter_overrides = _deserialize_parameter_overrides(next_parameter_overrides)
+    return jsonify(
+        {
+            "id": conv_id,
+            "title": next_title,
+            "title_source": next_title_source,
+            "title_overridden": bool(next_title_overridden),
+            "persona_id": int(next_persona_id) if next_persona_id is not None else None,
+            "tool_overrides": response_tool_overrides,
+            "parameter_overrides": response_parameter_overrides,
+        }
+    )
+
+
+def list_rag_documents():
+    if not get_runtime_setting("RAG_ENABLED"):
+        return jsonify({"error": RAG_DISABLED_FEATURE_ERROR}), 410
+    try:
+        return jsonify(list_rag_documents_db())
+    except Exception as exc:
+        LOGGER.exception("Failed to list RAG documents: %s", exc)
+        return jsonify({"error": "Failed to retrieve RAG documents. The vector store may be temporarily unavailable."}), 503
+
+
+def rag_search():
+    if not get_runtime_setting("RAG_ENABLED"):
+        return jsonify({"error": RAG_DISABLED_FEATURE_ERROR}), 410
+    query = (request.args.get("q") or "").strip()
+    category = (request.args.get("category") or "").strip() or None
+    raw_source_types = request.args.getlist("source_type") or request.args.get("source_types")
+    metadata_filter_keys = (
+        "workspace_id",
+        "project_id",
+        "document_id",
+        "document_path",
+        "section_id",
+        "section_title",
+    )
+    metadata_filters: dict[str, list[str]] = {}
+    for key in metadata_filter_keys:
+        values = _parse_rag_metadata_filter_value(request.args.getlist(key) or request.args.get(key))
+        if values:
+            metadata_filters[key] = values
+    metadata_filter_mode, invalid_metadata_filter_mode = _parse_rag_metadata_filter_mode(
+        request.args.get("metadata_filter_mode") or request.args.get("filter_mode")
+    )
+    if invalid_metadata_filter_mode:
+        return jsonify({"error": "metadata_filter_mode must be either 'and' or 'or'."}), 400
+    try:
+        top_k = int(request.args.get("top_k") or get_runtime_setting("RAG_SEARCH_DEFAULT_TOP_K"))
+    except (TypeError, ValueError):
+        top_k = get_runtime_setting("RAG_SEARCH_DEFAULT_TOP_K")
+    top_k = max(1, min(100, top_k))
+    try:
+        min_similarity = request.args.get("min_similarity")
+        min_similarity = float(min_similarity) if min_similarity not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "min_similarity must be a number between 0.0 and 1.0."}), 400
+    if min_similarity is not None and not (0.0 <= min_similarity <= 1.0):
+        return jsonify({"error": "min_similarity must be a number between 0.0 and 1.0."}), 400
+
+    selected_source_types, invalid_source_types = _parse_rag_source_type_filter(raw_source_types)
+    if invalid_source_types:
+        return jsonify({"error": "source_types contains unsupported source types."}), 400
+
+    allowed_source_types = selected_source_types
+    if raw_source_types is None:
+        allowed_source_types = get_rag_source_types()
+
+    try:
+        return jsonify(
+            search_knowledge_base_tool(
+                query,
+                category=category,
+                top_k=top_k,
+                allowed_source_types=allowed_source_types,
+                min_similarity=min_similarity,
+                metadata_filters=metadata_filters or None,
+                metadata_filter_mode=metadata_filter_mode,
+            )
+        )
+    except Exception:
+        current_app.logger.exception("Knowledge base search failed for query=%s", query)
+        return jsonify({"error": "Knowledge base search failed."}), 500
+
+
+def ingest_rag_document():
+    if not get_runtime_setting("RAG_ENABLED"):
+        return jsonify({"error": RAG_DISABLED_FEATURE_ERROR}), 410
+
+    source_name = ""
+    description = ""
+    auto_inject_enabled = True
+    text = ""
+    filename = "uploaded.txt"
+    mime_type = "text/plain"
+
+    try:
+        if request.mimetype and request.mimetype.startswith("multipart/form-data"):
+            uploaded_document = request.files.get("document")
+            source_name = str(request.form.get("source_name") or "").strip()
+            description = str(request.form.get("description") or "").strip()
+            auto_inject_enabled = _parse_truthy_form_value(
+                request.form.get("auto_inject_enabled"),
+                default=True,
+            )
+            raw_text = request.form.get("text")
+
+            if uploaded_document and getattr(uploaded_document, "filename", ""):
+                filename, mime_type, doc_bytes = read_uploaded_document(uploaded_document)
+                text = extract_document_text(doc_bytes, mime_type)
+            else:
+                text = str(raw_text or "")
+                filename = (
+                    os.path.basename(str(request.form.get("filename") or "uploaded.txt").strip()) or "uploaded.txt"
+                )
+                mime_type = "text/plain"
+        else:
+            data = request.get_json(silent=True) or {}
+            source_name = str(data.get("source_name") or "").strip()
+            description = str(data.get("description") or "").strip()
+            auto_inject_enabled = _parse_truthy_form_value(data.get("auto_inject_enabled"), default=True)
+            text = str(data.get("text") or "")
+            filename = os.path.basename(str(data.get("filename") or "uploaded.txt").strip()) or "uploaded.txt"
+            mime_type = str(data.get("mime_type") or "text/plain").strip() or "text/plain"
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    if not text.strip():
+        return jsonify({"error": "Provide a document upload or non-empty text."}), 400
+
+    try:
+        document = ingest_uploaded_rag_document(
+            filename,
+            text,
+            source_name=source_name or None,
+            description=description,
+            auto_inject_enabled=auto_inject_enabled,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        current_app.logger.exception("RAG document ingestion failed for filename=%s", filename)
+        return jsonify({"error": "Document ingestion failed."}), 500
+
+    return jsonify(
+        {
+            "document": document,
+            "file_name": filename,
+            "mime_type": mime_type,
+            "text_length": len(text),
+        }
+    ), 201
+
+
+def suggest_rag_upload_metadata():
+    if not get_runtime_setting("RAG_ENABLED"):
+        return jsonify({"error": RAG_DISABLED_FEATURE_ERROR}), 410
+
+    try:
+        uploaded_document = request.files.get("document")
+        if not uploaded_document or not getattr(uploaded_document, "filename", ""):
+            return jsonify({"error": "Choose a document to analyze."}), 400
+
+        source_name = str(request.form.get("source_name") or "").strip()
+        description = str(request.form.get("description") or "").strip()
+        filename, mime_type, doc_bytes = read_uploaded_document(uploaded_document)
+        text = extract_document_text(doc_bytes, mime_type)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    suggestion = _generate_upload_metadata_suggestion(
+        filename,
+        mime_type,
+        text,
+        source_name=source_name,
+        description=description,
+    )
+    return jsonify(suggestion)
+
+
+def sync_rag_conversations():
+    if not get_runtime_setting("RAG_ENABLED"):
+        return jsonify({"error": RAG_DISABLED_FEATURE_ERROR}), 410
+    data = request.get_json(silent=True) or {}
+    raw_conversation_id = data.get("conversation_id")
+
+    try:
+        conversation_id = int(raw_conversation_id) if raw_conversation_id not in (None, "", "all") else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "conversation_id must be an integer or 'all'."}), 400
+
+    try:
+        ensure_supported_rag_sources(force=True)
+        synced = sync_conversations_to_rag(conversation_id=conversation_id, force=True)
+    except Exception:
+        current_app.logger.exception("Conversation-to-RAG sync failed for conversation_id=%s", conversation_id)
+        return jsonify({"error": "Conversation sync failed."}), 500
+
+    return jsonify({"count": len(synced), "documents": synced})
+
+
+def delete_rag_document(source_key):
+    if not get_runtime_setting("RAG_ENABLED"):
+        return jsonify({"error": RAG_DISABLED_FEATURE_ERROR}), 410
+    row = get_rag_document_record(source_key)
+    if not row:
+        return jsonify({"error": "Not found."}), 404
+
+    try:
+        deleted_chunks = rag_delete_source(source_key)
+    except Exception:
+        current_app.logger.exception("RAG source deletion failed for source_key=%s", source_key)
+        return jsonify({"error": "Knowledge base deletion failed."}), 500
+
+    delete_rag_document_record(source_key)
+    return jsonify(
+        {
+            "source_key": source_key,
+            "source_name": row["source_name"],
+            "deleted_chunks": deleted_chunks,
+        }
+    )
+
+
+def register_conversation_routes(app) -> None:
+    app.route("/api/conversations", methods=["GET"])(list_conversations)
+    app.route("/api/personas", methods=["GET"])(list_personas_route)
+    app.route("/api/personas", methods=["POST"])(create_persona_route)
+    app.route("/api/personas/<int:persona_id>", methods=["PATCH"])(update_persona_route)
+    app.route("/api/personas/<int:persona_id>", methods=["DELETE"])(delete_persona_route)
+    app.route("/api/personas/<int:persona_id>/memory", methods=["GET"])(list_persona_memory_route)
+    app.route("/api/personas/<int:persona_id>/memory", methods=["POST"])(create_persona_memory_route)
+    app.route("/api/personas/<int:persona_id>/memory/<int:entry_id>", methods=["PATCH"])(update_persona_memory_route)
+    app.route("/api/personas/<int:persona_id>/memory/<int:entry_id>", methods=["DELETE"])(delete_persona_memory_route)
+    app.route("/api/conversations", methods=["POST"])(create_conversation)
+    app.route("/api/conversations/<int:conv_id>", methods=["GET"])(get_conversation)
+    app.route("/api/conversations/<int:conv_id>/memory", methods=["POST"])(create_conversation_memory_entry)
+    app.route("/api/conversations/<int:conv_id>/memory/<int:entry_id>", methods=["PATCH"])(update_conversation_memory)
+    app.route("/api/conversations/<int:conv_id>/memory/<int:entry_id>", methods=["DELETE"])(delete_conversation_memory)
+    app.route("/api/conversations/<int:conv_id>/export", methods=["GET", "POST"])(export_conversation)
+    app.route("/api/conversations/<int:conv_id>/canvas/export", methods=["GET"])(export_canvas_document)
+    app.route("/api/conversations/<int:conv_id>/images/<image_id>", methods=["GET"])(get_conversation_image_asset)
+    app.route("/api/conversations/<int:conv_id>/canvas", methods=["DELETE"])(delete_canvas)
+    app.route("/api/conversations/<int:conv_id>/canvas", methods=["POST"])(create_canvas)
+    app.route("/api/conversations/<int:conv_id>/canvas", methods=["PATCH"])(update_canvas)
+    app.route("/api/messages/<int:message_id>", methods=["PATCH"])(update_conversation_message)
+    app.route("/api/messages/<int:message_id>", methods=["DELETE"])(delete_conversation_message)
+    app.route("/api/conversations/<int:conv_id>", methods=["DELETE"])(delete_conversation)
+    app.route("/api/conversations/<int:conv_id>", methods=["PATCH"])(update_conversation)
+    app.route("/api/rag/documents", methods=["GET"])(list_rag_documents)
+    app.route("/api/rag/search", methods=["GET"])(rag_search)
+    app.route("/api/rag/ingest", methods=["POST"])(ingest_rag_document)
+    app.route("/api/rag/upload-metadata", methods=["POST"])(suggest_rag_upload_metadata)
+    app.route("/api/rag/sync-conversations", methods=["POST"])(sync_rag_conversations)
+    app.route("/api/rag/documents/<source_key>", methods=["DELETE"])(delete_rag_document)

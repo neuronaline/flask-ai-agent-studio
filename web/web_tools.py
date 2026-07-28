@@ -4,7 +4,6 @@ import hashlib
 import httpx
 import ipaddress
 import json
-import logging
 import os
 import re
 import socket
@@ -17,6 +16,7 @@ from core.config import (
     SEARCH_MAX_RESULTS,
 )
 from core.db import cache_get, cache_set, get_fetch_html_converter_mode, get_search_tool_query_limit as load_search_tool_query_limit
+from utils.logging_config import get_logger
 import contextlib as _contextlib
 
 
@@ -93,7 +93,7 @@ _GN_LANG = {
 }
 _THIN_CONTENT_MIN_CHARS = 80
 _ZERO_WIDTH_TRANSLATION = dict.fromkeys(map(ord, "\u200b\u200c\u200d\ufeff"), None)
-LOGGER = logging.getLogger(__name__)
+LOGGER = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
