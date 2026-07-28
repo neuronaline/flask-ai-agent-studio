@@ -36,13 +36,14 @@ pdfplumber>=0.11                # PDF text extraction (document ingestion)
 # Search uses Bright Data SERP. URL extraction uses PageFetch exclusively.
 pagefetch @ git+https://github.com/neuronaline/pagefetch.git@master
 # ---------------------------------------------------------------------------
-# Optional: RAG / Vector Search (knowledge base + semantic memory)
-# Uncomment to enable ChromaDB-based retrieval-augmented generation.
-# Requires sentence-transformers and torch (heavy dependencies).
+# RAG / Vector Search (knowledge base + semantic memory)
+# ChromaDB-based retrieval-augmented generation.
+# These are heavier dependencies (sentence-transformers + torch ~800MB).
+# If you don't need RAG, comment them out and set RAG_ENABLED=False in .env.
 # ---------------------------------------------------------------------------
-# chromadb>=0.5
-# sentence-transformers>=3.0
-# torch>=2.3
+chromadb>=0.5
+sentence-transformers>=3.0
+torch>=2.3
 
 # ---------------------------------------------------------------------------
 # Optional: Local OCR (PaddleOCR engine for image text extraction)

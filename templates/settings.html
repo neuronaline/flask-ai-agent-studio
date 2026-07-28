@@ -736,10 +736,20 @@
                       <input type="checkbox" id="rag-auto-inject-enabled-toggle" />
                       <span>Enable automatic RAG injection</span>
                     </label>
+                    <p class="settings-copy" style="margin-top:0.5rem">
+                      The <strong>current conversation is always excluded</strong> from auto-injected context
+                      — the assistant will never see its own messages from this conversation injected as RAG context.
+                      Only <strong>past conversations, tool outputs, and uploaded documents</strong> may appear.
+                    </p>
                   </div>
 
                   <div class="rag-setting-group rag-setting-group--full">
                     <div class="settings-label">RAG source pools</div>
+                    <p class="settings-copy" style="margin-bottom:0.75rem">
+                      <strong>Search</strong> = available to the assistant's <code>search_knowledge_base</code> tool.
+                      <strong>Auto inject</strong> = automatically inserted into every prompt as context.
+                      A source can be both, either, or neither.
+                    </p>
                     <div class="rag-source-matrix" role="group" aria-label="RAG source pool controls">
                       <div class="rag-source-matrix__row">
                         <div class="rag-source-matrix__source">

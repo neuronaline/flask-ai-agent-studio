@@ -149,15 +149,17 @@ def _normalize_allowed_source_types(
     None (no restrictions) rather than an empty set, which means "no configured
     source types" is treated as "all source types are allowed".
 
-    When allowed_source_types is a non-None iterable that normalizes to no
-    supported types, returns None so the caller does not inadvertently filter
-    out all results.
+    When allowed_source_types is an empty iterable (e.g., user unchecked all
+    sources in settings), returns an empty set so the caller treats it as
+    "deny all" — nothing matches.
     """
     if allowed_source_types is None:
         allowed = set(get_rag_source_types())
         if not allowed:
             return None  # No configured source types → no restrictions (allow all)
         return allowed
+    if isinstance(allowed_source_types, (set, list, tuple)) and len(allowed_source_types) == 0:
+        return set()  # Explicitly empty → deny all
     normalized = {
         normalize_category(value)
         for value in allowed_source_types

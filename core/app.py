@@ -25,10 +25,18 @@ LOGGER = get_logger(__name__)
 def _sync_rag_on_startup() -> None:
     if not config.get_runtime_setting("RAG_ENABLED"):
         return
-    from services.rag_service import sync_conversations_to_rag_safe
+    try:
+        from services.rag_service import sync_conversations_to_rag_safe
 
-    LOGGER.info("Starting RAG conversation sync...")
-    sync_conversations_to_rag_safe()
+        LOGGER.info("Starting RAG conversation sync...")
+        sync_conversations_to_rag_safe()
+    except ImportError:
+        LOGGER.warning(
+            "RAG dependencies (chromadb, sentence-transformers) are not installed. "
+            "RAG features will be unavailable. Install with: pip install chromadb sentence-transformers torch"
+        )
+    except Exception:
+        LOGGER.exception("RAG startup sync failed (non-fatal)")
 
 
 def create_app(database_path: str | None = None, *, load_persisted_runtime_settings: bool = True) -> Flask:
