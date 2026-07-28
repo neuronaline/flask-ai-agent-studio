@@ -948,9 +948,9 @@
                 <summary class="settings-collapsible__summary">
                   <div>
                     <span class="settings-subsection__eyebrow">Advanced</span>
-                    <strong>Summarized fetch &amp; HTML conversion</strong>
+                    <strong>Summarized fetch</strong>
                   </div>
-                  <span class="settings-collapsible__meta">Token budgets + converter mode</span>
+                  <span class="settings-collapsible__meta">Token budgets</span>
                 </summary>
                 <div class="settings-collapsible__content">
                   <div class="settings-inline-grid settings-inline-grid--two">
@@ -962,15 +962,6 @@
                       <label class="settings-mini-label" for="fetch-summarize-max-output-tokens-input">Output token budget (200–4000)</label>
                       <input type="number" class="settings-number" id="fetch-summarize-max-output-tokens-input" min="200" max="4000" value="2400" />
                     </div>
-                  </div>
-                  <div>
-                    <label class="settings-mini-label" for="fetch-html-converter-select">HTML converter mode</label>
-                    <select id="fetch-html-converter-select" class="settings-select">
-                      <option value="hybrid">Hybrid (default)</option>
-                      <option value="internal">Internal only</option>
-                      <option value="external">External only</option>
-                    </select>
-                    <p class="settings-copy">'hybrid' tries internal converter first and falls back to browser for JS-heavy pages. 'internal' uses only BS4. 'external' always uses browser automation.</p>
                   </div>
                 </div>
               </details>

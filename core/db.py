@@ -1,61 +1,61 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import hashlib
 import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
 
 from flask import current_app, g, has_app_context
 
-from services.canvas import extract_canvas_active_document_id, extract_canvas_documents, extract_canvas_viewports
-from utils.logging_config import get_logger
 from core.config import (
     AGENT_CONTEXT_COMPACTION_KEEP_RECENT_ROUNDS,
     AGENT_CONTEXT_COMPACTION_THRESHOLD,
-    CACHE_TTL_HOURS,
     CANVAS_EXPAND_DEFAULT_MAX_LINES,
     CANVAS_PROMPT_CODE_LINE_MAX_CHARS,
     CANVAS_PROMPT_DEFAULT_MAX_CHARS,
     CANVAS_PROMPT_DEFAULT_MAX_LINES,
-    CANVAS_PROMPT_TEXT_LINE_MAX_CHARS,
     CANVAS_PROMPT_DEFAULT_MAX_TOKENS,
+    CANVAS_PROMPT_TEXT_LINE_MAX_CHARS,
     CANVAS_SCROLL_WINDOW_LINES,
     CHAT_SUMMARY_ALLOWED_MODES,
     CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL,
     CHAT_SUMMARY_DETAIL_LEVELS,
     CHAT_SUMMARY_MODE,
     CHAT_SUMMARY_TRIGGER_TOKEN_COUNT,
-    CONTENT_MAX_CHARS,
     CLARIFICATION_DEFAULT_MAX_QUESTIONS,
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
+    CONTENT_MAX_CHARS,
     DB_PATH,
     DEEPSEEK_API_KEY,
+    DEFAULT_MAX_PARALLEL_TOOLS,
     DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
-    DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
-    OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
-    OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT,
-    SCRATCHPAD_DEFAULT_SECTION,
-    SCRATCHPAD_SECTION_ORDER,
-    SCRATCHPAD_SECTION_SETTING_KEYS,
+    DEFAULT_SUB_AGENT_MAX_PARALLEL_TOOLS,
+    DEFAULT_SUB_AGENT_MAX_STEPS,
+    DEFAULT_SUB_AGENT_RETRY_ATTEMPTS,
+    DEFAULT_SUB_AGENT_RETRY_DELAY_SECONDS,
+    DEFAULT_SUB_AGENT_TIMEOUT_SECONDS,
+    DEFAULT_WEB_CACHE_TTL_HOURS,
     DOCUMENT_STORAGE_DIR,
-    FETCH_HTML_CONVERTER_MODES,
     FETCH_SUMMARIZE_MAX_INPUT_CHARS,
     FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
     FETCH_SUMMARY_TOKEN_THRESHOLD,
     FETCH_URL_CLIP_AGGRESSIVENESS,
     IMAGE_STORAGE_DIR,
-    DEFAULT_MAX_PARALLEL_TOOLS,
     MAX_AI_PERSONALITY_LENGTH,
+    MAX_PARALLEL_TOOLS_MAX,
+    MAX_PARALLEL_TOOLS_MIN,
     MAX_PERSONA_COUNT,
     MAX_PERSONA_NAME_LENGTH,
     MAX_USER_PREFERENCES_LENGTH,
+    OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT,
     OPENROUTER_API_KEY,
+    OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
     PROMPT_MAX_INPUT_TOKENS,
     PROMPT_PREFLIGHT_SUMMARY_TOKEN_COUNT,
     PROMPT_RAG_MAX_TOKENS,
@@ -66,40 +66,37 @@ from core.config import (
     RAG_CONTEXT_SIZE_PRESETS,
     RAG_DEFAULT_CONTEXT_SIZE_PRESET,
     RAG_DEFAULT_SENSITIVITY_PRESET,
+    RAG_SENSITIVITY_PRESETS,
     RAG_SOURCE_CONVERSATION,
     RAG_SOURCE_TOOL_RESULT,
     RAG_SOURCE_UPLOADED_DOCUMENT,
-    RAG_SENSITIVITY_PRESETS,
     RAG_TOOL_RESULT_MAX_TEXT_CHARS,
     RAG_TOOL_RESULT_SUMMARY_MAX_CHARS,
+    SCRATCHPAD_DEFAULT_SECTION,
+    SCRATCHPAD_SECTION_ORDER,
+    SCRATCHPAD_SECTION_SETTING_KEYS,
     SEARCH_TOOL_QUERY_LIMIT_MAX,
     SEARCH_TOOL_QUERY_LIMIT_MIN,
+    SUB_AGENT_MAX_PARALLEL_TOOLS_MAX,
+    SUB_AGENT_MAX_PARALLEL_TOOLS_MIN,
+    SUB_AGENT_MAX_STEPS_MAX,
+    SUB_AGENT_MAX_STEPS_MIN,
+    SUB_AGENT_RETRY_ATTEMPTS_MAX,
+    SUB_AGENT_RETRY_ATTEMPTS_MIN,
+    SUB_AGENT_RETRY_DELAY_SECONDS_MAX,
+    SUB_AGENT_RETRY_DELAY_SECONDS_MIN,
+    SUB_AGENT_TIMEOUT_SECONDS_MAX,
+    SUB_AGENT_TIMEOUT_SECONDS_MIN,
     SUMMARY_RETRY_MIN_SOURCE_TOKENS,
     SUMMARY_SOURCE_TARGET_TOKENS,
-    MAX_PARALLEL_TOOLS_MAX,
-    MAX_PARALLEL_TOOLS_MIN,
-    DEFAULT_SUB_AGENT_MAX_STEPS,
-    DEFAULT_SUB_AGENT_TIMEOUT_SECONDS,
-    DEFAULT_SUB_AGENT_RETRY_ATTEMPTS,
-    DEFAULT_SUB_AGENT_RETRY_DELAY_SECONDS,
-    DEFAULT_SUB_AGENT_MAX_PARALLEL_TOOLS,
-    SUB_AGENT_MAX_STEPS_MIN,
-    SUB_AGENT_MAX_STEPS_MAX,
-    SUB_AGENT_TIMEOUT_SECONDS_MIN,
-    SUB_AGENT_TIMEOUT_SECONDS_MAX,
-    SUB_AGENT_RETRY_ATTEMPTS_MIN,
-    SUB_AGENT_RETRY_ATTEMPTS_MAX,
-    SUB_AGENT_RETRY_DELAY_SECONDS_MIN,
-    SUB_AGENT_RETRY_DELAY_SECONDS_MAX,
-    SUB_AGENT_MAX_PARALLEL_TOOLS_MIN,
-    SUB_AGENT_MAX_PARALLEL_TOOLS_MAX,
     WEB_CACHE_TTL_HOURS_MAX,
     WEB_CACHE_TTL_HOURS_MIN,
     get_runtime_setting,
 )
-from utils.proxy_settings import normalize_proxy_enabled_operations
-from lib.tool_registry import TOOL_SPEC_BY_NAME, get_tool_runtime_metadata
-from lib.model_registry import get_all_models, normalize_chat_parameter_overrides
+from lib.model_registry import normalize_chat_parameter_overrides
+from lib.tool_registry import TOOL_SPEC_BY_NAME
+from services.canvas import extract_canvas_active_document_id, extract_canvas_documents, extract_canvas_viewports
+from utils.logging_config import get_logger
 from utils.token_utils import estimate_text_tokens
 
 LOGGER = get_logger(__name__)
@@ -2176,8 +2173,6 @@ def revert_conversation_state_mutations(
 
         reverted_ids: list[int] = []
         affected_targets: list[dict] = []
-        reverted_at = "datetime('now')"
-
         for target_identity, rollback_rows in rows_by_target.items():
             history_rows = _load_state_mutation_history_for_target(conn, target_identity)
             if not history_rows:
@@ -4477,12 +4472,6 @@ def get_app_settings() -> dict:
     return _migrate_legacy_assistant_behavior_settings(settings)
 
 
-def get_proxy_enabled_operations(settings: dict | None = None) -> list[str]:
-    source = settings if settings is not None else get_app_settings()
-    raw_value = source.get("proxy_enabled_operations") if isinstance(source, dict) else None
-    return normalize_proxy_enabled_operations(raw_value)
-
-
 def normalize_scratchpad_text(value) -> str:
     text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
     lines = []
@@ -5738,30 +5727,22 @@ def get_fetch_url_clip_aggressiveness(settings: dict | None = None) -> int:
     return max(0, min(100, aggressiveness))
 
 
-def get_fetch_html_converter_mode(settings: dict | None = None) -> str:
-    source = settings if settings is not None else get_app_settings()
-    raw_value = str(source.get("fetch_html_converter_mode") or "").strip().lower()
-    if raw_value in FETCH_HTML_CONVERTER_MODES:
-        return raw_value
-    return "hybrid"
-
-
-def get_fetch_url_summarized_max_input_chars(settings: dict | None = None) -> int:
+def get_fetch_url_summary_max_input_chars(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
     return _get_int_setting_value(
         source,
-        "fetch_url_summarized_max_input_chars",
+        "fetch_url_summary_max_input_chars",
         FETCH_SUMMARIZE_MAX_INPUT_CHARS,
         4_000,
         CONTENT_MAX_CHARS,
     )
 
 
-def get_fetch_url_summarized_max_output_tokens(settings: dict | None = None) -> int:
+def get_fetch_url_summary_max_output_tokens(settings: dict | None = None) -> int:
     source = settings if settings is not None else get_app_settings()
     return _get_int_setting_value(
         source,
-        "fetch_url_summarized_max_output_tokens",
+        "fetch_url_summary_max_output_tokens",
         FETCH_SUMMARIZE_MAX_OUTPUT_TOKENS,
         200,
         4_000,

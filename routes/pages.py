@@ -10,39 +10,34 @@ from core.config import (
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
     CONTENT_MAX_CHARS,
-    DEFAULT_WEB_CACHE_TTL_HOURS,
     DEFAULT_SETTINGS,
-    FETCH_HTML_CONVERTER_MODES,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
-    OCR_SUPPORTED_PROVIDERS,
-    OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED,
-    OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT,
     RAG_CONTEXT_SIZE_PRESETS,
     RAG_SENSITIVITY_PRESETS,
-    SEARCH_TOOL_QUERY_LIMIT_MAX,
-    SEARCH_TOOL_QUERY_LIMIT_MIN,
     SCRATCHPAD_DEFAULT_SECTION,
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
     SCRATCHPAD_SECTION_SETTING_KEYS,
-    SUB_AGENT_MAX_STEPS_MAX,
-    SUB_AGENT_MAX_STEPS_MIN,
+    SEARCH_TOOL_QUERY_LIMIT_MAX,
+    SEARCH_TOOL_QUERY_LIMIT_MIN,
     SUB_AGENT_MAX_PARALLEL_TOOLS_MAX,
     SUB_AGENT_MAX_PARALLEL_TOOLS_MIN,
+    SUB_AGENT_MAX_STEPS_MAX,
+    SUB_AGENT_MAX_STEPS_MIN,
     SUB_AGENT_RETRY_ATTEMPTS_MAX,
     SUB_AGENT_RETRY_ATTEMPTS_MIN,
     SUB_AGENT_RETRY_DELAY_SECONDS_MAX,
     SUB_AGENT_RETRY_DELAY_SECONDS_MIN,
     SUB_AGENT_TIMEOUT_SECONDS_MAX,
     SUB_AGENT_TIMEOUT_SECONDS_MIN,
+    WEB_CACHE_TTL_HOURS_MAX,
     WEB_CACHE_TTL_HOURS_MIN,
     get_feature_flags,
 )
-from routes.auth import is_login_pin_enabled
 from core.db import (
-    build_persona_preferences,
     build_effective_user_preferences,
+    build_persona_preferences,
     count_scratchpad_notes,
     get_active_tool_names,
     get_ai_personality,
@@ -55,26 +50,26 @@ from core.db import (
     get_canvas_prompt_max_tokens,
     get_canvas_prompt_text_line_max_chars,
     get_canvas_scroll_window_lines,
-    get_chat_summary_model,
-    get_chat_summary_mode,
     get_chat_summary_detail_level,
+    get_chat_summary_mode,
+    get_chat_summary_model,
     get_chat_summary_trigger_token_count,
     get_clarification_max_questions,
-    get_conversation_memory_enabled,
-    get_conversation_truncation_enabled,
-    get_conversation_max_messages,
-    get_conversation_max_message_chars,
     get_context_compaction_keep_recent_rounds,
     get_context_compaction_threshold,
+    get_conversation_max_message_chars,
+    get_conversation_max_messages,
+    get_conversation_memory_enabled,
+    get_conversation_truncation_enabled,
     get_default_persona,
     get_default_persona_id,
     get_fetch_raw_max_text_chars,
-    get_fetch_html_converter_mode,
     get_fetch_summary_max_chars,
     get_fetch_url_clip_aggressiveness,
-    get_fetch_url_summarized_max_input_chars,
-    get_fetch_url_summarized_max_output_tokens,
+    get_fetch_url_summary_max_input_chars,
+    get_fetch_url_summary_max_output_tokens,
     get_fetch_url_token_threshold,
+    get_general_instructions,
     get_login_lockout_seconds,
     get_login_max_failed_attempts,
     get_login_remember_session_days,
@@ -82,19 +77,21 @@ from core.db import (
     get_max_parallel_tools,
     get_model_temperature,
     get_ocr_enabled,
+    get_openrouter_anthropic_cache_ttl,
     get_openrouter_app_title,
     get_openrouter_http_referer,
     get_openrouter_prompt_cache_enabled,
-    get_openrouter_anthropic_cache_ttl,
+    get_persona,
     get_prompt_max_input_tokens,
     get_prompt_preflight_summary_token_count,
     get_prompt_rag_max_tokens,
     get_prompt_recent_history_max_tokens,
     get_prompt_response_token_reserve,
-    get_search_tool_query_limit,
     get_prompt_summary_max_tokens,
     get_prompt_tool_trace_max_tokens,
-    get_reasoning_auto_collapse,
+    get_pruning_aggressive_keep_count,
+    get_pruning_enabled,
+    get_pruning_failed_attempts_threshold,
     get_rag_auto_inject_enabled,
     get_rag_auto_inject_source_types,
     get_rag_chunk_overlap,
@@ -106,27 +103,24 @@ from core.db import (
     get_rag_query_expansion_max_variants,
     get_rag_search_min_similarity,
     get_rag_search_top_k,
-    get_rag_source_types,
     get_rag_sensitivity,
-    get_summary_retry_min_source_tokens,
-    get_summary_source_target_tokens,
-    get_summary_skip_first,
-    get_summary_skip_last,
-    get_general_instructions,
-    get_persona,
-    get_pruning_aggressive_keep_count,
-    get_pruning_enabled,
-    get_pruning_failed_attempts_threshold,
-    get_web_cache_ttl_hours,
-    get_youtube_transcripts_enabled,
+    get_rag_source_types,
+    get_reasoning_auto_collapse,
+    get_search_tool_query_limit,
+    get_sub_agent_allowed_tool_names,
+    get_sub_agent_canvas_auto_open,
+    get_sub_agent_canvas_auto_save,
+    get_sub_agent_max_parallel_tools,
     get_sub_agent_max_steps,
-    get_sub_agent_timeout_seconds,
     get_sub_agent_retry_attempts,
     get_sub_agent_retry_delay_seconds,
-    get_sub_agent_max_parallel_tools,
-    get_sub_agent_canvas_auto_save,
-    get_sub_agent_canvas_auto_open,
-    get_sub_agent_allowed_tool_names,
+    get_sub_agent_timeout_seconds,
+    get_summary_retry_min_source_tokens,
+    get_summary_skip_first,
+    get_summary_skip_last,
+    get_summary_source_target_tokens,
+    get_web_cache_ttl_hours,
+    get_youtube_transcripts_enabled,
     list_personas,
     normalize_active_tool_names,
     normalize_rag_source_types,
@@ -139,7 +133,6 @@ from lib.model_registry import (
     MODEL_OPERATION_KEYS,
     canonicalize_model_id,
     get_all_models,
-    get_chat_capable_models,
     get_custom_model_contract,
     get_default_chat_model_id,
     get_model_record,
@@ -155,6 +148,7 @@ from lib.model_registry import (
     normalize_visible_model_order,
 )
 from lib.tool_registry import TOOL_SPEC_BY_NAME, get_tool_runtime_metadata
+from routes.auth import is_login_pin_enabled
 
 SETTINGS_VISIBLE_OPERATION_MODEL_KEYS = tuple(
     key for key in MODEL_OPERATION_KEYS if key not in {"generate_title"}
@@ -180,16 +174,12 @@ TOOL_PERMISSION_LABELS = {
     "search_knowledge_base": "Knowledge base search",
     "search_web": "Web search",
     "fetch_url": "Read URL content",
-    "fetch_url_summarized": "Summarize URL",
-    "search_news": "News search",
-    "search_news_google": "News search — Google",
     "search_scholar": "Academic search — Google Scholar",
     "create_canvas_document": "Create canvas document",
     "search_canvas_document": "Search canvas document",
     "batch_canvas_edits": "Batch canvas edits",
     "batch_read_canvas_documents": "Read multiple canvas documents",
-    "set_canvas_viewport": "Set canvas viewport",
-    "clear_canvas_viewport": "Clear canvas viewport",
+    "read_canvas_document": "Read canvas document",
     "delete_canvas_document": "Delete canvas document",
     "expand_truncated_tool_result": "Expand truncated tool result",
 }
@@ -201,18 +191,14 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "ask_clarifying_question": "Pause and ask the user structured questions before answering.",
     "transcribe_youtube_video": "Validate a YouTube URL and generate a local speech transcript with a prompt-ready context block.",
     "search_knowledge_base": "Semantic search over synced chats and uploaded documents.",
-    "search_web": "Live web search via SERP API for current facts.",
-    "fetch_url": "Read and extract cleaned text from a specific web page.",
-    "fetch_url_summarized": "Fetch a page and return only a focused AI summary.",
-    "search_news": "Search recent news articles via Google News.",
-    "search_news_google": "Search recent news articles via Google News RSS.",
+    "search_web": "Live Google search via Bright Data SERP for current facts.",
+    "fetch_url": "Read cleaned URL content or return a focused AI summary.",
     "search_scholar": "Search academic papers via Google Scholar with citation counts and metadata.",
     "create_canvas_document": "Create a new editable canvas document or code artifact.",
     "search_canvas_document": "Search for text or patterns inside canvas documents.",
     "batch_canvas_edits": "Apply several non-overlapping line edits to a canvas document in one call.",
     "batch_read_canvas_documents": "Read multiple canvas documents or ranges in one call.",
-    "set_canvas_viewport": "Pin a line range as the active viewport for a canvas document.",
-    "clear_canvas_viewport": "Remove the pinned viewport so the full canvas is shown.",
+    "read_canvas_document": "Read one canvas document or a focused line range.",
     "delete_canvas_document": "Permanently remove a canvas document from the conversation.",
     "expand_truncated_tool_result": "Retrieve the full uncropped content of a previously executed tool call that was truncated in the conversation history.",
 }
@@ -246,7 +232,7 @@ def validate_tool_catalog_sync() -> tuple[list[str], list[str], list[str]]:
     return missing_in_labels, missing_in_descriptions, missing_in_specs
 
 
-TOOL_PERMISSION_SECTION_ORDER = ["assistant", "research", "canvas", "context_management"]
+TOOL_PERMISSION_SECTION_ORDER = ["assistant", "research", "canvas"]
 TOOL_PERMISSION_SECTION_METADATA = {
     "assistant": {
         "title": "Assistant & Memory",
@@ -261,12 +247,7 @@ TOOL_PERMISSION_SECTION_METADATA = {
     "canvas": {
         "title": "Draft Files (Canvas)",
         "description": "Conversation-attached draft documents, canvas search, and line-level changes inside Canvas.",
-        "note": "Enable inspection helpers such as expand and scroll separately when you want read-only canvas navigation.",
-    },
-    "context_management": {
-        "title": "Context Management",
-        "description": "List, purge, merge, and compress persistent context nodes to manage token budget.",
-        "note": "These tools operate on the agent's long-term memory store, not the Canvas draft filesystem.",
+        "note": "Use the canvas read tools for inspection and batch edits for all content changes.",
     },
 }
 
@@ -284,9 +265,6 @@ def _get_tool_permission_section_key(name: str) -> str:
     if name in {
         "search_web",
         "fetch_url",
-        "fetch_url_summarized",
-        "search_news",
-        "search_news_google",
         "search_scholar",
     }:
         return "research"
@@ -295,13 +273,10 @@ def _get_tool_permission_section_key(name: str) -> str:
         "search_canvas_document",
         "batch_canvas_edits",
         "batch_read_canvas_documents",
-        "set_canvas_viewport",
-        "clear_canvas_viewport",
+        "read_canvas_document",
         "delete_canvas_document",
     }:
         return "canvas"
-    if name in {"list_context_summary", "purge_context_nodes", "merge_context_nodes", "compress_context_node"}:
-        return "context_management"
     return "canvas"
 
 
@@ -541,9 +516,8 @@ def _build_fetch_section(raw: dict) -> dict:
     return {
         "fetch_url_token_threshold": get_fetch_url_token_threshold(raw),
         "fetch_url_clip_aggressiveness": get_fetch_url_clip_aggressiveness(raw),
-        "fetch_html_converter_mode": get_fetch_html_converter_mode(raw),
-        "fetch_url_summarized_max_input_chars": get_fetch_url_summarized_max_input_chars(raw),
-        "fetch_url_summarized_max_output_tokens": get_fetch_url_summarized_max_output_tokens(raw),
+        "fetch_url_summary_max_input_chars": get_fetch_url_summary_max_input_chars(raw),
+        "fetch_url_summary_max_output_tokens": get_fetch_url_summary_max_output_tokens(raw),
         "fetch_raw_max_text_chars": get_fetch_raw_max_text_chars(raw),
         "fetch_summary_max_chars": get_fetch_summary_max_chars(raw),
     }
@@ -983,6 +957,8 @@ def register_page_routes(app) -> None:
             settings["active_tools"] = json.dumps(normalize_active_tool_names(active_tools_raw), ensure_ascii=False)
 
         if chat_summary_model_raw is not None:
+            if not str(chat_summary_model_raw).strip():
+                return jsonify({"error": "chat_summary_model must not be empty."}), 400
             candidate = _resolve_model_reference_id(chat_summary_model_raw, custom_model_reference_ids)
             if candidate and get_model_record(candidate, settings) is None:
                 return jsonify({"error": "chat_summary_model must reference a known model."}), 400
@@ -1054,7 +1030,11 @@ def register_page_routes(app) -> None:
         data: dict,
         settings: dict,
     ) -> tuple[None, None] | tuple[dict, int]:
-        """Apply feature toggle settings (conversation, OCR, RAG, YouTube). Returns (None, None) on success."""
+        """Apply feature toggle settings (conversation memory, OCR, RAG, YouTube).
+
+        Conversation truncation policy settings are handled separately by
+        _apply_conversation_truncation_settings.
+        """
         conversation_memory_enabled_raw = data.get("conversation_memory_enabled")
         ocr_enabled_raw = data.get("ocr_enabled")
         rag_enabled_raw = data.get("rag_enabled")
@@ -1063,6 +1043,22 @@ def register_page_routes(app) -> None:
         if conversation_memory_enabled_raw is not None:
             settings["conversation_memory_enabled"] = _normalize_bool_setting_value(conversation_memory_enabled_raw)
 
+        if ocr_enabled_raw is not None:
+            settings["ocr_enabled"] = _normalize_bool_setting_value(ocr_enabled_raw)
+
+        if rag_enabled_raw is not None:
+            settings["rag_enabled"] = _normalize_bool_setting_value(rag_enabled_raw)
+
+        if youtube_transcripts_enabled_raw is not None:
+            settings["youtube_transcripts_enabled"] = _normalize_bool_setting_value(youtube_transcripts_enabled_raw)
+
+        return None, None
+
+    def _apply_conversation_truncation_settings(
+        data: dict,
+        settings: dict,
+    ) -> tuple[None, None] | tuple[dict, int]:
+        """Apply conversation truncation policy settings."""
         if data.get("conversation_truncation_enabled") is not None:
             settings["conversation_truncation_enabled"] = _normalize_bool_setting_value(data.get("conversation_truncation_enabled"))
 
@@ -1084,15 +1080,6 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "conversation_max_message_chars must be between 100 and 50000."}), 400
             settings["conversation_max_message_chars"] = str(conversation_max_message_chars)
 
-        if ocr_enabled_raw is not None:
-            settings["ocr_enabled"] = _normalize_bool_setting_value(ocr_enabled_raw)
-
-        if rag_enabled_raw is not None:
-            settings["rag_enabled"] = _normalize_bool_setting_value(rag_enabled_raw)
-
-        if youtube_transcripts_enabled_raw is not None:
-            settings["youtube_transcripts_enabled"] = _normalize_bool_setting_value(youtube_transcripts_enabled_raw)
-
         return None, None
 
     def _apply_rag_settings(
@@ -1109,7 +1096,6 @@ def register_page_routes(app) -> None:
         rag_query_expansion_max_variants_raw = data.get("rag_query_expansion_max_variants")
         fetch_raw_max_text_chars_raw = data.get("fetch_raw_max_text_chars")
         fetch_summary_max_chars_raw = data.get("fetch_summary_max_chars")
-        fetch_html_converter_mode_raw = data.get("fetch_html_converter_mode")
         rag_auto_inject = data.get("rag_auto_inject")
         rag_sensitivity = data.get("rag_sensitivity")
         rag_context_size = data.get("rag_context_size")
@@ -1193,14 +1179,6 @@ def register_page_routes(app) -> None:
             if not (500 <= fetch_summary_max_chars <= CONTENT_MAX_CHARS):
                 return jsonify({"error": f"fetch_summary_max_chars must be between 500 and {CONTENT_MAX_CHARS}."}), 400
             settings["fetch_summary_max_chars"] = str(fetch_summary_max_chars)
-
-        if fetch_html_converter_mode_raw is not None:
-            normalized_converter_mode = str(fetch_html_converter_mode_raw).strip().lower()
-            if normalized_converter_mode not in FETCH_HTML_CONVERTER_MODES:
-                return jsonify(
-                    {"error": f"fetch_html_converter_mode must be one of: {', '.join(sorted(FETCH_HTML_CONVERTER_MODES))}."}
-                ), 400
-            settings["fetch_html_converter_mode"] = normalized_converter_mode
 
         effective_rag_enabled = get_rag_enabled(settings)
 
@@ -1498,8 +1476,8 @@ def register_page_routes(app) -> None:
         """Apply canvas and fetch-related settings. Returns (None, None) on success, (error_response, status_code) on error."""
         fetch_url_token_threshold_raw = data.get("fetch_url_token_threshold")
         fetch_url_clip_aggressiveness_raw = data.get("fetch_url_clip_aggressiveness")
-        fetch_url_summarized_max_input_chars_raw = data.get("fetch_url_summarized_max_input_chars")
-        fetch_url_summarized_max_output_tokens_raw = data.get("fetch_url_summarized_max_output_tokens")
+        fetch_url_summary_max_input_chars_raw = data.get("fetch_url_summary_max_input_chars")
+        fetch_url_summary_max_output_tokens_raw = data.get("fetch_url_summary_max_output_tokens")
         canvas_prompt_max_lines_raw = data.get("canvas_prompt_max_lines")
         canvas_prompt_max_tokens_raw = data.get("canvas_prompt_max_tokens")
         canvas_prompt_max_chars_raw = data.get("canvas_prompt_max_chars")
@@ -1526,25 +1504,25 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "fetch_url_clip_aggressiveness must be between 0 and 100."}), 400
             settings["fetch_url_clip_aggressiveness"] = str(fetch_url_clip_aggressiveness)
 
-        if fetch_url_summarized_max_input_chars_raw is not None:
+        if fetch_url_summary_max_input_chars_raw is not None:
             try:
-                fetch_url_summarized_max_input_chars = int(fetch_url_summarized_max_input_chars_raw)
+                fetch_url_summary_max_input_chars = int(fetch_url_summary_max_input_chars_raw)
             except (TypeError, ValueError):
-                return jsonify({"error": "fetch_url_summarized_max_input_chars must be an integer."}), 400
-            if not (4_000 <= fetch_url_summarized_max_input_chars <= CONTENT_MAX_CHARS):
+                return jsonify({"error": "fetch_url_summary_max_input_chars must be an integer."}), 400
+            if not (4_000 <= fetch_url_summary_max_input_chars <= CONTENT_MAX_CHARS):
                 return jsonify(
-                    {"error": f"fetch_url_summarized_max_input_chars must be between 4000 and {CONTENT_MAX_CHARS}."}
+                    {"error": f"fetch_url_summary_max_input_chars must be between 4000 and {CONTENT_MAX_CHARS}."}
                 ), 400
-            settings["fetch_url_summarized_max_input_chars"] = str(fetch_url_summarized_max_input_chars)
+            settings["fetch_url_summary_max_input_chars"] = str(fetch_url_summary_max_input_chars)
 
-        if fetch_url_summarized_max_output_tokens_raw is not None:
+        if fetch_url_summary_max_output_tokens_raw is not None:
             try:
-                fetch_url_summarized_max_output_tokens = int(fetch_url_summarized_max_output_tokens_raw)
+                fetch_url_summary_max_output_tokens = int(fetch_url_summary_max_output_tokens_raw)
             except (TypeError, ValueError):
-                return jsonify({"error": "fetch_url_summarized_max_output_tokens must be an integer."}), 400
-            if not (200 <= fetch_url_summarized_max_output_tokens <= 4_000):
-                return jsonify({"error": "fetch_url_summarized_max_output_tokens must be between 200 and 4000."}), 400
-            settings["fetch_url_summarized_max_output_tokens"] = str(fetch_url_summarized_max_output_tokens)
+                return jsonify({"error": "fetch_url_summary_max_output_tokens must be an integer."}), 400
+            if not (200 <= fetch_url_summary_max_output_tokens <= 4_000):
+                return jsonify({"error": "fetch_url_summary_max_output_tokens must be between 200 and 4000."}), 400
+            settings["fetch_url_summary_max_output_tokens"] = str(fetch_url_summary_max_output_tokens)
 
         if canvas_prompt_max_lines_raw is not None:
             try:
@@ -1817,12 +1795,11 @@ def register_page_routes(app) -> None:
         "custom_models",
         "default_persona_id",
         "description",
-        "fetch_html_converter_mode",
         "fetch_raw_max_text_chars",
         "fetch_summary_max_chars",
         "fetch_url_clip_aggressiveness",
-        "fetch_url_summarized_max_input_chars",
-        "fetch_url_summarized_max_output_tokens",
+        "fetch_url_summary_max_input_chars",
+        "fetch_url_summary_max_output_tokens",
         "fetch_url_token_threshold",
         "general_instructions",
         "image_processing_method",
@@ -1922,6 +1899,10 @@ def register_page_routes(app) -> None:
             return err
 
         err = _apply_feature_toggle_settings(data, settings)
+        if err != (None, None):
+            return err
+
+        err = _apply_conversation_truncation_settings(data, settings)
         if err != (None, None):
             return err
 

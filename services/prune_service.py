@@ -81,7 +81,6 @@ _PRUNABLE_TOOL_NAMES: frozenset[str] = frozenset({
     "grep",
     "web_search",
     "web_fetch",
-    "list_context_summary",
 })
 
 # Tool names whose outputs are never pruned (safety-critical).
@@ -497,7 +496,7 @@ def _smart_prune(
                     should_prune = True
 
         elif tool_name in {
-            "glob", "grep", "web_search", "web_fetch", "list_context_summary",
+            "glob", "grep", "web_search", "web_fetch",
         }:
             # Prune these when older than 5 turns.
             if turns_ago > 5:
@@ -697,7 +696,7 @@ def _status_report(
                 smart_reason = f"read_file stale: {fp} was edited after read"
 
         elif tool_name in {
-            "glob", "grep", "web_search", "web_fetch", "list_context_summary",
+            "glob", "grep", "web_search", "web_fetch",
         }:
             if turns_ago > 5:
                 smart_would_prune = True

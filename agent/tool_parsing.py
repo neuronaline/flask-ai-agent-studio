@@ -23,7 +23,7 @@ DSML_FUNCTION_CALLS_TAG_RE = re.compile(
     r"<[^>]*function_calls[^>]*>", re.IGNORECASE
 )
 DSML_PARAMETER_TAG_RE = re.compile(
-    r'<[^>]*parameter\s+name="(?P<name>[^"]*)"(?P<attrs>[^>]*)>(?P<value>.*?)</[^>]*parameter\s*>',
+    r'<[^>]*parameter\s+name="(?P<name>[^"]+)"(?P<attrs>[^>]*)>(?P<value>.*?)</[^>]*parameter\s*>',
     re.IGNORECASE | re.DOTALL,
 )
 DSML_STRING_ATTR_RE = re.compile(

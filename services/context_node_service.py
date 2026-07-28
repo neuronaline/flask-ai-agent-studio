@@ -159,7 +159,7 @@ class ContextNodeService:
             message = (
                 f"**System Warning:** The requested action is estimated to consume ~{estimated_tokens:,} tokens, "
                 f"which would breach the 90% safety threshold. Operation denied.\n"
-                f"**Recommended action:** Run `purge_context_nodes` to free space, narrow the query scope, "
+                f"**Recommended action:** narrow the query scope, remove unneeded conversation context from settings, "
                 f"or summarise existing data before retry."
             )
             return ExecutionWarning(
@@ -529,7 +529,7 @@ class ContextNodeService:
     ) -> dict | None:
         """Update an existing context node.
 
-        Used by compress_context_node to update the payload after compression.
+        Used by internal context compaction to update the payload.
         """
         return update_context_node(
             node_id=node_id,

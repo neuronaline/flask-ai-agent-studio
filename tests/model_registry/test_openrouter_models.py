@@ -5,14 +5,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from lib import model_registry
+
 from core.app import create_app
-
 from core.db import save_app_settings
-
-from lib.model_registry import get_operation_model, get_operation_model_candidates, resolve_model_target
-
-from utils.proxy_settings import PROXY_OPERATION_FETCH_URL
+from lib import model_registry
+from lib.model_registry import get_operation_model, resolve_model_target
 from tests.support.mocks import CallbackHttpClient, CallbackOpenAI, StaticStream
 
 
@@ -47,111 +44,6 @@ def test_apply_chat_parameter_overrides_merges_whitelisted_values():
     assert merged["messages"] == request_kwargs["messages"]
 
 
-def test_minimax_translation_preserves_tool_result_turn_chain():
-    proxy = model_registry._MiniMaxClientProxy(api_key="test-key")
-    translated = proxy._translate_openai_to_anthropic(
-        {
-            "model": "MiniMax-M2.7",
-            "messages": [
-                {"role": "user", "content": "Solve the task."},
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": "call_1",
-                            "type": "function",
-                            "function": {"name": "search_web", "arguments": '{"query":"x"}'},
-                        }
-                    ],
-                },
-                {
-                    "role": "tool",
-                    "tool_call_id": "call_1",
-                    "content": "{\"ok\":true,\"summary\":\"done\"}",
-                },
-            ],
-        }
-    )
-
-    converted_messages = translated["messages"]
-    assert converted_messages[1]["role"] == "assistant"
-    assistant_blocks = converted_messages[1]["content"]
-    assert any(block.get("type") == "tool_use" and block.get("id") == "call_1" for block in assistant_blocks)
-
-    assert converted_messages[2]["role"] == "user"
-    tool_result_block = converted_messages[2]["content"][0]
-    assert tool_result_block["type"] == "tool_result"
-    assert tool_result_block["tool_use_id"] == "call_1"
-
-
-def test_minimax_translation_maps_tool_choice_to_anthropic_shape():
-    proxy = model_registry._MiniMaxClientProxy(api_key="test-key")
-
-    translated_auto = proxy._translate_openai_to_anthropic(
-        {
-            "model": "MiniMax-M2.7",
-            "tool_choice": "auto",
-            "messages": [{"role": "user", "content": "hi"}],
-        }
-    )
-    assert translated_auto["tool_choice"] == {"type": "auto"}
-
-    translated_specific = proxy._translate_openai_to_anthropic(
-        {
-            "model": "MiniMax-M2.7",
-            "tool_choice": {"type": "function", "function": {"name": "search_web"}},
-            "messages": [{"role": "user", "content": "hi"}],
-        }
-    )
-    assert translated_specific["tool_choice"] == {"type": "tool", "name": "search_web"}
-
-
-def test_minimax_translation_sets_required_max_tokens_when_missing():
-    proxy = model_registry._MiniMaxClientProxy(api_key="test-key")
-    translated = proxy._translate_openai_to_anthropic(
-        {
-            "model": "MiniMax-M2.7",
-            "messages": [{"role": "user", "content": "hello"}],
-            "stream": True,
-        }
-    )
-
-    assert translated["max_tokens"] == 4096
-
-
-def test_minimax_translation_preserves_explicit_max_tokens():
-    proxy = model_registry._MiniMaxClientProxy(api_key="test-key")
-    translated = proxy._translate_openai_to_anthropic(
-        {
-            "model": "MiniMax-M2.7",
-            "max_tokens": 1200,
-            "messages": [{"role": "user", "content": "hello"}],
-        }
-    )
-
-    assert translated["max_tokens"] == 1200
-
-
-def test_minimax_translation_merges_multiple_system_messages():
-    proxy = model_registry._MiniMaxClientProxy(api_key="test-key")
-    translated = proxy._translate_openai_to_anthropic(
-        {
-            "model": "MiniMax-M2.7",
-            "messages": [
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "system", "content": "Always be concise."},
-                {"role": "user", "content": "hello"},
-            ],
-        }
-    )
-
-    assert "system" in translated
-    assert "You are a helpful assistant." in translated["system"]
-    assert "Always be concise." in translated["system"]
-    assert "\n\n" in translated["system"]
-    system_messages = [m for m in translated["messages"] if m.get("role") == "system"]
-    assert len(system_messages) == 0, "No system messages should remain in messages list"
 
 
 def test_build_model_provider_policy_marks_deepseek_as_cache_friendly():
@@ -605,7 +497,7 @@ class TestOpenRouterModelRegistry:
 
         model_registry.get_provider_client.cache_clear()
         try:
-            with patch("web.web_tools.get_proxy_candidates_for_operation", return_value=["http://proxy.example:8080", None]), patch(
+            with patch("utils.proxy_settings.get_proxy_candidates_for_operation", return_value=["http://proxy.example:8080", None]), patch(
                 "lib.model_registry.httpx.Client",
                 side_effect=lambda *args, **kwargs: CallbackHttpClient(*args, **kwargs),
             ), patch("lib.model_registry.OpenAI", side_effect=openai_factory):
@@ -638,7 +530,7 @@ class TestOpenRouterModelRegistry:
 
         model_registry.get_provider_client.cache_clear()
         try:
-            with patch("web.web_tools.get_proxy_candidates_for_operation", return_value=[None]), patch(
+            with patch("utils.proxy_settings.get_proxy_candidates_for_operation", return_value=[None]), patch(
                 "lib.model_registry.httpx.Client",
                 side_effect=http_client_factory,
             ), patch("lib.model_registry.OpenAI", side_effect=openai_factory):
@@ -707,7 +599,7 @@ class TestOpenRouterModelRegistry:
 
         model_registry.get_provider_client.cache_clear()
         try:
-            with patch("web.web_tools.get_proxy_candidates_for_operation", return_value=["http://proxy.example:8080", None]), patch(
+            with patch("utils.proxy_settings.get_proxy_candidates_for_operation", return_value=["http://proxy.example:8080", None]), patch(
                 "lib.model_registry.httpx.Client",
                 side_effect=http_client_factory,
             ), patch("lib.model_registry.OpenAI", side_effect=openai_factory):
@@ -743,10 +635,10 @@ class TestOpenRouterModelRegistry:
                 ),
             )
 
-        save_app_settings({"proxy_enabled_operations": json.dumps([PROXY_OPERATION_FETCH_URL], ensure_ascii=False)})
+        save_app_settings({"proxy_enabled_operations": json.dumps([], ensure_ascii=False)})
         model_registry.get_provider_client.cache_clear()
         try:
-            with patch("web.web_tools.get_proxy_candidates", return_value=["http://proxy.example:8080", None]), patch(
+            with patch("utils.proxy_settings.get_proxy_candidates_for_operation", return_value=[None]), patch(
                 "lib.model_registry.httpx.Client",
                 side_effect=lambda *args, **kwargs: CallbackHttpClient(*args, **kwargs),
             ), patch("lib.model_registry.OpenAI", side_effect=openai_factory):
@@ -789,7 +681,7 @@ class TestOpenRouterModelRegistry:
 
         model_registry.get_provider_client.cache_clear()
         try:
-            with patch("web.web_tools.get_proxy_candidates_for_operation", return_value=[None]), patch(
+            with patch("utils.proxy_settings.get_proxy_candidates_for_operation", return_value=[None]), patch(
                 "lib.model_registry.httpx.Client",
                 side_effect=http_client_factory,
             ), patch("lib.model_registry.OpenAI", side_effect=openai_factory):

@@ -9,16 +9,11 @@ from __future__ import annotations
 
 # Authoritative set of tool names that mutate canvas state (content or viewport).
 # This is the single source of truth imported by agent.py and messages.py.
-# Note: insert_canvas_lines and delete_canvas_lines are internal helpers used
-# by batch_canvas_edits — they are NOT exposed as standalone tool specs.
-# replace_canvas_lines IS exposed as a standalone tool spec.
+# Line-level and full-content document edits are exposed only through
+# batch_canvas_edits. Lower-level document helpers remain internal.
 CANVAS_MUTATING_TOOL_NAMES: frozenset[str] = frozenset({
     "create_canvas_document",
-    "rewrite_canvas_document",
-    "replace_canvas_lines",
     "batch_canvas_edits",
-    "set_canvas_viewport",
-    "clear_canvas_viewport",
     "delete_canvas_document",
 })
 
@@ -27,8 +22,6 @@ CANVAS_MUTATING_TOOL_NAMES: frozenset[str] = frozenset({
 # include editing-specific guidance sections.
 CANVAS_CONTENT_MUTATING_TOOL_NAMES: frozenset[str] = frozenset({
     "create_canvas_document",
-    "rewrite_canvas_document",
-    "replace_canvas_lines",
     "batch_canvas_edits",
     "delete_canvas_document",
 })

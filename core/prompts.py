@@ -135,6 +135,69 @@ def get_fetch_summarization_prompt(key: str, default: str = "") -> str:
     return get_prompt(f"fetch.summarization.{key}", default)
 
 
+def get_agent_prompt(key: str, default: str = "") -> str:
+    """Agent runtime prompt metnine erişir (final_answer, reasoning_replay, working_state, constants, recovery_hints)."""
+    return get_prompt(f"agent.{key}", default)
+
+
+def get_tool_prompt(tool_name: str, key: str, default: str = "") -> str:
+    """Belirli bir tool için prompt metnine erişir.
+
+    Args:
+        tool_name: Tool adı (örn: 'search_web', 'fetch_url')
+        key: Alt anahtar (örn: 'description', 'purpose', 'guidance')
+    """
+    return get_prompt(f"tools.{tool_name}.{key}", default)
+
+
+def get_tool_prompt_dict(tool_name: str) -> dict[str, str]:
+    """Belirli bir tool için tüm prompt metinlerini dict olarak döndürür.
+
+    Returns:
+        {'description': ..., 'purpose': ..., 'guidance': ...}
+        Bulunamayan anahtarlar boş string olur.
+    """
+    return {
+        "description": get_tool_prompt(tool_name, "description", ""),
+        "purpose": get_tool_prompt(tool_name, "purpose", ""),
+        "guidance": get_tool_prompt(tool_name, "guidance", ""),
+    }
+
+
+def get_canvas_prompt(key: str, default: str = "") -> str:
+    """Canvas prompt metnine erişir (editing_guidance, runtime_context, etc.)."""
+    return get_prompt(f"canvas.{key}", default)
+
+
+def get_tool_calling_prompt(key: str, default: str = "") -> str:
+    """Tool calling kuralları prompt metnine erişir."""
+    return get_prompt(f"tool_calling.{key}", default)
+
+
+def get_message_prompt(key: str, default: str = "") -> str:
+    """Mesaj formatlama şablonu prompt metnine erişir."""
+    return get_prompt(f"messages.{key}", default)
+
+
+def get_image_prompt(key: str, default: str = "") -> str:
+    """Görüntü analizi prompt metnine erişir."""
+    return get_prompt(f"image.{key}", default)
+
+
+def get_summary_prompt(key: str, default: str = "") -> str:
+    """Konuşma özetleme prompt metnine erişir."""
+    return get_prompt(f"summary.{key}", default)
+
+
+def get_all_tool_names() -> list[str]:
+    """YAML'de tanımlı tüm tool isimlerini döndürür."""
+    prompts = _load_prompts()
+    tools = prompts.get("tools")
+    if isinstance(tools, dict):
+        return list(tools.keys())
+    return []
+
+
 def reload_prompts() -> None:
     """
     Prompts cache'ini temizler ve yeniden yüklemeye zorlar.

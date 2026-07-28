@@ -109,7 +109,7 @@ def extract_usage_from_response(response) -> dict:
     if total_tokens is not None:
         result["total_tokens"] = int(total_tokens)
 
-    # MiniMax / Anthropic extended fields (input_tokens → prompt, output_tokens → completion)
+    # Anthropic extended fields (input_tokens → prompt, output_tokens → completion)
     for attr in ("input_tokens", "prompt_tokens"):
         val = getattr(usage, attr, None)
         if val is not None and result.get("prompt_tokens") is None:

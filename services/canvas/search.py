@@ -31,7 +31,7 @@ from services.canvas.manifest import build_canvas_project_manifest
 from services.canvas.runtime import get_canvas_runtime_active_document_id
 
 
-def scroll_canvas_document(
+def read_canvas_document(
     runtime_state: dict,
     start_line: int,
     end_line: int,
@@ -44,7 +44,7 @@ def scroll_canvas_document(
     caps = get_canvas_document_capabilities(document)
     if not caps.get("line_addressable"):
         from services.canvas.constants import CanvasCapabilityError
-        raise CanvasCapabilityError("scroll_canvas_document", document, "line_addressable")
+        raise CanvasCapabilityError("read_canvas_document", document, "line_addressable")
     existing_lines = list_canvas_lines(document.get("content") or "")
     total_lines = len(existing_lines)
     if start_line < 1 or end_line < start_line:
@@ -52,7 +52,7 @@ def scroll_canvas_document(
     if total_lines == 0:
         return {
             "status": "ok",
-            "action": "scrolled",
+            "action": "read",
             "document_id": document.get("id"),
             "document_path": document.get("path"),
             "title": document.get("title"),
@@ -87,7 +87,7 @@ def scroll_canvas_document(
 
     return {
         "status": "ok",
-        "action": "scrolled",
+        "action": "read",
         "document_id": document.get("id"),
         "document_path": document.get("path"),
         "title": document.get("title"),
@@ -244,7 +244,7 @@ def batch_read_canvas_documents(runtime_state: dict, documents: list[dict]) -> d
             if start_line is not None or end_line is not None:
                 if start_line is None or end_line is None:
                     raise ValueError("start_line and end_line must both be provided for ranged reads.")
-                result = scroll_canvas_document(
+                result = read_canvas_document(
                     runtime_state,
                     int(start_line),
                     int(end_line),
@@ -294,7 +294,7 @@ def build_canvas_document_context_result(
     caps = get_canvas_document_capabilities(document)
     if not caps.get("line_addressable"):
         from services.canvas.constants import CanvasCapabilityError
-        raise CanvasCapabilityError("expand_canvas_document", document, "line_addressable")
+        raise CanvasCapabilityError("read_canvas_document", document, "line_addressable")
     normalized = document
     if not normalized:
         raise ValueError("Canvas document is invalid.")
@@ -308,7 +308,7 @@ def build_canvas_document_context_result(
         total = normalized.get("line_count") or 0
         shown = len(numbered_lines)
         numbered_lines = [
-            f"[Excerpt: lines 1\u2013{shown} of {total}. Use scroll_canvas_document to view hidden lines.]",
+            f"[Excerpt: lines 1\u2013{shown} of {total}. Use read_canvas_document with a focused range to view hidden lines.]",
             *numbered_lines,
         ]
     else:
@@ -320,7 +320,7 @@ def build_canvas_document_context_result(
     relationship_map = document.get("relationship_map") if isinstance(document, dict) else None
     return {
         "status": "ok",
-        "action": "expanded",
+        "action": "read",
         "document": document,
         "document_id": normalized.get("id"),
         "document_path": normalized.get("path"),
@@ -335,8 +335,8 @@ def build_canvas_document_context_result(
         "is_truncated": is_truncated,
         "snapshot_semantics": "call_time",
         "snapshot_notice": (
-            "This expansion is a call-time snapshot of the canvas runtime state. "
-            "If the canvas may have changed after this tool call, re-run expand_canvas_document to refresh it."
+            "This read is a call-time snapshot of the canvas runtime state. "
+            "If the canvas may have changed after this tool call, call read_canvas_document again."
         ),
         "primary_locator": extract_canvas_primary_locator(normalized),
         "manifest_excerpt": {

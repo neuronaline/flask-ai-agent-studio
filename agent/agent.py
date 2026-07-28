@@ -29,7 +29,6 @@ from services.canvas import (
     build_canvas_document_context_result,
     build_canvas_tool_result,
     CANVAS_MUTATING_TOOL_NAMES,
-    clear_canvas_viewport,
     clear_overlapping_canvas_viewports,
     compute_canvas_content_hash,
     create_canvas_document,
@@ -42,8 +41,8 @@ from services.canvas import (
     get_canvas_viewport_payloads,
     join_canvas_lines,
     list_canvas_lines,
+    read_canvas_document,
     search_canvas_document,
-    set_canvas_viewport,
     scale_canvas_char_limit,
 )
 from core.config import (
@@ -75,8 +74,8 @@ from core.db import (
     get_context_compaction_threshold,
     get_effective_conversation_persona,
     get_fetch_url_clip_aggressiveness,
-    get_fetch_url_summarized_max_input_chars,
-    get_fetch_url_summarized_max_output_tokens,
+    get_fetch_url_summary_max_input_chars,
+    get_fetch_url_summary_max_output_tokens,
     get_fetch_url_token_threshold,
     get_all_scratchpad_sections,
     get_app_settings,
@@ -128,8 +127,6 @@ from lib.tool_registry import (
 from utils.token_utils import estimate_text_tokens
 from web.web_tools import (
     fetch_url_tool,
-    search_news_tool,
-    search_news_google_tool,
     search_scholar_tool,
     search_web_tool,
 )
@@ -211,8 +208,6 @@ RUNTIME_CONTEXT_INJECTION_SECTION_MARKERS = (
 _VALID_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SEARCH_QUERY_BATCHED_TOOL_NAMES = {
     "search_web",
-    "search_news",
-    "search_news_google",
     "search_scholar",
 }
 SEARCH_QUERY_ARGUMENT_ALIASES = (
@@ -250,14 +245,12 @@ LOGGER = get_logger(__name__)
 
 def _get_default_client():
     from core import config
-    from lib.model_registry import DEEPSEEK_PROVIDER, MINIMAX_PROVIDER, OPENROUTER_PROVIDER
+    from lib.model_registry import DEEPSEEK_PROVIDER, OPENROUTER_PROVIDER
 
     if config.DEEPSEEK_API_KEY:
         provider = DEEPSEEK_PROVIDER
     elif config.OPENROUTER_API_KEY:
         provider = OPENROUTER_PROVIDER
-    elif config.MINIMAX_API_KEY:
-        provider = MINIMAX_PROVIDER
     else:
         provider = DEEPSEEK_PROVIDER  # Fallback; will fail at runtime if no keys are set
     return get_provider_client(provider)
@@ -868,88 +861,45 @@ def _truncate_preview_text(text: str, limit: int | None = None) -> str:
     return cleaned
 
 
+# Tool → recovery hints YAML key mapping (see prompts.yaml: agent.recovery_hints)
+_RECOVERY_HINT_KEY_MAP: dict[str, str] = {
+    "fetch_url": "fetch_url",
+    "search_web": "search_web",
+    "search_scholar": "search_scholar",
+    "search_knowledge_base": "search_knowledge_base",
+    "search_canvas_document": "search_canvas",
+    "batch_read_canvas_documents": "batch_read_canvas",
+    "create_canvas_document": "create_canvas_document",
+    "batch_canvas_edits": "batch_canvas_edits",
+    "delete_canvas_document": "delete_canvas_document",
+    "transcribe_youtube_video": "transcribe_youtube_video",
+    "ask_clarifying_question": "ask_clarifying_question",
+    "expand_truncated_tool_result": "expand_truncated_tool_result",
+    "analyze_uploaded_image": "analyze_image",
+    "answer_image_question": "analyze_image",
+}
+
+
 def _build_recovery_hint_for_tool(tool_name: str, tool_args: dict | None = None) -> str:
     """Build a steering recovery hint for a failed tool execution.
 
     Per llm-backend-protocol §2.7, error responses should suggest the corrective
-    action. This function maps tool names to concrete next steps the LLM can take
-    to self-correct.
-
-    Args:
-        tool_name: The tool that failed.
-        tool_args: The arguments that were passed (for context-aware hints).
-
-    Returns:
-        A recovery hint string, or empty string if no specific hint is available.
+    action. Recovery hint text is sourced from prompts.yaml under agent.recovery_hints.
     """
     normalized_tool_name = str(tool_name or "").strip()
     normalized_tool_args = tool_args if isinstance(tool_args, dict) else {}
 
-    if normalized_tool_name in {"fetch_url", "fetch_url_summarized"}:
-        url = _clean_tool_text(normalized_tool_args.get("url") or "", limit=160)
-        if normalized_tool_name == "fetch_url":
-            if url:
-                return f"Retry fetch_url with {url} using compress=false for full content, or try an alternative source."
-            return "Retry fetch_url with compress=false for full content, or try an alternative source."
-        if url:
-            return f"Fall back to fetch_url for {url} with compress=false to get the raw content, or narrow the focus query."
-        return "Fall back to fetch_url with compress=false to get the raw content, or narrow the focus query."
+    # Map tool name(s) → YAML key under agent.recovery_hints
+    hint_key = _RECOVERY_HINT_KEY_MAP.get(normalized_tool_name)
+    if hint_key:
+        hint = get_prompt(f"agent.recovery_hints.{hint_key}", "")
+        if hint:
+            return hint
 
-    if normalized_tool_name in {"search_web", "search_news", "search_news_google", "search_scholar"}:
-        return "Try a different query phrasing. Or fetch a specific result URL directly with fetch_url."
-
-    if normalized_tool_name == "search_knowledge_base":
-        return "Try the search with a different query, or narrow the category filter."
-
-    if normalized_tool_name in {"search_canvas_document", "batch_read_canvas_documents"}:
-        return "Verify the document still exists and the document_id/path is correct."
-
-    if normalized_tool_name in ("create_canvas_document",):
-        return "Check that the content is valid and the document format is recognized."
-
-    if normalized_tool_name in (
-        "batch_canvas_edits", "replace_canvas_lines",
-    ):
-        return (
-            "Verify your line numbers match the current document. "
-            "Use batch_read_canvas_documents to re-read the document first, "
-            "then adjust your edit ranges. Use expected_lines to guard against stale edits."
-        )
-
-    if normalized_tool_name == "rewrite_canvas_document":
-        return (
-            "Verify the document exists and is editable. "
-            "Use batch_read_canvas_documents to confirm the document ID/path is correct."
-        )
-
-    if normalized_tool_name == "delete_canvas_document":
-        return "Verify the document still exists and the document_id or document_path is correct."
-
-    if normalized_tool_name == "transcribe_youtube_video":
-        return (
-            "Verify the URL is a valid YouTube URL (watch, short, embed, or youtu.be format). "
-            "Ensure the video is publicly accessible and not region-restricted."
-        )
-
-    if normalized_tool_name == "ask_clarifying_question":
-        return (
-            "Ensure each question has a unique 'id' field and a 'label'. "
-            "Check that required questions are included and options are valid."
-        )
-
-    if normalized_tool_name == "expand_truncated_tool_result":
-        return (
-            "Verify that message_id and tool_call_id are both provided "
-            "and refer to an existing tool result in the current conversation."
-        )
-
-    if normalized_tool_name in {"analyze_uploaded_image", "answer_image_question"}:
-        return (
-            "Verify the image_id refers to a previously stored image in this conversation. "
-            "If the image was uploaded in a different conversation, ask the user to re-upload it."
-        )
-
-    # Generic fallback: encourage the model to try an alternative approach
+    # Generic fallback
+    generic = get_prompt("agent.recovery_hints.generic", "")
+    if generic:
+        return generic.format(tool_name=normalized_tool_name)
     return (
         f"Tool '{normalized_tool_name}' failed. Consider checking the arguments for "
         f"correctness, using a different tool for the same goal, or re-reading the "
@@ -1937,8 +1887,8 @@ def _summarize_fetched_page_result(
     settings = get_app_settings()
     summarizer_model = get_operation_model("fetch_summarize", settings, fallback_model_id=parent_model)
     target = resolve_model_target(summarizer_model, settings)
-    summary_max_input_chars = get_fetch_url_summarized_max_input_chars(settings)
-    summary_max_output_tokens = get_fetch_url_summarized_max_output_tokens(settings)
+    summary_max_input_chars = get_fetch_url_summary_max_input_chars(settings)
+    summary_max_output_tokens = get_fetch_url_summary_max_output_tokens(settings)
     source_text = _build_fetch_summary_source_text(result, max_input_chars=summary_max_input_chars)
     if not source_text:
         raise ValueError("Fetched page did not contain enough text to summarize.")
@@ -2114,7 +2064,7 @@ def _prepare_fetch_result_for_model(
         f"({clipped_pct}% of the page, approximately {token_estimate:,} tokens). "
         f"{coverage_note} "
         f"{('Context anchors: ' + context_summary + ' ') if context_summary else ''}"
-        f"{recovery_hint or 'Re-fetch with compress=false to get the full content, then use compress_context_node/purge_context_nodes to manage token budget.'}"
+        f"{recovery_hint or 'Re-fetch with compress=false only when the complete extracted content is required.'}"
     )
     prepared["content_token_estimate"] = token_estimate
     prepared["raw_content_available"] = True
@@ -2547,42 +2497,6 @@ def _build_streaming_canvas_batch_edit_preview(
     return str(preview_document.get("content") or ""), preview_document
 
 
-def _build_streaming_canvas_transform_preview(
-    canvas_state: dict | None,
-    tool_args: dict,
-) -> tuple[str | None, dict | None]:
-    if not isinstance(canvas_state, dict) or not isinstance(tool_args, dict):
-        return None, None
-
-    document_id = str(tool_args.get("document_id") or "").strip() or None
-    document_path = str(tool_args.get("document_path") or "").strip() or None
-    try:
-        _, document = find_canvas_document(canvas_state, document_id=document_id, document_path=document_path)
-    except Exception:
-        return None, None
-
-    if tool_args.get("pattern") in (None, "") or tool_args.get("replacement") is None:
-        return None, document
-
-    preview_state = create_canvas_runtime_state([dict(document)], active_document_id=document.get("id"))
-    try:
-        result = transform_canvas_lines(
-            preview_state,
-            tool_args.get("pattern", ""),
-            tool_args.get("replacement", ""),
-            document_id=document.get("id"),
-            scope=tool_args.get("scope") or "all",
-            is_regex=tool_args.get("is_regex") is True,
-            case_sensitive=True if "case_sensitive" not in tool_args else tool_args.get("case_sensitive") is True,
-            count_only=False,
-        )
-    except Exception:
-        return None, document
-
-    preview_document = result.get("document") if isinstance(result.get("document"), dict) else document
-    return str(preview_document.get("content") or ""), preview_document
-
-
 def _build_streaming_canvas_tool_preview(
     tool_call_parts: list[dict],
     canvas_state: dict | None = None,
@@ -2619,14 +2533,9 @@ def _build_streaming_canvas_tool_preview(
             else:
                 content = _extract_partial_json_string_value(arguments_text, "content")
         elif tool_name in CANVAS_STREAM_REPLACE_CONTENT_TOOL_NAMES:
-            if tool_name == "batch_canvas_edits":
-                content, resolved_document = _build_streaming_canvas_batch_edit_preview(
-                    canvas_state, parsed_arguments or {}
-                )
-            else:
-                content, resolved_document = _build_streaming_canvas_transform_preview(
-                    canvas_state, parsed_arguments or {}
-                )
+            content, resolved_document = _build_streaming_canvas_batch_edit_preview(
+                canvas_state, parsed_arguments or {}
+            )
             if resolved_document:
                 resolved_document_id = str(resolved_document.get("id") or "").strip()
                 resolved_document_path = str(resolved_document.get("path") or "").strip()
@@ -2991,6 +2900,16 @@ def _build_missing_final_answer_instruction() -> dict:
     }
 
 
+def _has_missing_final_answer_instruction(messages: list[dict]) -> bool:
+    """Avoid adding the same final-answer retry instruction repeatedly."""
+    return any(
+        str(message.get("role") or "").strip() == "user"
+        and MISSING_FINAL_ANSWER_MARKER in str(message.get("content") or "")
+        for message in messages
+        if isinstance(message, dict)
+    )
+
+
 def _build_tool_execution_result_message(transcript_results: list[dict]) -> dict | None:
     if not transcript_results:
         return None
@@ -3215,6 +3134,7 @@ def _build_search_memory_value(tool_name: str, result: dict) -> str:
         expiry_warning = _clean_tool_text(match.get("expiry_warning") or "", limit=48)
         if expiry_warning:
             details.append(expiry_warning)
+        fragment = " ".join(details)
         if excerpt:
             fragment = f"{fragment}: {excerpt}" if fragment else excerpt
         if fragment:
@@ -3242,12 +3162,9 @@ def _run_ask_clarifying_question(tool_args: dict, runtime_state: dict):
 
 # Large operations that may trigger pre-execution cost check (Section 6.2)
 _LARGE_OPERATION_TOOL_NAMES = frozenset({
-    "materialise_file",
     "fetch_url",
-    "fetch_url_summarized",
     "batch_read_canvas_documents",
-    "expand_canvas_document",
-    "rewrite_canvas_document",
+    "read_canvas_document",
     "create_canvas_document",
     "search_canvas_document",
     "web_search",
@@ -3364,46 +3281,6 @@ def _run_search_web(tool_args: dict, runtime_state: dict):
     return result, f"{ok_count} web results found"
 
 
-def _run_search_news(tool_args: dict, runtime_state: dict):
-    del runtime_state
-    query_limit = get_search_tool_query_limit(get_app_settings())
-    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args), batch_size=query_limit))
-    if not query_batches:
-        return [], "search_news skipped: no queries provided"
-    result = _merge_batched_search_results(
-        [
-            search_news_tool(
-                batch,
-                lang=tool_args.get("lang", "tr"),
-                when=tool_args.get("when"),
-            )
-            for batch in query_batches
-        ]
-    )
-    ok_count = sum(1 for row in result if "error" not in row)
-    return result, f"{ok_count} news articles found"
-
-
-def _run_search_news_google(tool_args: dict, runtime_state: dict):
-    del runtime_state
-    query_limit = get_search_tool_query_limit(get_app_settings())
-    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args), batch_size=query_limit))
-    if not query_batches:
-        return [], "search_news_google skipped: no queries provided"
-    result = _merge_batched_search_results(
-        [
-            search_news_google_tool(
-                batch,
-                lang=tool_args.get("lang", "tr"),
-                when=tool_args.get("when"),
-            )
-            for batch in query_batches
-        ]
-    )
-    ok_count = sum(1 for row in result if "error" not in row)
-    return result, f"{ok_count} news articles found"
-
-
 def _run_search_scholar(tool_args: dict, runtime_state: dict):
     del runtime_state
     query_limit = get_search_tool_query_limit(get_app_settings())
@@ -3427,15 +3304,13 @@ def _run_search_scholar(tool_args: dict, runtime_state: dict):
 
 
 def _run_fetch_url(tool_args: dict, runtime_state: dict):
-    del runtime_state
-    result = fetch_url_tool(tool_args.get("url", ""))
-    return result, _summarize_fetch_result(result, tool_args.get("url", ""))
-
-
-def _run_fetch_url_summarized(tool_args: dict, runtime_state: dict):
     url = str(tool_args.get("url") or "").strip()
+    output_mode = str(tool_args.get("output_mode") or "content").strip().lower()
     focus = str(tool_args.get("focus") or "").strip()
-    result = fetch_url_tool(url)
+    result = fetch_url_tool(url, compress=tool_args.get("compress") is not False)
+    if output_mode != "summary":
+        return result, _summarize_fetch_result(result, url)
+
     if result.get("error") or not _clean_tool_text(result.get("content") or ""):
         error_result = {
             "url": str(result.get("url") or url).strip(),
@@ -3460,6 +3335,32 @@ def _run_fetch_url_summarized(tool_args: dict, runtime_state: dict):
         agent_context=agent_context,
         invocation_log_sink=invocation_log_sink,
     )
+
+
+def _run_read_canvas_document(tool_args: dict, runtime_state: dict):
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    start_line = tool_args.get("start_line")
+    end_line = tool_args.get("end_line")
+    if (start_line is None) != (end_line is None):
+        raise ValueError("start_line and end_line must both be provided for ranged reads.")
+    if start_line is None:
+        result = build_canvas_document_context_result(
+            canvas_state,
+            document_id=tool_args.get("document_id"),
+            document_path=tool_args.get("document_path"),
+            max_lines=tool_args.get("max_lines"),
+        )
+    else:
+        result = read_canvas_document(
+            canvas_state,
+            int(start_line),
+            int(end_line),
+            document_id=tool_args.get("document_id"),
+            document_path=tool_args.get("document_path"),
+            max_window_lines=int(tool_args.get("max_lines") or 200),
+        )
+    target = str(result.get("document_path") or result.get("title") or "Canvas").strip()
+    return result, f"Canvas read: {target}"
 
 
 def _run_create_canvas_document(tool_args: dict, runtime_state: dict):
@@ -3578,34 +3479,6 @@ def _run_batch_canvas_edits(tool_args: dict, runtime_state: dict):
     return result, f"Canvas batch edit applied in {batch_result['document']['title']}"
 
 
-def _run_set_canvas_viewport(tool_args: dict, runtime_state: dict):
-    canvas_state = _get_canvas_runtime_state(runtime_state)
-    auto_unpin_on_edit = True if "auto_unpin_on_edit" not in tool_args else tool_args.get("auto_unpin_on_edit") is True
-    result = set_canvas_viewport(
-        canvas_state,
-        start_line=int(tool_args.get("start_line") or 0),
-        end_line=int(tool_args.get("end_line") or 0),
-        ttl_turns=int(tool_args.get("ttl_turns") or 0) if tool_args.get("ttl_turns") not in (None, "") else 3,
-        permanent=tool_args.get("permanent") is True,
-        auto_unpin_on_edit=auto_unpin_on_edit,
-        document_id=tool_args.get("document_id"),
-        document_path=tool_args.get("document_path"),
-    )
-    pinned = result.get("pinned") if isinstance(result.get("pinned"), dict) else {}
-    target_label = str(pinned.get("document_path") or pinned.get("document_id") or "Canvas").strip()
-    return result, f"Canvas viewport pinned for {target_label}"
-
-
-def _run_clear_canvas_viewport(tool_args: dict, runtime_state: dict):
-    canvas_state = _get_canvas_runtime_state(runtime_state)
-    result = clear_canvas_viewport(
-        canvas_state,
-        document_id=tool_args.get("document_id"),
-        document_path=tool_args.get("document_path"),
-    )
-    return result, f"Canvas viewport cleared ({result.get('cleared_count', 0)})"
-
-
 def _run_delete_canvas_document(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
     result = delete_canvas_document(
@@ -3692,239 +3565,6 @@ def _generate_conversation_title_with_dedicated_model(conversation_id: int, fall
 
 
 # ---------------------------------------------------------------------------
-# Context Management Tool Handlers
-# (per AI Memory and Context Management doc)
-# ---------------------------------------------------------------------------
-from core.db import (
-    list_context_summary as _db_list_context_summary,
-    purge_context_nodes as _db_purge_context_nodes,
-    merge_context_nodes as _db_merge_context_nodes,
-    get_context_node as _db_get_context_node,
-    update_context_node as _db_update_context_node,
-)
-from core.config import CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS
-
-
-def _run_list_context_summary(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
-    """Handler for list_context_summary tool.
-
-    Per Section 2.1: Lightweight overview of all context nodes without full payloads.
-    Per Section 5.1: sort_by accepts 'timestamp' (default) or 'token_count'.
-    """
-    conversation_id = runtime_state.get("conversation_id") if isinstance(runtime_state, dict) else None
-    if not conversation_id:
-        return {"error": "No active conversation."}, "list_context_summary: no active conversation"
-
-    sort_by = str(tool_args.get("sort_by") or "timestamp").strip()
-    # Accept "timestamp" as the canonical name (per doc Section 5.1);
-    # map to internal "created_at" for DB queries.
-    if sort_by == "timestamp":
-        sort_by = "created_at"
-    if sort_by not in ("created_at", "token_count"):
-        sort_by = "created_at"
-
-    nodes = _db_list_context_summary(conversation_id=int(conversation_id), sort_by=sort_by)
-    total_tokens = sum(node.get("token_count", 0) for node in nodes)
-
-    # Build memory_health block (per agent_identity protocol)
-    total_limit = 128_000  # default fallback
-    try:
-        from core.db import get_prompt_max_input_tokens
-        total_limit = get_prompt_max_input_tokens({})
-    except Exception:
-        pass
-    usage_percent = round((total_tokens / total_limit * 100) if total_limit > 0 else 0, 1)
-    buffer_free = max(0, total_limit - total_tokens)
-
-    if usage_percent >= 90:
-        pressure_level = "critical"
-    elif usage_percent >= 75:
-        pressure_level = "warning"
-    else:
-        pressure_level = "normal"
-
-    result = {
-        "memory_health": {
-            "total_persistent_nodes": len(nodes),
-            "total_persistent_tokens": total_tokens,
-            "usage_percent": usage_percent,
-            "buffer_free": buffer_free,
-            "pressure_level": pressure_level,
-        },
-        "nodes": nodes,
-        "total_nodes": len(nodes),
-        "total_tokens": total_tokens,
-        "sort_by": sort_by,
-    }
-    return result, f"list_context_summary: {len(nodes)} nodes, ~{total_tokens} tokens"
-
-
-def _run_purge_context_nodes(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
-    """Handler for purge_context_nodes tool.
-
-    Per Section 2.2: Permanently remove specified context nodes.
-    Per doc Section 5.3: Supports purge_all=true for crisis cleanup.
-    """
-    conversation_id = runtime_state.get("conversation_id") if isinstance(runtime_state, dict) else None
-    if not conversation_id:
-        return {"error": "No active conversation."}, "purge_context_nodes: no active conversation"
-
-    # Support purge_all=true for crisis cleanup (per doc Section 5.3)
-    purge_all = tool_args.get("purge_all", False)
-    if purge_all:
-        # Get all active node IDs for this conversation
-        nodes = _db_list_context_summary(conversation_id=int(conversation_id), sort_by="created_at")
-        all_ids = [n["node_id"] for n in nodes if n.get("node_id")]
-        if all_ids:
-            reason = str(tool_args.get("reason") or "").strip() or "Crisis cleanup via purge_all"
-            result = _db_purge_context_nodes(all_ids, reason)
-            return result, f"purge_context_nodes (purge_all): {result.get('purged', 0)} nodes purged"
-        return {"purged": 0, "archived": 0, "active": 0}, "purge_context_nodes: no nodes to purge"
-
-    node_ids = tool_args.get("nodes") if isinstance(tool_args.get("nodes"), list) else []
-    if not node_ids:
-        return {"error": "No node_ids provided."}, "purge_context_nodes: no node_ids provided"
-
-    reason = str(tool_args.get("reason") or "").strip() or "Purged by AI via purge_context_nodes tool"
-
-    result = _db_purge_context_nodes(node_ids, reason)
-    return result, f"purge_context_nodes: {result.get('purged', 0)} nodes purged ({result.get('archived', 0)} archived, {result.get('active', 0)} active)"
-
-
-def _run_merge_context_nodes(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
-    """Handler for merge_context_nodes tool.
-
-    Per Section 2.3: Combine related nodes into one, purging originals.
-    """
-    conversation_id = runtime_state.get("conversation_id") if isinstance(runtime_state, dict) else None
-    if not conversation_id:
-        return {"error": "No active conversation."}, "merge_context_nodes: no active conversation"
-
-    node_ids = tool_args.get("nodes") if isinstance(tool_args.get("nodes"), list) else []
-    if len(node_ids) < 2:
-        return {"error": "At least 2 node_ids required."}, "merge_context_nodes: need >= 2 nodes"
-
-    new_summary = str(tool_args.get("new_summary") or "").strip() or "Merged context nodes"
-
-    merged_node = _db_merge_context_nodes(
-        conversation_id=int(conversation_id),
-        node_ids=node_ids,
-        new_summary=new_summary,
-    )
-    if not merged_node:
-        return {"error": "Merge failed — nodes not found or already deleted."}, "merge_context_nodes: failed"
-
-    return {
-        "merged_node_id": merged_node.get("node_id"),
-        "token_count": merged_node.get("token_count", 0),
-        "summary": merged_node.get("summary"),
-        "source_count": len(node_ids),
-    }, f"merge_context_nodes: merged {len(node_ids)} nodes into {merged_node.get('node_id')}"
-
-
-def _run_compress_context_node(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
-    """Handler for compress_context_node tool.
-
-    Per Section 2.4: Compress a node's payload by truncating middle bulk,
-    preserving head (~35%), middle sample (~15%), and tail (~50%).
-    """
-    conversation_id = runtime_state.get("conversation_id") if isinstance(runtime_state, dict) else None
-    if not conversation_id:
-        return {"error": "No active conversation."}, "compress_context_node: no active conversation"
-
-    node_id = str(tool_args.get("node_id") or "").strip()
-    if not node_id:
-        return {"error": "node_id is required."}, "compress_context_node: missing node_id"
-
-    node = _db_get_context_node(node_id)
-    if not node:
-        return {"error": f"Node {node_id} not found."}, f"compress_context_node: node {node_id} not found"
-
-    # Reject re-compression (Section 4.3.1)
-    if node.get("compressed"):
-        return {
-            "error": f"Node {node_id} is already compressed and cannot be compressed again. "
-                     "Use purge_context_nodes to remove it or merge_context_nodes to consolidate."
-        }, f"compress_context_node: node {node_id} already compressed"
-
-    full_content = node.get("full_content") or ""
-    original_length = len(full_content)
-
-    # Threshold check (Section 2.4 Behaviour step 1)
-    if original_length <= CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS:
-        return {
-            "node_id": node_id,
-            "original_length": original_length,
-            "compressed_length": original_length,
-            "truncated_chars": 0,
-            "was_truncated": False,
-            "message": "Node content is below the compression threshold; no compression applied.",
-        }, f"compress_context_node: node {node_id} below compression threshold ({original_length} chars)"
-
-    # Three-part retention (Section 2.4 Behaviour step 2):
-    # Head ~35%, Middle ~15%, Tail ~50% of target
-    target_length = max(CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS, int(original_length * 0.3))
-    head_chars = max(200, int(target_length * 0.35))
-    middle_chars = max(100, int(target_length * 0.15))
-    tail_chars = max(200, target_length - head_chars - middle_chars)
-
-    if head_chars + middle_chars + tail_chars >= original_length:
-        return {
-            "node_id": node_id,
-            "original_length": original_length,
-            "compressed_length": original_length,
-            "truncated_chars": 0,
-            "was_truncated": False,
-            "message": "Compression target exceeds original length; no compression applied.",
-        }, f"compress_context_node: node {node_id} already fits"
-
-    # Extract segments
-    head = full_content[:head_chars].rstrip()
-
-    middle_start = max(head_chars, min(len(full_content) - tail_chars - middle_chars, len(full_content) // 2 - middle_chars // 2))
-    middle_end = min(middle_start + middle_chars, len(full_content) - tail_chars)
-    middle = full_content[middle_start:middle_end].strip()
-
-    tail = full_content[-tail_chars:].lstrip()
-
-    # Truncation marker (Section 2.4 Behaviour step 3)
-    omitted_before = max(0, middle_start - head_chars)
-    if omitted_before > 0:
-        truncation_marker = f"\n\n-- {omitted_before:,} chars truncated --\n\n"
-        compressed_payload = f"{head}{truncation_marker}{middle}" if middle else head
-    else:
-        # No gap between head and middle; use a simple separator
-        compressed_payload = f"{head}\n\n{middle}" if middle else head
-
-    if tail:
-        compressed_payload += (
-            f"\n\n-- {max(0, len(full_content) - middle_end - tail_chars):,}"
-            f" chars truncated before tail --\n\n{tail}"
-        )
-
-    compressed_token_count = _estimate_text_tokens(compressed_payload)
-
-    # Update node (Section 2.4 Behaviour step 4)
-    updated = _db_update_context_node(
-        node_id,
-        full_content=compressed_payload,
-        token_count=compressed_token_count,
-        summary=node.get("summary"),
-        compressed=True,
-    )
-    if not updated:
-        return {"error": "Failed to update node after compression."}, f"compress_context_node: update failed for {node_id}"
-
-    truncated_chars = original_length - len(compressed_payload)
-    return {
-        "node_id": node_id,
-        "original_length": original_length,
-        "compressed_length": len(compressed_payload),
-        "truncated_chars": max(0, truncated_chars),
-        "was_truncated": True,
-    }, f"compress_context_node: node {node_id} compressed from {original_length:,} to {len(compressed_payload):,} chars"
-
-
 _TOOL_EXECUTORS = {
     "append_scratchpad": _run_append_scratchpad,
     "replace_scratchpad": _run_replace_scratchpad,
@@ -3934,76 +3574,15 @@ _TOOL_EXECUTORS = {
     "search_knowledge_base": _run_search_knowledge_base,
     "expand_truncated_tool_result": _run_expand_truncated_tool_result,
     "search_web": _run_search_web,
-    "search_news": _run_search_news,
-    "search_news_google": _run_search_news_google,
     "search_scholar": _run_search_scholar,
     "fetch_url": _run_fetch_url,
-    "fetch_url_summarized": _run_fetch_url_summarized,
     "batch_read_canvas_documents": _run_batch_read_canvas_documents,
+    "read_canvas_document": _run_read_canvas_document,
     "search_canvas_document": _run_search_canvas_document,
     "create_canvas_document": _run_create_canvas_document,
-    "set_canvas_viewport": _run_set_canvas_viewport,
-    "clear_canvas_viewport": _run_clear_canvas_viewport,
     "batch_canvas_edits": _run_batch_canvas_edits,
     "delete_canvas_document": _run_delete_canvas_document,
-    # Context management tools (per AI Memory and Context Management doc)
-    "list_context_summary": _run_list_context_summary,
-    "purge_context_nodes": _run_purge_context_nodes,
-    "merge_context_nodes": _run_merge_context_nodes,
-    "compress_context_node": _run_compress_context_node,
 }
-
-
-# ---------------------------------------------------------------------------
-# Virtual File System (VFS) tool executors
-# ---------------------------------------------------------------------------
-from utils.vfs import get_vfs
-def _run_materialise_file(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
-    """Handler for materialise_file tool.
-
-    Per doc Section 2.3 materialise_file:
-    1. Retrieves content from shadow store.
-    2. Returns formatted content block for Tier 2 append.
-    3. Updates last_access timestamp.
-    """
-    path = str(tool_args.get("path") or "").strip()
-    if not path:
-        return {"error": "path is required."}, "materialise_file: missing path"
-
-    vfs = get_vfs()
-    content_block = vfs.materialise_file(path)
-    if content_block is None:
-        return {"error": f"File not found or not loadable: {path}"}, f"materialise_file: failed for {path}"
-
-    # Return the full content as the tool result — it will be injected into the
-    # tool message (Tier 2 append) by _build_compact_tool_message_content
-    return {
-        "path": path,
-        "hash": vfs.get_shadow(path).hash_short if vfs.get_shadow(path) else "",
-        "status": "materialised",
-        "tokens_estimate": vfs.get_shadow(path).tokens_estimate if vfs.get_shadow(path) else 0,
-    }, content_block
-
-
-def _run_search_codebase(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
-    """Handler for search_codebase tool.
-    
-    Per doc Section 2.3:
-    - Searches across the shadow store and file system.
-    - Returns matches with context lines, not full files.
-    - Matched files remain in the shadow store for future access.
-    """
-    query = str(tool_args.get("query") or "").strip()
-    if not query:
-        return {"error": "query is required."}, "search_codebase: missing query"
-    
-    scope = str(tool_args.get("scope") or "").strip() or None
-    max_results = min(50, max(1, int(tool_args.get("max_results") or 20)))
-    
-    vfs = get_vfs()
-    result = vfs.search_codebase(query, scope=scope, max_results=max_results)
-    summary = f"search_codebase: {result.get('total_matches', 0)} matches for '{query[:60]}'"
-    return result, summary
 
 
 def _run_delegate_task(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
@@ -4038,10 +3617,7 @@ def _run_delegate_task(tool_args: dict, runtime_state: dict) -> tuple[dict, str]
     return result, summary
 
 
-# Register VFS tool executors now that their functions are defined.
 _TOOL_EXECUTORS.update({
-    "materialise_file": _run_materialise_file,
-    "search_codebase": _run_search_codebase,
     "delegate_task": _run_delegate_task,
 })
 
@@ -4371,15 +3947,13 @@ def collect_agent_response(
 def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
     tool_name = _normalize_tool_name(tool_name)
     tool_args = tool_args if isinstance(tool_args, dict) else {}
-    if tool_name in {"search_web", "search_news", "search_news_google", "search_scholar"}:
+    if tool_name in {"search_web", "search_scholar"}:
         values = _get_search_tool_queries(tool_args)
         if isinstance(values, list):
             return ", ".join(str(value).strip() for value in values if str(value).strip())[:300]
     if tool_name == "search_knowledge_base":
         return str(tool_args.get("query") or "").strip()[:300]
     if tool_name == "fetch_url":
-        return str(tool_args.get("url") or "").strip()[:300]
-    if tool_name == "fetch_url_summarized":
         url = str(tool_args.get("url") or "").strip()
         focus = str(tool_args.get("focus") or "").strip()
         if url and focus:
@@ -4475,7 +4049,8 @@ def _build_tool_result_storage_entry(
         if isinstance(result, dict):
             display_result = transcript_result if isinstance(transcript_result, dict) else result
             display_content = _clean_tool_text(
-                display_result.get("content") or "", limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS
+                display_result.get("content") or display_result.get("summary") or "",
+                limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS,
             )
             raw_content = _clean_tool_text(
                 result.get("raw_content") or result.get("content") or "",
@@ -4506,21 +4081,6 @@ def _build_tool_result_storage_entry(
             if display_content:
                 parts.append(display_content)
             text = "\n\n".join(parts)
-    elif tool_name == "fetch_url_summarized" and isinstance(result, dict):
-        parts = []
-        title = _clean_tool_text(result.get("title") or "", limit=160)
-        url = _clean_tool_text(result.get("url") or tool_args.get("url") or "", limit=220)
-        focus = _clean_tool_text(result.get("focus") or tool_args.get("focus") or "", limit=260)
-        summary_text = _clean_tool_text(result.get("summary") or "", limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS)
-        if title:
-            parts.append(f"Title: {title}")
-        if url:
-            parts.append(f"URL: {url}")
-        if focus:
-            parts.append(f"Focus: {focus}")
-        if summary_text:
-            parts.append("Summary:\n" + summary_text)
-        text = "\n\n".join(parts)
     elif tool_name == "transcribe_youtube_video" and isinstance(result, dict):
         parts = []
         title = _clean_tool_text(result.get("title") or "", limit=160)
@@ -4540,8 +4100,6 @@ def _build_tool_result_storage_entry(
         text = "\n\n".join(parts)
     elif tool_name == "search_web" and isinstance(result, list):
         text = _format_list_tool_result(result, "Web results", link_key="url")
-    elif tool_name in {"search_news", "search_news_google"} and isinstance(result, list):
-        text = _format_list_tool_result(result, "News results", link_key="link", extra_keys=("time", "source"))
     elif tool_name == "search_scholar" and isinstance(result, list):
         text = _format_list_tool_result(result, "Scholar results", link_key="url", extra_keys=("authors", "year", "venue", "citations"))
 
@@ -4599,7 +4157,7 @@ def _build_tool_result_storage_entry(
             entry["content_token_estimate"] = token_estimate
         if isinstance(content_char_count, int) and content_char_count >= 0:
             entry["content_char_count"] = content_char_count
-    elif tool_name == "fetch_url_summarized" and isinstance(result, dict):
+    if tool_name == "fetch_url" and isinstance(result, dict) and tool_args.get("output_mode") == "summary":
         focus = _clean_tool_text(result.get("focus") or tool_args.get("focus") or "", limit=260)
         model = _clean_tool_text(result.get("model") or "", limit=120)
         content_char_count = result.get("content_char_count")
@@ -5948,7 +5506,7 @@ def run_agent_stream(
                     for event in emit_turn_answer(pending_delta):
                         yield event
 
-            # MiniMax streaming: capture usage from the stream iterator after iteration ends
+            # Capture usage from the stream iterator after iteration ends
             if not provider_usage.get("received"):
                 stream_usage = _extract_usage_metrics(getattr(response, "usage", None))
                 if stream_usage.get("usage_fields_present"):

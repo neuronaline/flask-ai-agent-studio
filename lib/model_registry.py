@@ -10,8 +10,8 @@ import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from utils import proxy_settings
 from utils.logging_config import get_logger
-from utils.proxy_settings import PROXY_OPERATION_OPENROUTER
 from utils.token_utils import estimate_text_tokens
 
 load_dotenv()
@@ -21,7 +21,6 @@ LOGGER = get_logger(__name__)
 
 DEEPSEEK_PROVIDER = "deepseek"
 OPENROUTER_PROVIDER = "openrouter"
-MINIMAX_PROVIDER = "minimax"
 OPENROUTER_MODEL_PREFIX = "openrouter:"
 OPENROUTER_REASONING_MODE_DEFAULT = "default"
 OPENROUTER_REASONING_MODE_ENABLED = "enabled"
@@ -92,7 +91,6 @@ _OPENROUTER_ANTHROPIC_VOLATILE_RUNTIME_MARKERS = (
     "## tool execution history",
     "## active tools this turn",
 )
-_MINIMAX_REQUIRED_MAX_TOKENS_DEFAULT = 4_096
 
 
 def _openrouter_anthropic_cache_min_tokens(api_model: str) -> int:
@@ -216,10 +214,11 @@ class _OpenRouterClientProxy:
         return client, http_client
 
     def _create_chat_completion(self, *args, **kwargs):
-        from web.web_tools import get_proxy_candidates_for_operation
-
         last_error: Exception | None = None
-        for proxy in get_proxy_candidates_for_operation(PROXY_OPERATION_OPENROUTER, include_direct_fallback=True):
+        for proxy in proxy_settings.get_proxy_candidates_for_operation(
+            proxy_settings.PROXY_OPERATION_OPENROUTER,
+            include_direct_fallback=True,
+        ):
             client = None
             http_client = None
             response = None
@@ -260,510 +259,6 @@ class _OpenRouterClientProxy:
         raise RuntimeError("OpenRouter request failed without a recorded error.")
 
 
-class _MiniMaxDelta:
-    """Mimics OpenAI chat.completion.delta for MiniMax streaming responses."""
-
-    def __init__(
-        self,
-        content: str = "",
-        reasoning_content: str = "",
-        tool_calls: list | None = None,
-    ):
-        self.content = content
-        self.reasoning_content = reasoning_content
-        self.tool_calls = tool_calls or []
-
-
-class _MiniMaxChoiceDelta:
-    """Mimics OpenAI chat.completion.chunk.choice[0].delta for MiniMax."""
-
-    def __init__(
-        self,
-        content: str = "",
-        reasoning_content: str = "",
-        tool_calls: list | None = None,
-    ):
-        self.delta = _MiniMaxDelta(
-            content=content,
-            reasoning_content=reasoning_content,
-            tool_calls=tool_calls,
-        )
-
-
-class _MiniMaxChunk:
-    """Mimics OpenAI chat.completion.chunk for MiniMax streaming responses.
-
-    Translates Anthropic SDK streaming events to OpenAI-compatible format.
-    """
-
-    def __init__(
-        self,
-        content: str = "",
-        reasoning_content: str = "",
-        index: int = 0,
-        tool_calls: list | None = None,
-    ):
-        self.choices = [
-            _MiniMaxChoiceDelta(
-                content=content,
-                reasoning_content=reasoning_content,
-                tool_calls=tool_calls,
-            )
-        ]
-        self.index = index
-
-    @property
-    def usage(self) -> None:
-        """Per-chunk usage is not available; usage is captured at stream end."""
-        return None
-
-
-class _MiniMaxStreamIterator:
-    """Iterator that translates Anthropic streaming events to OpenAI-compatible chunks."""
-
-    def __init__(self, anthropic_stream):
-        self._anthropic_stream = anthropic_stream
-        self._closed = False
-        # Track tool use state across streaming events
-        self._tool_use_state: dict[int, dict] = {}
-        # Capture usage from message_delta events
-        self._usage: dict | None = None
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        while True:
-            chunk = next(self._anthropic_stream)
-            self._closed = False  # will be set to True on close
-
-            if chunk.type == "content_block_start":
-                content_block = getattr(chunk, "content_block", None) or {}
-                block_type = (
-                    content_block.get("type", "")
-                    if isinstance(content_block, dict)
-                    else getattr(content_block, "type", "")
-                )
-                index = chunk.index or 0
-                if block_type == "text":
-                    # Initial text block - yield empty delta to set up the structure
-                    return _MiniMaxChunk(content="", reasoning_content="", index=index)
-                elif block_type == "thinking":
-                    # Initial thinking block - yield empty reasoning_content
-                    return _MiniMaxChunk(content="", reasoning_content="", index=index)
-                elif block_type == "tool_use":
-                    # Tool use block - extract tool id and name
-                    tool_name = ""
-                    tool_id = ""
-                    if isinstance(content_block, dict):
-                        tool_name = content_block.get("name", "")
-                        tool_id = content_block.get("id", "")
-                    else:
-                        tool_name = getattr(content_block, "name", "")
-                        tool_id = getattr(content_block, "id", "")
-                    self._tool_use_state[index] = {"name": tool_name, "id": tool_id, "arguments": ""}
-                    # Emit initial tool_use structure
-                    return _MiniMaxChunk(
-                        content="",
-                        reasoning_content="",
-                        index=index,
-                        tool_calls=[
-                            {
-                                "index": index,
-                                "id": tool_id,
-                                "function": {
-                                    "name": tool_name,
-                                    "arguments": "",
-                                },
-                            }
-                        ],
-                    )
-
-            elif chunk.type == "content_block_delta":
-                delta = getattr(chunk, "delta", None)
-                if delta is None:
-                    continue
-                delta_type = getattr(delta, "type", "")
-                index = chunk.index or 0
-
-                if delta_type == "thinking_delta":
-                    thinking_text = getattr(delta, "thinking", "") or ""
-                    return _MiniMaxChunk(content="", reasoning_content=thinking_text, index=index)
-                elif delta_type == "text_delta":
-                    text = getattr(delta, "text", "") or ""
-                    return _MiniMaxChunk(content=text, reasoning_content="", index=index)
-                elif delta_type == "input_json_delta":
-                    # Tool use JSON delta - accumulate partial JSON
-                    partial_json = getattr(delta, "partial_json", "") or ""
-                    if index in self._tool_use_state:
-                        self._tool_use_state[index]["arguments"] += partial_json
-                    # Emit tool_calls with accumulated arguments
-                    tool_call = {
-                        "index": index,
-                        "function": {
-                            "name": "",
-                            "arguments": partial_json,
-                        },
-                    }
-                    if index in self._tool_use_state:
-                        tool_call["id"] = self._tool_use_state[index].get("id", "")
-                        tool_call["function"]["name"] = self._tool_use_state[index].get("name", "")
-                    return _MiniMaxChunk(
-                        content="",
-                        reasoning_content="",
-                        index=index,
-                        tool_calls=[tool_call],
-                    )
-
-            elif chunk.type == "message_delta":
-                # Capture usage from final message metadata
-                usage = getattr(chunk, "usage", None)
-                if usage is not None:
-                    prompt_tokens = getattr(usage, "input_tokens", 0) or 0
-                    output_tokens = getattr(usage, "output_tokens", 0) or 0
-                    self._usage = {
-                        "prompt_tokens": int(prompt_tokens),
-                        "completion_tokens": int(output_tokens),
-                        "total_tokens": int(prompt_tokens + output_tokens),
-                    }
-                continue
-
-            elif chunk.type == "message_stop":
-                raise StopIteration
-
-        raise StopIteration
-
-    @property
-    def usage(self) -> _MiniMaxUsage | None:
-        """Return captured usage after iteration completes."""
-        if self._usage is None:
-            return None
-        return _MiniMaxUsage(
-            prompt_tokens=self._usage["prompt_tokens"],
-            completion_tokens=self._usage["completion_tokens"],
-            total_tokens=self._usage["total_tokens"],
-        )
-
-    def close(self):
-        self._closed = True
-        close_method = getattr(self._anthropic_stream, "close", None)
-        if callable(close_method):
-            try:
-                close_method()
-            except Exception:
-                pass
-
-
-class _MiniMaxChatCompletionsProxy:
-    """Exposes OpenAI-style chat.completions.create() interface for MiniMax."""
-
-    def __init__(self, owner: "_MiniMaxClientProxy"):
-        self._owner = owner
-
-    def create(self, *args, **kwargs):
-        return self._owner._create_chat_completion(*args, **kwargs)
-
-
-class _MiniMaxChatProxy:
-    def __init__(self, owner: "_MiniMaxClientProxy"):
-        self.completions = _MiniMaxChatCompletionsProxy(owner)
-
-
-class _MiniMaxClientProxy:
-    """Wraps Anthropic SDK to expose OpenAI-compatible chat.completions interface.
-
-    Translates OpenAI-format requests to Anthropic API calls and converts
-    streaming responses back to OpenAI-compatible format.
-    """
-
-    def __init__(self, api_key: str):
-        self._api_key = api_key
-        self.chat = _MiniMaxChatProxy(self)
-        self._anthropic_client = None
-
-    def _get_anthropic_client(self):
-        if self._anthropic_client is None:
-            import anthropic
-
-            self._anthropic_client = anthropic.Anthropic(
-                api_key=self._api_key,
-                base_url="https://api.minimax.io/anthropic",
-            )
-        return self._anthropic_client
-
-    def _translate_openai_to_anthropic(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        """Translate OpenAI-style kwargs to Anthropic API format."""
-        translated: dict[str, Any] = {}
-
-        def _coerce_positive_int(value, default: int) -> int:
-            try:
-                parsed = int(value)
-            except (TypeError, ValueError):
-                return default
-            return parsed if parsed > 0 else default
-
-        # Model - direct mapping
-        translated["model"] = kwargs.get("model", "")
-
-        # Max tokens (required by Anthropic messages.create)
-        translated["max_tokens"] = _coerce_positive_int(
-            kwargs.get("max_tokens"), _MINIMAX_REQUIRED_MAX_TOKENS_DEFAULT
-        )
-
-        # Temperature - MiniMax requires (0.0, 1.0]
-        if "temperature" in kwargs:
-            temp = float(kwargs["temperature"])
-            # Clamp to MiniMax's valid range (0.0, 1.0]
-            temp = max(0.001, min(1.0, temp))
-            translated["temperature"] = temp
-
-        # Top p - not supported by Anthropic API, strip it
-        # (Anthropic uses temperature only for randomness control)
-
-        # System prompt - collect ALL system messages and merge into one
-        # MiniMax requires exactly one system message; multiple are combined
-        system_parts = []
-        messages = kwargs.get("messages", [])
-        if messages and isinstance(messages, list):
-            non_system_messages = []
-            for msg in messages:
-                if not isinstance(msg, dict):
-                    continue
-                role = str(msg.get("role") or "").strip().lower()
-                if role == "system":
-                    content = msg.get("content", "")
-                    if content:
-                        system_parts.append(str(content))
-                else:
-                    non_system_messages.append(msg)
-            messages = non_system_messages
-
-        if system_parts:
-            translated["system"] = "\n\n".join(system_parts)
-
-        # Translate messages
-        translated_messages = []
-        for msg in messages:
-            if not isinstance(msg, dict):
-                continue
-
-            role = str(msg.get("role") or "").strip().lower()
-            content = msg.get("content", "")
-            tool_call_id = str(msg.get("tool_call_id") or "").strip()
-
-            def _normalize_text_blocks(raw_content) -> list[dict[str, Any]]:
-                if isinstance(raw_content, list):
-                    blocks = []
-                    for block in raw_content:
-                        if not isinstance(block, dict):
-                            continue
-                        block_type = str(block.get("type") or "").strip()
-                        if block_type == "text":
-                            text = str(block.get("text") or "")
-                            if text:
-                                blocks.append({"type": "text", "text": text})
-                    return blocks
-                if isinstance(raw_content, str) and raw_content:
-                    return [{"type": "text", "text": raw_content}]
-                return []
-
-            if role == "tool":
-                tool_result_blocks = []
-                if isinstance(content, list):
-                    for block in content:
-                        if not isinstance(block, dict):
-                            continue
-                        if str(block.get("type") or "").strip() == "tool_result":
-                            copied_block = dict(block)
-                            if tool_call_id and not copied_block.get("tool_use_id"):
-                                copied_block["tool_use_id"] = tool_call_id
-                            tool_result_blocks.append(copied_block)
-
-                if not tool_result_blocks:
-                    result_content = content if content not in (None, "") else ""
-                    tool_result_block: dict[str, Any] = {
-                        "type": "tool_result",
-                        "tool_use_id": tool_call_id or "tool_call",
-                        "content": result_content,
-                    }
-                    tool_result_blocks.append(tool_result_block)
-
-                translated_messages.append(
-                    {
-                        "role": "user",
-                        "content": tool_result_blocks,
-                    }
-                )
-                continue
-
-            if role == "assistant":
-                translated_content = _normalize_text_blocks(content)
-                tool_calls = msg.get("tool_calls") if isinstance(msg.get("tool_calls"), list) else []
-                for tool_call in tool_calls:
-                    if not isinstance(tool_call, dict):
-                        continue
-                    function = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
-                    tool_name = str(function.get("name") or tool_call.get("name") or "").strip()
-                    if not tool_name:
-                        continue
-                    raw_arguments = function.get("arguments")
-                    if isinstance(raw_arguments, str):
-                        try:
-                            input_payload = json.loads(raw_arguments)
-                        except Exception:
-                            input_payload = {}
-                    elif isinstance(raw_arguments, dict):
-                        input_payload = raw_arguments
-                    else:
-                        input_payload = {}
-                    translated_content.append(
-                        {
-                            "type": "tool_use",
-                            "id": str(tool_call.get("id") or "").strip() or f"tool_{tool_name}",
-                            "name": tool_name,
-                            "input": input_payload,
-                        }
-                    )
-
-                if translated_content:
-                    translated_messages.append(
-                        {
-                            "role": "assistant",
-                            "content": translated_content,
-                        }
-                    )
-                continue
-
-            translated_content = _normalize_text_blocks(content)
-            if not translated_content and role in ("user", "assistant"):
-                translated_content = [{"type": "text", "text": ""}]
-
-            if translated_content or role in ("user", "assistant"):
-                translated_messages.append(
-                    {
-                        "role": role,
-                        "content": translated_content,
-                    }
-                )
-
-        translated["messages"] = translated_messages
-
-        # Tools
-        if "tools" in kwargs:
-            tools = kwargs["tools"]
-            if isinstance(tools, list):
-                anthropic_tools = []
-                for tool in tools:
-                    if not isinstance(tool, dict):
-                        continue
-                    tool_type = str(tool.get("type") or "").strip()
-                    if tool_type == "function":
-                        func = tool.get("function", {})
-                        anthropic_tools.append(
-                            {
-                                "name": func.get("name", ""),
-                                "description": func.get("description", ""),
-                                "input_schema": func.get("parameters", {}),
-                            }
-                        )
-                    elif tool_type == "code":
-                        # Code tool - skip for now
-                        pass
-                if anthropic_tools:
-                    translated["tools"] = anthropic_tools
-
-        # Tool choice
-        tool_choice = kwargs.get("tool_choice")
-        if isinstance(tool_choice, dict):
-            function = tool_choice.get("function") if isinstance(tool_choice.get("function"), dict) else {}
-            tool_name = str(function.get("name") or "").strip()
-            if tool_name:
-                translated["tool_choice"] = {"type": "tool", "name": tool_name}
-        elif isinstance(tool_choice, str):
-            normalized_tool_choice = tool_choice.strip().lower()
-            if normalized_tool_choice == "auto":
-                translated["tool_choice"] = {"type": "auto"}
-            elif normalized_tool_choice in {"required", "any"}:
-                translated["tool_choice"] = {"type": "any"}
-
-        # Stream
-        translated["stream"] = kwargs.get("stream", False)
-
-        # Whitelist: only pass parameters that MiniMax's Anthropic endpoint supports
-        allowed_params = {
-            "model", "max_tokens", "system", "messages",
-            "temperature", "stream", "tools", "tool_choice",
-        }
-        translated_copy = {k: v for k, v in translated.items() if k in allowed_params}
-
-        return translated_copy
-
-    def _create_chat_completion(self, *args, **kwargs):
-        """Handle chat.completions.create() call, translating to Anthropic API."""
-        # Merge args and kwargs
-        if args:
-            # positional arg for model (uncommon but handle it)
-            if len(args) >= 1:
-                kwargs["model"] = args[0]
-            if len(args) >= 2:
-                kwargs["messages"] = args[1]
-
-        # Translate to Anthropic format
-        anthropic_kwargs = self._translate_openai_to_anthropic(kwargs)
-
-        # Get the client
-        client = self._get_anthropic_client()
-
-        # Check if streaming
-        is_streaming = anthropic_kwargs.get("stream", False)
-
-        if is_streaming:
-            # Streaming call
-            stream = client.messages.create(**anthropic_kwargs)
-            return _MiniMaxStreamIterator(stream)
-        else:
-            # Non-streaming call
-            response = client.messages.create(**anthropic_kwargs)
-            return _MiniMaxNonStreamResponse(response, anthropic_kwargs.get("model", ""))
-
-
-class _MiniMaxNonStreamResponse:
-    """Wraps a non-streaming Anthropic response to look like OpenAI non-streaming response."""
-
-    def __init__(self, message, model: str):
-        self.message = message
-        self.model = model
-        self.choices = [_MiniMaxNonStreamChoice(message)]
-        # Anthropic Usage uses attributes directly, not dict-like .get()
-        usage = getattr(message, "usage", None)
-        if usage is not None:
-            prompt_tokens = getattr(usage, "input_tokens", 0) or 0
-            output_tokens = getattr(usage, "output_tokens", 0) or 0
-        else:
-            prompt_tokens = 0
-            output_tokens = 0
-        self.usage = _MiniMaxUsage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=output_tokens,
-            total_tokens=prompt_tokens + output_tokens,
-        )
-
-    def __iter__(self):
-        return iter([self])
-
-
-class _MiniMaxNonStreamChoice:
-    def __init__(self, message):
-        self.message = message
-        self.finish_reason = getattr(message, "stop_reason", None) or "stop"
-
-
-class _MiniMaxUsage:
-    def __init__(self, prompt_tokens: int, completion_tokens: int, total_tokens: int):
-        self.prompt_tokens = prompt_tokens
-        self.completion_tokens = completion_tokens
-        self.total_tokens = total_tokens
-
 
 BUILTIN_MODELS = [
     {
@@ -801,76 +296,6 @@ BUILTIN_MODELS = [
         "name": "DeepSeek Reasoner",
         "provider": DEEPSEEK_PROVIDER,
         "api_model": "deepseek-reasoner",
-        "supports_tools": True,
-        "supports_vision": False,
-        "supports_structured_outputs": False,
-        "is_custom": False,
-    },
-    {
-        "id": "MiniMax-M2.7",
-        "name": "MiniMax M2.7",
-        "provider": MINIMAX_PROVIDER,
-        "api_model": "MiniMax-M2.7",
-        "supports_tools": True,
-        "supports_vision": False,
-        "supports_structured_outputs": False,
-        "is_custom": False,
-    },
-    {
-        "id": "MiniMax-M2.7-highspeed",
-        "name": "MiniMax M2.7 HighSpeed",
-        "provider": MINIMAX_PROVIDER,
-        "api_model": "MiniMax-M2.7-highspeed",
-        "supports_tools": True,
-        "supports_vision": False,
-        "supports_structured_outputs": False,
-        "is_custom": False,
-    },
-    {
-        "id": "MiniMax-M2.5",
-        "name": "MiniMax M2.5",
-        "provider": MINIMAX_PROVIDER,
-        "api_model": "MiniMax-M2.5",
-        "supports_tools": True,
-        "supports_vision": False,
-        "supports_structured_outputs": False,
-        "is_custom": False,
-    },
-    {
-        "id": "MiniMax-M2.5-highspeed",
-        "name": "MiniMax M2.5 HighSpeed",
-        "provider": MINIMAX_PROVIDER,
-        "api_model": "MiniMax-M2.5-highspeed",
-        "supports_tools": True,
-        "supports_vision": False,
-        "supports_structured_outputs": False,
-        "is_custom": False,
-    },
-    {
-        "id": "MiniMax-M2.1",
-        "name": "MiniMax M2.1",
-        "provider": MINIMAX_PROVIDER,
-        "api_model": "MiniMax-M2.1",
-        "supports_tools": True,
-        "supports_vision": False,
-        "supports_structured_outputs": False,
-        "is_custom": False,
-    },
-    {
-        "id": "MiniMax-M2.1-highspeed",
-        "name": "MiniMax M2.1 HighSpeed",
-        "provider": MINIMAX_PROVIDER,
-        "api_model": "MiniMax-M2.1-highspeed",
-        "supports_tools": True,
-        "supports_vision": False,
-        "supports_structured_outputs": False,
-        "is_custom": False,
-    },
-    {
-        "id": "MiniMax-M2",
-        "name": "MiniMax M2",
-        "provider": MINIMAX_PROVIDER,
-        "api_model": "MiniMax-M2",
         "supports_tools": True,
         "supports_vision": False,
         "supports_structured_outputs": False,
@@ -1310,14 +735,16 @@ def build_model_provider_policy(
             ("tool_choice", "not supported"),
             ("404", "tool_choice"),
         )
-    elif provider == MINIMAX_PROVIDER:
-        # MiniMax uses Anthropic SDK format with thinking support
-        supports_native_reasoning_continuation = True
-        cache_context = {
-            "supports_prompt_cache": False,
-            "strategy": "none",
-        }
-
+        api_model = str(record.get("api_model") or "").strip()
+        if _is_openrouter_prompt_cache_enabled(settings) and (
+            _openrouter_supports_implicit_prompt_cache(api_model)
+            or _openrouter_requires_explicit_cache_breakpoints(api_model)
+            or _openrouter_supports_top_level_prompt_cache(api_model)
+        ):
+            cache_context = {
+                "supports_prompt_cache": True,
+                "strategy": "model_aware",
+            }
     supports_prompt_cache = bool(isinstance(cache_context, dict) and cache_context.get("supports_prompt_cache") is True)
     return {
         "provider": provider,
@@ -1891,7 +1318,7 @@ def can_model_use_structured_outputs(model_id: str, settings: dict | None = None
 
 
 @lru_cache(maxsize=3)
-def get_provider_client(provider: str) -> OpenAI | _OpenRouterClientProxy | _MiniMaxClientProxy:
+def get_provider_client(provider: str) -> OpenAI | _OpenRouterClientProxy:
     from core import config
 
     if provider == DEEPSEEK_PROVIDER:
@@ -1915,8 +1342,6 @@ def get_provider_client(provider: str) -> OpenAI | _OpenRouterClientProxy | _Min
         if default_headers:
             kwargs["default_headers"] = default_headers
         return _OpenRouterClientProxy(kwargs)
-    if provider == MINIMAX_PROVIDER:
-        return _MiniMaxClientProxy(api_key=(config.MINIMAX_API_KEY or "").strip())
     raise ValueError(f"Unsupported provider: {provider}")
 
 
@@ -2083,6 +1508,5 @@ def _get_openrouter_anthropic_ttl(settings: dict[str, Any] | None) -> str:
         return "5m"
     raw_ttl = str(settings.get("openrouter_anthropic_cache_ttl") or "").strip().lower()
     return "1h" if raw_ttl == "1h" else "5m"
-
 
 

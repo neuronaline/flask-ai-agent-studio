@@ -28,7 +28,7 @@ data/
 models/
 
 # Local config and secrets files
-proxies.txt
+proxy.yaml
 
 # Project / editor generated files
 .github/
@@ -57,3 +57,4 @@ list_files.py
 project_files.md
 .cache/
 .forge/
+scripts/install.log

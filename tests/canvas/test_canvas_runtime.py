@@ -3,11 +3,12 @@ from __future__ import annotations
 import pytest
 
 from services.canvas import (
+    batch_canvas_edits,
     batch_read_canvas_documents,
     create_canvas_runtime_state,
     get_canvas_viewport_payloads,
     normalize_canvas_document,
-    scroll_canvas_document,
+    read_canvas_document,
     search_canvas_document,
     set_canvas_viewport,
 )
@@ -25,6 +26,35 @@ from core.messages import _build_canvas_prompt_payload, build_runtime_system_mes
 
 
 class TestCanvasRuntime:
+    def test_batch_canvas_edits_replace_all_rewrites_complete_document(self):
+        runtime_state = create_canvas_runtime_state(
+            [{"id": "doc-1", "title": "app.py", "path": "app.py", "format": "code", "content": "old\ntext"}]
+        )
+
+        result = batch_canvas_edits(
+            runtime_state,
+            [{"action": "replace_all", "content": "new\ncontent"}],
+            document_path="app.py",
+        )
+
+        assert result["document"]["content"] == "new\ncontent"
+        assert result["changed_ranges"][0]["action"] == "replace_all"
+
+    def test_batch_canvas_edits_rejects_replace_all_mixed_with_line_edits(self):
+        runtime_state = create_canvas_runtime_state(
+            [{"id": "doc-1", "title": "app.py", "path": "app.py", "format": "code", "content": "old"}]
+        )
+
+        with pytest.raises(ValueError, match="replace_all must be the only operation"):
+            batch_canvas_edits(
+                runtime_state,
+                [
+                    {"action": "replace_all", "content": "new"},
+                    {"action": "insert", "after_line": 0, "lines": ["header"]},
+                ],
+                document_path="app.py",
+            )
+
     def test_canvas_limit_getters_clamp_values(self):
         settings = {}
         settings["canvas_prompt_max_lines"] = "50000"
@@ -226,7 +256,7 @@ class TestCanvasRuntime:
 
         assert "page_count" not in document
 
-    def test_scroll_canvas_document_returns_window_flags(self):
+    def test_read_canvas_document_returns_window_flags(self):
         content = "\n".join(f"line {index}" for index in range(1, 101))
         runtime_state = create_canvas_runtime_state(
             [
@@ -240,7 +270,7 @@ class TestCanvasRuntime:
             ]
         )
 
-        result = scroll_canvas_document(runtime_state, 20, 60, max_window_lines=15)
+        result = read_canvas_document(runtime_state, 20, 60, max_window_lines=15)
 
         assert result["start_line"] == 20
         assert result["end_line_actual"] == 34
@@ -248,7 +278,7 @@ class TestCanvasRuntime:
         assert result["has_more_above"]
         assert result["has_more_below"]
 
-    def test_scroll_canvas_document_visual_mode_error_includes_guidance(self):
+    def test_read_canvas_document_visual_mode_error_includes_guidance(self):
         runtime_state = create_canvas_runtime_state(
             [
                 {
@@ -265,7 +295,7 @@ class TestCanvasRuntime:
         )
 
         with pytest.raises(ValueError, match="image-backed"):
-            scroll_canvas_document(runtime_state, 1, 3)
+            read_canvas_document(runtime_state, 1, 3)
 
     def test_search_canvas_document_defaults_to_active_document(self):
         runtime_state = create_canvas_runtime_state(
@@ -375,9 +405,9 @@ class TestCanvasRuntime:
 
         assert result["requested_count"] == 3
         assert result["success_count"] == 2
-        assert result["results"][0]["action"] == "scrolled"
+        assert result["results"][0]["action"] == "read"
         assert result["results"][0]["visible_lines"] == ["2: two", "3: three"]
-        assert result["results"][1]["action"] == "expanded"
+        assert result["results"][1]["action"] == "read"
         assert result["results"][2]["status"] == "error"
 
     def test_set_canvas_viewport_permanent_disables_auto_unpin(self):
@@ -471,8 +501,7 @@ class TestCanvasRuntime:
 
         assert "This canvas excerpt is truncated" in message["content"]
         assert "when no canvas read tool is enabled" in message["content"]
-        assert "scroll_canvas_document" not in message["content"]
-        assert "expand_canvas_document" not in message["content"]
+        assert "read_canvas_document" not in message["content"]
 
     def test_runtime_system_message_does_not_ask_expand_scroll_for_full_canvas(self):
         content = "\n".join(f"line {index}" for index in range(1, 11))

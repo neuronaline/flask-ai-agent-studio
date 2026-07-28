@@ -302,7 +302,7 @@ def build_conversation_json_download(conversation: dict, messages: list[dict], i
         "capture_scope": [
             "main agent model calls",
             "sub-agent model calls",
-            "fetch_url_summarized helper-model calls",
+            "fetch_url summary-mode helper-model calls",
         ],
         "limitations": [
             "Exact snapshots are only available for turns captured after raw invocation logging was enabled.",

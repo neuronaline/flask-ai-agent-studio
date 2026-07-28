@@ -18,8 +18,6 @@ LOGGER = get_logger(__name__)
 
 from services.canvas.normalize import (
     list_canvas_lines,
-    join_canvas_lines,
-    is_canvas_document_editable,
     _clip_text,
     CANVAS_MAX_CONTENT_LENGTH,
     CanvasValidationError,
@@ -29,6 +27,7 @@ from services.canvas.documents import (
     _find_canvas_document,
     _store_canvas_document,
     insert_canvas_lines,
+    rewrite_canvas_document,
     replace_canvas_lines,
     delete_canvas_lines,
 )
@@ -36,7 +35,6 @@ from services.canvas.documents import (
 from services.canvas.runtime import (
     create_canvas_runtime_state,
     _refresh_canvas_runtime_state,
-    get_canvas_runtime_documents,
 )
 
 
@@ -130,14 +128,14 @@ def _unwrap_wrapper_keys(normalized: dict) -> dict:
 
 
 def _unwrap_action_keys(normalized: dict) -> dict:
-    """Extract action from replace, insert, delete keys."""
-    for action_key in ("replace", "insert", "delete"):
+    """Extract an action from a supported action-named wrapper."""
+    for action_key in ("replace_all", "replace", "insert", "delete"):
         wrapped_candidate = _unwrap_singleton(_coerce_batch_canvas_json_value(normalized.get(action_key)))
         if not isinstance(wrapped_candidate, dict):
             continue
         merged_candidate = dict(wrapped_candidate)
         for key, value in normalized.items():
-            if key == action_key or key in {"replace", "insert", "delete"}:
+            if key == action_key or key in {"replace_all", "replace", "insert", "delete"}:
                 continue
             merged_candidate.setdefault(key, value)
         merged_candidate["action"] = action_key
@@ -148,12 +146,14 @@ def _unwrap_action_keys(normalized: dict) -> dict:
 def _infer_action_if_missing(normalized: dict) -> dict:
     """Infer action type from field names when action is not explicitly set."""
     action = str(normalized.get("action") or "").strip().lower()
-    if action in {"replace", "insert", "delete"}:
+    if action in {"replace_all", "replace", "insert", "delete"}:
         normalized["action"] = action
         return normalized
 
     inferred_action = None
-    if "after_line" in normalized:
+    if "content" in normalized and "start_line" not in normalized and "end_line" not in normalized:
+        inferred_action = "replace_all"
+    elif "after_line" in normalized:
         inferred_action = "insert"
     elif "start_line" in normalized and "end_line" in normalized:
         if any(key in normalized for key in ("lines", "content", "text", "value")):
@@ -224,10 +224,17 @@ def _normalize_batch_canvas_operation(operation: dict, index: int) -> dict:
         raise ValueError(f"Batch canvas operation #{index + 1} must be an object.")
 
     action = str(operation.get("action") or "").strip().lower()
-    if action not in {"replace", "insert", "delete"}:
+    if action not in {"replace_all", "replace", "insert", "delete"}:
         raise ValueError(f"Batch canvas operation #{index + 1} has unsupported action: {action or '<empty>'}.")
 
     normalized = {"action": action, "index": index}
+    if action == "replace_all":
+        content = operation.get("content")
+        if content is None:
+            raise ValueError(f"Batch canvas operation #{index + 1} requires content for replace_all.")
+        normalized["content"] = str(content)
+        return normalized
+
     expected_lines = operation.get("expected_lines")
     if expected_lines is not None:
         normalized["expected_lines"] = _normalize_batch_canvas_lines(expected_lines, field_name="expected_lines")
@@ -273,6 +280,8 @@ def _normalize_batch_canvas_operation(operation: dict, index: int) -> dict:
 
 def _batch_canvas_operation_delta(operation: dict) -> int:
     action = operation["action"]
+    if action == "replace_all":
+        return 0
     if action == "insert":
         return len(operation.get("lines") or [])
     replaced_count = operation["end_line"] - operation["start_line"] + 1
@@ -299,6 +308,8 @@ def _batch_canvas_operations_overlap(left: dict, right: dict) -> bool:
     left_action = left["action"]
     right_action = right["action"]
 
+    if "replace_all" in {left_action, right_action}:
+        return True
     if left_action == "insert" and right_action == "insert":
         return False
     if left_action == "insert":
@@ -312,6 +323,8 @@ def _validate_batch_canvas_operations(operations: list[dict]) -> list[dict]:
     normalized_operations = [
         _normalize_batch_canvas_operation(operation, index) for index, operation in enumerate(operations)
     ]
+    if any(operation["action"] == "replace_all" for operation in normalized_operations) and len(normalized_operations) != 1:
+        raise ValueError("replace_all must be the only operation for its target document.")
     for index, left in enumerate(normalized_operations):
         for right in normalized_operations[index + 1 :]:
             if _batch_canvas_operations_overlap(left, right):
@@ -335,6 +348,24 @@ def _apply_validated_batch_canvas_edits(
     changed_ranges: list[dict] = []
     current_document = dict(document)
     for operation in normalized_operations:
+        if operation["action"] == "replace_all":
+            current_document = rewrite_canvas_document(
+                runtime_state,
+                operation.get("content") or "",
+                document_id=resolved_document_id,
+            )
+            total_lines = max(1, len(list_canvas_lines(current_document.get("content") or "")))
+            changed_ranges.append(
+                {
+                    "operation_index": operation["index"],
+                    "action": "replace_all",
+                    "edit_start_line": 1,
+                    "edit_end_line": total_lines,
+                }
+            )
+            applied_operations.append(operation)
+            continue
+
         expected_start_line = operation.get("expected_start_line")
         adjusted_expected_start_line = None
         if expected_start_line is not None:
@@ -554,144 +585,6 @@ def batch_canvas_edits(
     result["document_path"] = committed_document.get("path")
     result["title"] = committed_document.get("title")
     return result
-
-
-def preview_canvas_changes(
-    runtime_state: dict,
-    operations: list[dict],
-    *,
-    document_id: str | None = None,
-    document_path: str | None = None,
-) -> dict:
-    _, document = _find_canvas_document(runtime_state, document_id=document_id, document_path=document_path)
-    if not is_canvas_document_editable(document):
-        from services.canvas.constants import CanvasCapabilityError
-        raise CanvasCapabilityError("preview_canvas_changes", document, "editable")
-    preview_state = create_canvas_runtime_state([document], active_document_id=document.get("id"))
-    operations = _normalize_batch_canvas_operations_input(operations)
-    if not isinstance(operations, list) or not operations:
-        raise ValueError("preview_canvas_changes requires a non-empty operations array.")
-    normalized_operations = _validate_batch_canvas_operations(operations)
-    preview_entries: list[dict] = []
-    applied_operations: list[dict] = []
-
-    for operation in normalized_operations:
-        preview_document = get_canvas_runtime_documents(preview_state)[0]
-        preview_lines = list_canvas_lines(preview_document.get("content") or "")
-        if operation["action"] == "insert":
-            original_after_line = operation["after_line"]
-            adjusted_after_line = original_after_line + _calculate_batch_canvas_offset(
-                original_after_line, applied_operations
-            )
-            after_index = max(0, adjusted_after_line)
-            before_text = ""
-            after_text = join_canvas_lines(operation.get("lines") or [])
-            edit_start_line = adjusted_after_line + 1
-            edit_end_line = max(edit_start_line, adjusted_after_line + len(operation.get("lines") or []))
-            preview_entries.append(
-                {
-                    "operation_index": operation["index"],
-                    "action": "insert",
-                    "affected_lines": f"{edit_start_line}-{edit_end_line}",
-                    "before": before_text,
-                    "after": after_text,
-                }
-            )
-        else:
-            original_start_line = operation["start_line"]
-            original_end_line = operation["end_line"]
-            adjusted_start_line = original_start_line + _calculate_batch_canvas_offset(
-                original_start_line, applied_operations
-            )
-            adjusted_end_line = original_end_line + _calculate_batch_canvas_offset(
-                original_end_line, applied_operations
-            )
-            before_text = join_canvas_lines(preview_lines[adjusted_start_line - 1 : adjusted_end_line])
-            after_text = "" if operation["action"] == "delete" else join_canvas_lines(operation.get("lines") or [])
-            preview_entries.append(
-                {
-                    "operation_index": operation["index"],
-                    "action": operation["action"],
-                    "affected_lines": f"{adjusted_start_line}-{adjusted_end_line}",
-                    "before": before_text,
-                    "after": after_text,
-                }
-            )
-
-        expected_start_line = operation.get("expected_start_line")
-        adjusted_expected_start_line = None
-        if expected_start_line is not None:
-            adjusted_expected_start_line = expected_start_line + _calculate_batch_canvas_offset(
-                expected_start_line, applied_operations
-            )
-        if operation["action"] == "insert":
-            adjusted_after_line = operation["after_line"] + _calculate_batch_canvas_offset(
-                operation["after_line"], applied_operations
-            )
-            insert_canvas_lines(
-                preview_state,
-                after_line=adjusted_after_line,
-                lines=operation.get("lines") or [],
-                document_id=document.get("id"),
-                expected_lines=operation.get("expected_lines"),
-                expected_start_line=adjusted_expected_start_line,
-            )
-        elif operation["action"] == "replace":
-            adjusted_start_line = operation["start_line"] + _calculate_batch_canvas_offset(
-                operation["start_line"], applied_operations
-            )
-            adjusted_end_line = operation["end_line"] + _calculate_batch_canvas_offset(
-                operation["end_line"], applied_operations
-            )
-            replace_canvas_lines(
-                preview_state,
-                start_line=adjusted_start_line,
-                end_line=adjusted_end_line,
-                lines=operation.get("lines") or [],
-                document_id=document.get("id"),
-                expected_lines=operation.get("expected_lines"),
-                expected_start_line=adjusted_expected_start_line,
-            )
-        else:
-            adjusted_start_line = operation["start_line"] + _calculate_batch_canvas_offset(
-                operation["start_line"], applied_operations
-            )
-            adjusted_end_line = operation["end_line"] + _calculate_batch_canvas_offset(
-                operation["end_line"], applied_operations
-            )
-            delete_canvas_lines(
-                preview_state,
-                start_line=adjusted_start_line,
-                end_line=adjusted_end_line,
-                document_id=document.get("id"),
-                expected_lines=operation.get("expected_lines"),
-                expected_start_line=adjusted_expected_start_line,
-            )
-        applied_operations.append(operation)
-
-    insertion_count = sum(1 for entry in preview_entries if entry["action"] == "insert")
-    deletion_count = sum(1 for entry in preview_entries if entry["action"] == "delete")
-    replace_count = sum(1 for entry in preview_entries if entry["action"] == "replace")
-    summary_parts = []
-    if insertion_count:
-        summary_parts.append(f"{insertion_count} insertion(s)")
-    if deletion_count:
-        summary_parts.append(f"{deletion_count} deletion(s)")
-    if replace_count:
-        summary_parts.append(f"{replace_count} replacement(s)")
-    summary = ", ".join(summary_parts) if summary_parts else "No changes"
-
-    return {
-        "status": "ok",
-        "action": "previewed",
-        "preview": {
-            "document_path": document.get("path"),
-            "document_id": document.get("id"),
-            "title": document.get("title"),
-            "changes": preview_entries,
-            "summary": summary,
-        },
-    }
 
 
 def build_canvas_document_result_snapshot(document: dict | None) -> dict | None:

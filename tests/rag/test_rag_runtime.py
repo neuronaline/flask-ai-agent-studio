@@ -141,7 +141,7 @@ class TestRagRuntime:
         assert outcome["applied"]
         prompt_messages = mocked_collect.call_args.args[0]
         prompt_text = "\n".join(str(message.get("content") or "") for message in prompt_messages)
-        assert "Write a detailed summary" in prompt_text
+        assert "Preserve chronology" in prompt_text
         stored_entries = get_user_profile_entries()
         assert any("concise answers" in entry["value"].lower() for entry in stored_entries)
         assert outcome.get("stored_profile_fact_count", 0) >= 1

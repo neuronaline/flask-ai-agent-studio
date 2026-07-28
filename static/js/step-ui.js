@@ -32,22 +32,6 @@ const TOOL_UI_CONFIG = {
     errorTitle: "Page read failed",
     fallbackDetail: "Opening the source and extracting readable content.",
   },
-  search_news_ddgs: {
-    icon: "📰",
-    label: "News Search",
-    runningTitle: "Scanning news sources",
-    doneTitle: "News results ready",
-    errorTitle: "News search failed",
-    fallbackDetail: "Checking recent headlines and source coverage.",
-  },
-  search_news_google: {
-    icon: "🗞️",
-    label: "Google News",
-    runningTitle: "Scanning Google News",
-    doneTitle: "Google News results ready",
-    errorTitle: "Google News search failed",
-    fallbackDetail: "Checking recent headlines and publisher coverage.",
-  },
 };
 
 /* ------------------------------------------------------------------ */
@@ -144,7 +128,7 @@ function buildToolMeta(toolName, preview, options = {}) {
     if (detail) {
       meta.push("URL");
     }
-  } else if (["search_web", "search_news_ddgs", "search_news_google"].includes(toolName) && detail) {
+  } else if (toolName === "search_web" && detail) {
     const queryCount = detail
       .split(",")
       .map((value) => value.trim())

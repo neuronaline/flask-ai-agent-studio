@@ -1,78 +1,38 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE_NAME="flask-rag-vision-chatbot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-APP_USER="${SUDO_USER:-${USER:-}}"
-APP_GROUP="${APP_USER}"
-WORKING_DIR="${ROOT_DIR}"
-ENV_FILE="${WORKING_DIR}/.env"
-APP_ENTRY="app:app"
-VENV_DIR=""
-PYTHON_BIN=""
-GUNICORN_BIN=""
+APP_USER="${SUDO_USER:-$USER}"
+ENV_FILE="${ROOT_DIR}/.env"
+VENV_DIR="${ROOT_DIR}/.venv"
 
-detect_virtualenv() {
-  local candidate
+# ── helpers ─────────────────────────────────────────────────────────────────
 
-  for candidate in "${WORKING_DIR}/.venv" "${WORKING_DIR}/venv"; do
-    if [[ -x "${candidate}/bin/python" ]]; then
-      VENV_DIR="${candidate}"
-      PYTHON_BIN="${candidate}/bin/python"
-      GUNICORN_BIN="${candidate}/bin/gunicorn"
-      return 0
-    fi
-  done
+die() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
+info() { printf '\033[34m→\033[0m %s\n' "$*"; }
+ok() { printf '\033[32m✓\033[0m %s\n' "$*"; }
 
-  return 1
-}
+# ── checks ──────────────────────────────────────────────────────────────────
 
-if [[ "$(uname -s)" != "Linux" ]]; then
-  echo "This script only runs on Linux." >&2
-  exit 1
+[[ "$(uname -s)" != "Linux" ]] && die "Linux only."
+[[ "$EUID" -ne 0 ]] && die "Must run as root (use sudo)."
+[[ -z "$APP_USER" ]] && die "Could not resolve user."
+[[ ! -d "$VENV_DIR" ]] && die "Virtual env not found at $VENV_DIR. Run install.sh first."
+
+GUNICORN_BIN="${VENV_DIR}/bin/gunicorn"
+if [[ ! -x "$GUNICORN_BIN" ]]; then
+  info "Installing gunicorn..."
+  "${VENV_DIR}/bin/pip" install gunicorn --quiet
 fi
 
-if [[ "$EUID" -ne 0 ]]; then
-  echo "This script must be run as root or with sudo." >&2
-  exit 1
-fi
+# ── create service ───────────────────────────────────────────────────────────
 
-if [[ ! -d "${WORKING_DIR}" ]]; then
-  echo "Project directory not found: ${WORKING_DIR}" >&2
-  exit 1
-fi
+info "Stopping existing service (if any)..."
+systemctl disable --now "$SERVICE_NAME.service" 2>/dev/null || true
 
-if ! detect_virtualenv; then
-  echo "Virtual environment not found in ${WORKING_DIR}/.venv or ${WORKING_DIR}/venv." >&2
-  echo "Install dependencies and create a virtual environment first." >&2
-  exit 1
-fi
-
-if [[ ! -f "${ENV_FILE}" ]]; then
-  cat >&2 <<EOF
-Warning: ${ENV_FILE} not found.
-The service will still be created, but the app may be missing required environment variables at startup.
-EOF
-fi
-
-if [[ -z "${APP_USER}" ]]; then
-  echo "Could not resolve the user account." >&2
-  exit 1
-fi
-
-if [[ ! -x "${GUNICORN_BIN}" ]]; then
-  echo "gunicorn was not found in ${VENV_DIR}; installing it now..." >&2
-  "${VENV_DIR}/bin/pip" install gunicorn
-fi
-
-if systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
-  systemctl disable --now "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
-fi
-
-rm -f "${SERVICE_FILE}"
-
-cat > "${SERVICE_FILE}" <<EOF
+cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Flask RAG Vision Chatbot
 After=network.target
@@ -81,11 +41,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=${APP_USER}
-Group=${APP_GROUP}
-WorkingDirectory=${WORKING_DIR}
+Group=${APP_USER}
+WorkingDirectory=${ROOT_DIR}
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-${ENV_FILE}
-ExecStart=${GUNICORN_BIN} --bind 0.0.0.0:5000 --workers 1 --timeout 120 ${APP_ENTRY}
+ExecStart=${GUNICORN_BIN} --bind 0.0.0.0:5000 --workers 1 --timeout 120 app:app
 Restart=always
 RestartSec=5
 KillSignal=SIGINT
@@ -95,13 +55,12 @@ TimeoutStopSec=30
 WantedBy=multi-user.target
 EOF
 
-chmod 644 "${SERVICE_FILE}"
+chmod 644 "$SERVICE_FILE"
 
+info "Enabling and starting service..."
 systemctl daemon-reload
-systemctl enable "${SERVICE_NAME}.service"
-systemctl restart "${SERVICE_NAME}.service"
+systemctl enable "$SERVICE_NAME.service"
+systemctl restart "$SERVICE_NAME.service"
 
-systemctl --no-pager --full status "${SERVICE_NAME}.service" || true
-
-echo "Service installed: ${SERVICE_NAME}.service"
-echo "You can run this again for a clean reinstall; the existing unit is removed and recreated first."
+ok "Service installed: $SERVICE_NAME.service"
+systemctl --no-pager --full status "$SERVICE_NAME.service" || true

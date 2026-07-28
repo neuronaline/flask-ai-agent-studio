@@ -2557,7 +2557,7 @@ function updateCanvasActiveDocumentDisplay(renderState) {
     setCanvasHint("Edit mode. Make changes and save to commit.", "muted");
   } else if (Number.isFinite(displayDocument.line_count) && displayDocument.line_count > promptLineLimit) {
     setCanvasHint(
-      `Large canvas detected. The default view is truncated to the first ${promptLineLimit} lines. Use batch_read_canvas_documents with start_line and end_line for targeted ranges.`,
+      `Large canvas detected. The default view is truncated to the first ${promptLineLimit} lines. Use batch_read_canvas_documents with start_line and end_line for targeted ranges, or create_or_edit_canvas_document with action: "replace_all" to rewrite the entire document.`,
       "warning"
     );
   } else {

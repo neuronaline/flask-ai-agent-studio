@@ -1,0 +1,41 @@
+# proxy.yaml — All proxy configuration in one place
+#
+# Copy this file to proxy.yaml and edit it. Everything is optional;
+# leave sections empty to connect directly without a proxy.
+#
+# ── PageFetch (web content retrieval) ──────────────────────────────────────
+
+pagefetch:
+  # Fetch mode: auto (try browser, fall back to http), http, or browser
+  mode: auto
+
+  # Proxy provider: none, decodo, or dataimpulse
+  provider: none
+
+  # Provider credentials (only needed when provider is set above)
+  decodo_url: ""          # http://user:password@host:port
+  dataimpulse_url: ""     # http://user:password@host:port
+
+  # Raw proxy URLs — used as fallback when provider is "none".
+  # Each URL is tried in order; the first working one wins.
+  # Supports http://, https://, socks5://, socks5h://
+  proxies: []
+
+  # Tuning
+  http_concurrency: 10
+  browser_concurrency: 4
+  http_timeout: 20
+  browser_timeout: 45
+  http_retries: 3
+  browser_retries: 2
+  cache_enabled: true
+  cache_ttl: 24h
+  auto_install: 1
+
+# ── OpenRouter API ─────────────────────────────────────────────────────────
+
+openrouter:
+  # Raw proxy URLs for OpenRouter API requests.
+  # Each URL is tried in order; the first working one wins.
+  # Leave empty to connect directly.
+  proxies: []

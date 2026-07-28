@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import socket
+from types import SimpleNamespace
 from unittest.mock import Mock
 
+import httpx
 import pytest
 
 from web import web_tools
@@ -66,8 +68,11 @@ def test_search_web_tool_uses_cached_results_without_hitting_provider(monkeypatc
     monkeypatch.setattr(web_tools, "cache_get", lambda key: cached_rows)
     monkeypatch.setattr(web_tools, "cache_set", lambda *args, **kwargs: None)
 
-    # _serp_api_request should NOT be called when cache hits (search returns early)
-    monkeypatch.setattr(web_tools, "_serp_api_request", Mock(side_effect=AssertionError("_serp_api_request should not be called on cache hit")))
+    monkeypatch.setattr(
+        web_tools,
+        "_bright_data_serp_request",
+        Mock(side_effect=AssertionError("provider should not be called on cache hit")),
+    )
 
     results = web_tools.search_web_tool(["cached query"])
 
@@ -94,8 +99,11 @@ def test_search_web_tool_deduplicates_urls_across_cached_queries(monkeypatch):
     monkeypatch.setattr(web_tools, "cache_get", fake_cache_get)
     monkeypatch.setattr(web_tools, "cache_set", lambda *args, **kwargs: None)
 
-    # _serp_api_request should NOT be called when cache hits (search returns early for each query)
-    monkeypatch.setattr(web_tools, "_serp_api_request", Mock(side_effect=AssertionError("_serp_api_request should not run")))
+    monkeypatch.setattr(
+        web_tools,
+        "_bright_data_serp_request",
+        Mock(side_effect=AssertionError("provider should not run")),
+    )
 
     results = web_tools.search_web_tool(["first", "second"])
 
@@ -104,3 +112,179 @@ def test_search_web_tool_deduplicates_urls_across_cached_queries(monkeypatch):
         "https://example.com/first",
         "https://example.com/second",
     ]
+
+
+def test_bright_data_request_uses_documented_contract(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured["client_kwargs"] = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def post(self, url, *, headers, json):
+            captured.update(url=url, headers=headers, payload=json)
+            request = httpx.Request("POST", url)
+            return httpx.Response(200, json={"organic": []}, request=request)
+
+    monkeypatch.setenv("BRIGHT_DATA_API_KEY", "secret-token")
+    monkeypatch.setenv("BRIGHT_DATA_SERP_ZONE", "serp-zone")
+    monkeypatch.setattr(web_tools.httpx, "Client", FakeClient)
+
+    result = web_tools._bright_data_serp_request(
+        "https://www.google.com/search?q=test&hl=en&gl=US"
+    )
+
+    assert result == {"organic": []}
+    assert captured["url"] == "https://api.brightdata.com/request"
+    assert captured["headers"]["Authorization"] == "Bearer secret-token"
+    assert captured["payload"] == {
+        "zone": "serp-zone",
+        "url": "https://www.google.com/search?q=test&hl=en&gl=US",
+        "format": "raw",
+        "data_format": "parsed_light",
+    }
+    assert captured["client_kwargs"]["trust_env"] is False
+
+
+def test_bright_data_request_requires_both_credentials(monkeypatch):
+    monkeypatch.delenv("BRIGHT_DATA_API_KEY", raising=False)
+    monkeypatch.delenv("BRIGHT_DATA_SERP_ZONE", raising=False)
+
+    with pytest.raises(RuntimeError, match="BRIGHT_DATA_API_KEY"):
+        web_tools._bright_data_serp_request("https://www.google.com/search?q=test")
+
+
+def test_google_target_url_encodes_non_ascii_query(monkeypatch):
+    monkeypatch.setenv("BRIGHT_DATA_SERP_LANGUAGE", "tr")
+    monkeypatch.setenv("BRIGHT_DATA_SERP_COUNTRY", "TR")
+
+    target = web_tools._build_google_url("İstanbul en iyi restoranlar")
+
+    assert "q=%C4%B0stanbul%20en%20iyi%20restoranlar" in target
+    assert "hl=tr" in target
+    assert "gl=TR" in target
+
+
+def test_google_news_target_applies_vertical_and_time_filter():
+    target = web_tools._build_google_url(
+        "latest markets",
+        lang="en",
+        country="US",
+        news=True,
+        when="w",
+    )
+
+    assert "tbm=nws" in target
+    assert "tbs=qdr%3Aw" in target
+
+
+def test_scholar_target_applies_year_and_sort_filters():
+    target = web_tools._build_scholar_url(
+        "language models",
+        lang="en",
+        year_from=2024,
+        year_to=2026,
+        sort_by="date",
+    )
+
+    assert "as_ylo=2024" in target
+    assert "as_yhi=2026" in target
+    assert "scisbd=1" in target
+
+
+def test_search_web_normalizes_bright_data_organic_results(monkeypatch):
+    monkeypatch.setattr(web_tools, "cache_get", lambda key: None)
+    monkeypatch.setattr(web_tools, "cache_set", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        web_tools,
+        "_bright_data_serp_request",
+        lambda target_url: {
+            "organic": [
+                {
+                    "title": "Example",
+                    "link": "https://example.com",
+                    "description": "Result snippet",
+                }
+            ]
+        },
+    )
+
+    assert web_tools.search_web_tool(["example query"]) == [
+        {
+            "title": "Example",
+            "url": "https://example.com",
+            "snippet": "Result snippet",
+        }
+    ]
+
+
+def test_fetch_url_tool_uses_pagefetch_result(monkeypatch):
+    monkeypatch.setattr(web_tools, "cache_get", lambda key: None)
+    monkeypatch.setattr(web_tools, "cache_set", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        web_tools,
+        "_run_pagefetch",
+        lambda url: SimpleNamespace(
+            success=True,
+            final_url="https://example.com/final",
+            title="Example title",
+            markdown="# Example title\n\nClean body",
+            text="Example title Clean body",
+            content_type="text/html; charset=utf-8",
+            status_code=200,
+            fetch_method="http",
+            from_cache=False,
+            error=None,
+        ),
+    )
+
+    result = web_tools.fetch_url_tool("https://example.com")
+
+    assert result["url"] == "https://example.com/final"
+    assert result["requested_url"] == "https://example.com"
+    assert result["title"] == "Example title"
+    assert result["content"] == "# Example title\n\nClean body"
+    assert result["content_format"] == "markdown"
+    assert result["fetch_method"] == "http"
+
+
+def test_pagefetch_settings_map_environment(monkeypatch):
+    monkeypatch.setenv("PAGEFETCH_MODE", "browser")
+    monkeypatch.setenv("PAGEFETCH_PROXY", "decodo")
+    monkeypatch.setenv("PAGEFETCH_CACHE_ENABLED", "false")
+    monkeypatch.setenv("PAGEFETCH_HTTP_CONCURRENCY", "7")
+    monkeypatch.setenv("PAGEFETCH_HTTP_RETRIES", "4")
+
+    settings = web_tools._pagefetch_settings()
+
+    assert settings["mode"] == "browser"
+    assert settings["proxy"] == "decodo"
+    assert settings["cache_enabled"] is False
+    assert settings["http_concurrency"] == 7
+    assert settings["retries_http"] == 4
+
+
+def test_fetch_url_tool_surfaces_pagefetch_error(monkeypatch):
+    monkeypatch.setattr(web_tools, "cache_get", lambda key: None)
+    monkeypatch.setattr(
+        web_tools,
+        "_run_pagefetch",
+        lambda url: SimpleNamespace(
+            success=False,
+            error=SimpleNamespace(message="blocked upstream"),
+        ),
+    )
+
+    result = web_tools.fetch_url_tool("https://example.com")
+
+    assert result == {
+        "url": "https://example.com",
+        "error": "blocked upstream",
+        "content": "",
+    }

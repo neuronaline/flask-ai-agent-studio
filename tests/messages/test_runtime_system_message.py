@@ -52,7 +52,7 @@ class TestRuntimeSystemMessage:
         assert "- Time: 21:40" in content
         assert "## Core Directives" in content
         assert "## Active Tools This Turn" in content
-        assert "Scratchpad (AI Persistent Memory)" in content
+        assert "Scratchpad (Persistent Memory)" in content
         assert "The user is 22 years old." in content
         assert "## Knowledge Base" in content
         assert "Context block" in content
@@ -246,8 +246,6 @@ class TestRuntimeSystemMessage:
             active_tool_names=[
                 "create_canvas_document",
                 "batch_canvas_edits",
-                "set_canvas_viewport",
-                "clear_canvas_viewport",
                 "delete_canvas_document",
             ],
         )
@@ -257,12 +255,10 @@ class TestRuntimeSystemMessage:
         assert "Prefer the smallest valid change" in content
         assert "## Tool Calling" in content
         assert "## Active Tools This Turn" in content
-        assert "Native function calling is enabled" in content
+        assert "Native function calling is active" in content
         active_tools_start = content.index("## Active Tools This Turn")
         active_tools_block = content[active_tools_start:]
         assert "Callable tools: `create_canvas_document`" in active_tools_block
-        assert "replace_canvas_lines" not in active_tools_block
-        assert "rewrite_canvas_document" not in active_tools_block
         assert "## Active Canvas Document" not in content
         assert "Available Tools" not in content
 
@@ -276,10 +272,8 @@ class TestRuntimeSystemMessage:
         message = build_runtime_system_message(
             active_tool_names=[
                 "create_canvas_document",
-                "rewrite_canvas_document",
-                "replace_canvas_lines",
-                "expand_canvas_document",
-                "scroll_canvas_document",
+                "batch_canvas_edits",
+                "read_canvas_document",
             ],
             canvas_documents=[
                 {
@@ -311,7 +305,7 @@ class TestRuntimeSystemMessage:
     def test_runtime_system_message_represents_ignored_canvas_documents_as_metadata_only(self):
         message = build_runtime_system_message(
             active_tool_names=[
-                "expand_canvas_document",
+                "read_canvas_document",
                 "search_canvas_document",
             ],
             canvas_documents=[
@@ -382,9 +376,9 @@ class TestRuntimeSystemMessage:
 
     def test_parallel_safe_read_only_tool_metadata_stays_in_sync(self):
         expected_recent_tools = {
-            "fetch_url_summarized",
+            "fetch_url",
             "batch_read_canvas_documents",
-            "preview_canvas_changes",
+            "read_canvas_document",
         }
 
         runtime_parallel_safe = set(get_parallel_safe_tool_names(read_only_only=True))
@@ -406,8 +400,7 @@ class TestRuntimeSystemMessage:
         message = build_runtime_system_message(
             active_tool_names=[
                 "create_canvas_document",
-                "rewrite_canvas_document",
-                "replace_canvas_lines",
+                "batch_canvas_edits",
             ],
             canvas_documents=[
                 {
@@ -478,8 +471,7 @@ class TestRuntimeSystemMessage:
         message = build_runtime_system_message(
             active_tool_names=[
                 "create_canvas_document",
-                "rewrite_canvas_document",
-                "replace_canvas_lines",
+                "batch_canvas_edits",
             ],
             canvas_documents=[
                 {
@@ -519,7 +511,7 @@ class TestRuntimeSystemMessage:
         set_canvas_viewport(runtime_state, document_path="src/app.py", start_line=2, end_line=3, ttl_turns=2)
 
         message = build_runtime_system_message(
-            active_tool_names=["set_canvas_viewport", "clear_canvas_viewport", "replace_canvas_lines"],
+            active_tool_names=["read_canvas_document", "batch_canvas_edits"],
             canvas_documents=get_canvas_runtime_documents(runtime_state),
             canvas_active_document_id=get_canvas_runtime_active_document_id(runtime_state),
             canvas_viewports=get_canvas_viewport_payloads(runtime_state),
@@ -564,7 +556,7 @@ class TestRuntimeSystemMessage:
 
         refreshed = refresh_canvas_sections_in_context_injection(
             context_injection,
-            active_tool_names=["create_canvas_document", "rewrite_canvas_document"],
+            active_tool_names=["create_canvas_document", "batch_canvas_edits"],
             canvas_documents=[
                 {
                     "id": "canvas-1",
@@ -586,10 +578,8 @@ class TestRuntimeSystemMessage:
         message = build_runtime_system_message(
             active_tool_names=[
                 "create_canvas_document",
-                "rewrite_canvas_document",
-                "replace_canvas_lines",
-                "expand_canvas_document",
-                "scroll_canvas_document",
+                "batch_canvas_edits",
+                "read_canvas_document",
             ],
             canvas_documents=[
                 {
@@ -605,15 +595,13 @@ class TestRuntimeSystemMessage:
 
         content = message["content"]
         assert "Preview compaction: 1 long line(s) were clipped for token efficiency" in content
-        assert "scroll_canvas_document or expand_canvas_document" in content
+        assert "read_canvas_document" in content
 
     def test_runtime_system_message_does_not_compact_small_canvas_document_that_fits_budget(self):
         message = build_runtime_system_message(
             active_tool_names=[
-                "rewrite_canvas_document",
-                "replace_canvas_lines",
-                "expand_canvas_document",
-                "scroll_canvas_document",
+                "batch_canvas_edits",
+                "read_canvas_document",
             ],
             canvas_documents=[
                 {
@@ -634,10 +622,8 @@ class TestRuntimeSystemMessage:
     def test_runtime_system_message_explains_canvas_ui_vs_prompt_excerpt_when_truncated(self):
         message = build_runtime_system_message(
             active_tool_names=[
-                "rewrite_canvas_document",
-                "replace_canvas_lines",
-                "expand_canvas_document",
-                "scroll_canvas_document",
+                "batch_canvas_edits",
+                "read_canvas_document",
             ],
             canvas_documents=[
                 {
@@ -656,40 +642,30 @@ class TestRuntimeSystemMessage:
         assert "This canvas excerpt is truncated" in content
         assert "The Canvas UI may show more content than the model currently has in context" in content
         assert "only the excerpt below and any pinned viewports are visible to you right now" in content
-        assert "expand_canvas_document" in content
-        assert "scroll_canvas_document" in content
+        assert "read_canvas_document" in content
 
     def test_canvas_tool_specs_prefer_smallest_valid_edit(self):
         batch_guidance = TOOL_SPEC_BY_NAME["batch_canvas_edits"]["prompt"]["guidance"]
         create_guidance = TOOL_SPEC_BY_NAME["create_canvas_document"]["prompt"]["guidance"]
-        rewrite_guidance = TOOL_SPEC_BY_NAME["rewrite_canvas_document"]["prompt"]["guidance"]
-        replace_guidance = TOOL_SPEC_BY_NAME["replace_canvas_lines"]["prompt"]["guidance"]
-        expand_description = TOOL_SPEC_BY_NAME["expand_canvas_document"]["description"]
-        expand_guidance = TOOL_SPEC_BY_NAME["expand_canvas_document"]["prompt"]["guidance"]
-        scroll_description = TOOL_SPEC_BY_NAME["scroll_canvas_document"]["description"]
+        read_description = TOOL_SPEC_BY_NAME["read_canvas_document"]["description"]
+        read_guidance = TOOL_SPEC_BY_NAME["read_canvas_document"]["prompt"]["guidance"]
         search_guidance = TOOL_SPEC_BY_NAME["search_canvas_document"]["prompt"]["guidance"]
 
-        assert "Prefer one batch_canvas_edits call" in batch_guidance
-        assert "plain JSON object with an action field" in batch_guidance
-        assert "For replace use start_line, end_line, and lines" in batch_guidance
+        assert "prefer one batch_canvas_edits call" in batch_guidance
+        assert "plain JSON object with action" in batch_guidance
+        assert "For replace_all use content" in batch_guidance
         assert "Always include title" in create_guidance
         assert "src/app.py -> app.py" in create_guidance
-        assert "Do not default to this when only part of the file needs to change" in rewrite_guidance
-        assert "Multiple localized replace_canvas_lines calls are fine" in replace_guidance
-        assert "document_id is optional" in expand_description
-        assert "call-time snapshot" in expand_description
-        assert "Use document_path from the workspace summary or manifest" in expand_guidance
-        assert "call expand_canvas_document again" in expand_guidance
-        assert "before line-level edits" in scroll_description
+        assert "call-time snapshot" in read_description
+        assert "read again before editing" in read_guidance
         assert "Use this first when the user asks you to find something inside a large canvas" in search_guidance
 
-    def test_runtime_system_message_mentions_expand_snapshot_rule(self):
+    def test_runtime_system_message_mentions_read_snapshot_rule(self):
         message = build_runtime_system_message(
             active_tool_names=[
                 "create_canvas_document",
-                "rewrite_canvas_document",
-                "replace_canvas_lines",
-                "expand_canvas_document",
+                "batch_canvas_edits",
+                "read_canvas_document",
             ],
             canvas_documents=[
                 {
@@ -704,8 +680,8 @@ class TestRuntimeSystemMessage:
 
         content = message["content"]
         assert "Snapshot rule" in content
-        assert "expand_canvas_document returns a call-time snapshot" in content
-        assert "call it again before relying on that older view" in content
+        assert "read_canvas_document returns a call-time snapshot" in content
+        assert "call it again before relying on an older view" in content
 
     def test_runtime_system_message_mentions_title_requirement_for_create_canvas_document(self):
         message = build_runtime_system_message(active_tool_names=["create_canvas_document"])
@@ -731,12 +707,11 @@ class TestRuntimeSystemMessage:
         assert "## Canvas" in content
         assert "batch_canvas_edits" in content
 
-    def test_runtime_system_message_omits_disabled_scroll_guidance(self):
+    def test_runtime_system_message_includes_enabled_read_guidance(self):
         message = build_runtime_system_message(
             active_tool_names=[
-                "rewrite_canvas_document",
-                "replace_canvas_lines",
-                "expand_canvas_document",
+                "batch_canvas_edits",
+                "read_canvas_document",
             ],
             canvas_documents=[
                 {
@@ -751,16 +726,14 @@ class TestRuntimeSystemMessage:
         )
 
         content = message["content"]
-        assert "expand_canvas_document" in content
-        assert "scroll_canvas_document" not in content
+        assert "read_canvas_document" in content
 
-    def test_openai_tool_specs_include_expand_canvas_document_with_canvas_documents(self):
+    def test_openai_tool_specs_include_read_canvas_document_with_canvas_documents(self):
         tools = get_openai_tool_specs(
             [
                 "batch_canvas_edits",
-                "expand_canvas_document",
+                "read_canvas_document",
                 "create_canvas_document",
-                "rewrite_canvas_document",
             ],
             canvas_documents=[
                 {
@@ -775,9 +748,8 @@ class TestRuntimeSystemMessage:
 
         tool_names = [entry["function"]["name"] for entry in tools]
         assert tool_names == [
-            "expand_canvas_document",
+            "read_canvas_document",
             "create_canvas_document",
-            "rewrite_canvas_document",
             "batch_canvas_edits",
         ]
 
@@ -785,9 +757,7 @@ class TestRuntimeSystemMessage:
         tools = get_openai_tool_specs(
             [
                 "create_canvas_document",
-                "rewrite_canvas_document",
                 "batch_canvas_edits",
-                "replace_canvas_lines",
             ]
         )
 
@@ -812,10 +782,10 @@ class TestRuntimeSystemMessage:
         static_content = messages[0]["content"]
         dynamic_content = messages[1]["content"]
         assert "## Role" in static_content
-        assert "## Scratchpad (AI Persistent Memory)" in dynamic_content
+        assert "## Scratchpad (Persistent Memory)" in dynamic_content
         assert "Persistent note" in dynamic_content
         assert "## Current Date and Time" in dynamic_content
-        assert dynamic_content.index("## Scratchpad (AI Persistent Memory)") < dynamic_content.index(
+        assert dynamic_content.index("## Scratchpad (Persistent Memory)") < dynamic_content.index(
             "## Current Date and Time"
         )
 
@@ -846,13 +816,13 @@ class TestRuntimeSystemMessage:
         assert "## Conversation Memory" in static_content
         assert "## User Profile" in dynamic_content
         assert "The user prefers concise answers." in dynamic_content
-        assert "## Scratchpad (AI Persistent Memory)" in dynamic_content
+        assert "## Scratchpad (Persistent Memory)" in dynamic_content
         assert "Persistent note" in dynamic_content
         assert "## Conversation Memory" in dynamic_content
         assert "Goal: Keep stable rules cached." in dynamic_content
         assert "## Current Date and Time" in dynamic_content
         assert dynamic_content.index("## User Profile") < dynamic_content.index("## Current Date and Time")
-        assert dynamic_content.index("## Scratchpad (AI Persistent Memory)") < dynamic_content.index(
+        assert dynamic_content.index("## Scratchpad (Persistent Memory)") < dynamic_content.index(
             "## Current Date and Time"
         )
         assert dynamic_content.index("## Conversation Memory") < dynamic_content.index("## Current Date and Time")
@@ -878,8 +848,8 @@ class TestRuntimeSystemMessage:
         assert messages[2]["role"] == "user"
         content = messages[2]["content"]
         assert "## Current Date and Time" in content
-        assert "## Scratchpad (AI Persistent Memory)" in content
-        assert content.index("## Current Date and Time") > content.index("## Scratchpad (AI Persistent Memory)")
+        assert "## Scratchpad (Persistent Memory)" in content
+        assert content.index("## Current Date and Time") > content.index("## Scratchpad (Persistent Memory)")
         assert "id" not in messages[0]
 
     def test_runtime_system_message_places_datetime_before_tool_history(self):
@@ -915,17 +885,12 @@ class TestRuntimeSystemMessage:
 
         content = message["content"]
         assert "## Role" in content
-        assert "- You are a tool-using assistant." in content
+        assert "- You are a pragmatic senior engineering partner" in content
         assert "\n\n\n" not in content
 
-    def test_tool_specs_include_guidance_for_news_tools(self):
-        for tool_name in [
-            "search_web",
-            "search_news",
-            "search_news_google",
-        ]:
-            prompt = TOOL_SPEC_BY_NAME[tool_name]["prompt"]
-            assert str(prompt.get("guidance") or "").strip()
+    def test_removed_news_tools_are_not_exposed(self):
+        prompt = TOOL_SPEC_BY_NAME["search_web"]["prompt"]
+        assert str(prompt.get("guidance") or "").strip()
 
         assert "current information, external verification" in TOOL_SPEC_BY_NAME["search_web"]["description"]
         assert (
@@ -934,8 +899,8 @@ class TestRuntimeSystemMessage:
         )
         assert not TOOL_SPEC_BY_NAME["search_web"]["parameters"].get("additionalProperties", True)
         assert "Do not pass max_results" in TOOL_SPEC_BY_NAME["search_web"]["prompt"]["guidance"]
-        assert "current news coverage" in TOOL_SPEC_BY_NAME["search_news"]["description"]
-        assert "current news verification" in TOOL_SPEC_BY_NAME["search_news_google"]["description"]
+        assert "search_news" not in TOOL_SPEC_BY_NAME
+        assert "search_news_google" not in TOOL_SPEC_BY_NAME
         assert TOOL_SPEC_BY_NAME["read_scratchpad"]["parameters"]["required"] == []
 
     def test_runtime_system_message_renders_persona_memory_and_policy(self):

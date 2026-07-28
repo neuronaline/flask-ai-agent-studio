@@ -110,6 +110,7 @@ from services.canvas.viewport import (
 
 from services.canvas.documents import (
     create_canvas_document,
+    # Internal helpers (not AI-facing tools)
     rewrite_canvas_document,
     replace_canvas_lines,
     insert_canvas_lines,
@@ -123,7 +124,6 @@ from services.canvas.delete import delete_canvas_document
 
 from services.canvas.batch import (
     batch_canvas_edits,
-    preview_canvas_changes,
 )
 
 # ─── Transform ───────────────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ from services.canvas.metadata import update_canvas_metadata
 # ─── Search ─────────────────────────────────────────────────────────────────
 
 from services.canvas.search import (
-    scroll_canvas_document,
+    read_canvas_document,
     search_canvas_document,
     batch_read_canvas_documents,
     build_canvas_document_context_result,
@@ -169,4 +169,3 @@ from services.canvas.legacy import (
     find_latest_canvas_documents,
     find_latest_canvas_document,
 )
-

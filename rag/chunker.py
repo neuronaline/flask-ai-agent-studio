@@ -11,8 +11,6 @@ from utils.logging_config import get_logger
 
 LOGGER = get_logger(__name__)
 
-DEFAULT_CHUNK_SIZE = get_runtime_setting("RAG_CHUNK_SIZE")
-DEFAULT_CHUNK_OVERLAP = get_runtime_setting("RAG_CHUNK_OVERLAP")
 MAX_METADATA_VALUE_LENGTH = 500
 _INVISIBLE_TEXT_RE = re.compile(r"[\u00ad\u200b-\u200f\u2028\u2029\ufeff]")
 _PAGE_MARKER_RE = re.compile(r"^##\s+Page\s+(\d+)\s*$", re.IGNORECASE)
@@ -136,16 +134,16 @@ def chunk_text_document(
     source_type: str,
     category: str,
     metadata: dict | None = None,
-    chunk_size: int = DEFAULT_CHUNK_SIZE,
-    overlap: int = DEFAULT_CHUNK_OVERLAP,
+    chunk_size: int | None = None,
+    overlap: int | None = None,
 ) -> list[Chunk]:
     normalized_category = normalize_category(category)
     normalized_text = _normalize_whitespace(text)
     if not normalized_text:
         return []
 
-    chunk_size = max(300, int(chunk_size or DEFAULT_CHUNK_SIZE))
-    overlap = max(0, min(int(overlap or DEFAULT_CHUNK_OVERLAP), chunk_size // 2))
+    chunk_size = max(300, int(chunk_size or get_runtime_setting("RAG_CHUNK_SIZE")))
+    overlap = max(0, min(int(overlap or get_runtime_setting("RAG_CHUNK_OVERLAP")), chunk_size // 2))
     paragraphs = _paragraphs_from_text(normalized_text)
     if not paragraphs:
         return []

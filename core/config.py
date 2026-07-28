@@ -14,11 +14,10 @@ from lib.model_registry import (
     BUILTIN_MODELS,
     DEFAULT_CHAT_MODEL,
     DEFAULT_IMAGE_PROCESSING_METHOD,
-    DEFAULT_OPERATION_MODEL_PREFERENCES,
     DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES,
+    DEFAULT_OPERATION_MODEL_PREFERENCES,
     DEFAULT_VISIBLE_CHAT_MODEL_ORDER,
 )
-from utils.proxy_settings import DEFAULT_PROXY_ENABLED_OPERATIONS
 
 load_dotenv()
 
@@ -33,7 +32,6 @@ _INSECURE_SECRET_KEY_VALUES = {
 BASE_DIR = os.path.dirname(__file__)
 DB_PATH = os.path.join(BASE_DIR, "chatbot.db")
 IMAGE_STORAGE_DIR = (os.getenv("IMAGE_STORAGE_DIR") or os.path.join(BASE_DIR, "data", "images")).strip()
-PROXIES_PATH = os.path.join(BASE_DIR, "proxies.txt")
 AGENT_TRACE_LOG_PATH = (os.getenv("AGENT_TRACE_LOG_PATH") or os.path.join(BASE_DIR, "logs", "agent-trace.log")).strip()
 
 
@@ -67,7 +65,6 @@ LOGIN_PIN = None
 del _login_pin_env
 DEEPSEEK_API_KEY = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
 OPENROUTER_API_KEY = (os.getenv("OPENROUTER_API_KEY") or "").strip()
-MINIMAX_API_KEY = (os.getenv("MINIMAX_API_KEY") or "").strip()
 OPENROUTER_HTTP_REFERER = (os.getenv("OPENROUTER_HTTP_REFERER") or os.getenv("OPENROUTER_SITE_URL") or "").strip()
 OPENROUTER_APP_TITLE = (os.getenv("OPENROUTER_APP_TITLE") or os.getenv("OPENROUTER_X_TITLE") or "").strip()
 
@@ -253,11 +250,6 @@ DEFAULT_WEB_CACHE_TTL_HOURS = 24
 OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED = True
 OPENROUTER_ANTHROPIC_CACHE_TTL_DEFAULT = "5m"  # "5m" (ephemeral, 5 min) or "1h" (ephemeral, 1 hour)
 
-FETCH_TIMEOUT = 20
-FETCH_MAX_SIZE = 5 * 1024 * 1024
-FETCH_MAX_REDIRECTS = 5
-FETCH_HTML_CONVERTER_MODES = {"internal", "external", "hybrid"}
-CACHE_TTL_HOURS = DEFAULT_WEB_CACHE_TTL_HOURS
 SEARCH_MAX_RESULTS = 5
 CONTENT_MAX_CHARS = 100_000
 FETCH_SUMMARY_TOKEN_THRESHOLD = 3500
@@ -318,12 +310,10 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "search_knowledge_base",
     "search_web",
     "fetch_url",
-    "fetch_url_summarized",
-    "search_news",
-    "search_news_google",
     "search_scholar",
     "create_canvas_document",
     "batch_read_canvas_documents",
+    "read_canvas_document",
     "search_canvas_document",
 ]
 
@@ -775,7 +765,6 @@ def apply_persisted_runtime_settings(database_path: str | None = None) -> dict[s
         rs.OCR_ENABLED
         or bool(OPENROUTER_API_KEY)
         or bool(DEEPSEEK_API_KEY)
-        or bool(MINIMAX_API_KEY)
     )
 
     # Store back to module-level runtime settings
@@ -846,7 +835,7 @@ def get_feature_flags(settings: dict | None = None) -> dict:
         source.get("youtube_transcripts_enabled"),
         rs.YOUTUBE_TRANSCRIPTS_ENABLED,
     )
-    image_uploads_enabled = ocr_enabled or bool(OPENROUTER_API_KEY) or bool(DEEPSEEK_API_KEY) or bool(MINIMAX_API_KEY)
+    image_uploads_enabled = ocr_enabled or bool(OPENROUTER_API_KEY) or bool(DEEPSEEK_API_KEY)
     return {
         "rag_enabled": rag_enabled,
         "ocr_enabled": ocr_enabled,
@@ -855,8 +844,7 @@ def get_feature_flags(settings: dict | None = None) -> dict:
         "youtube_transcripts_enabled": youtube_transcripts_enabled,
         "deepseek_api_configured": bool(DEEPSEEK_API_KEY),
         "openrouter_api_configured": bool(OPENROUTER_API_KEY),
-        "minimax_api_configured": bool(MINIMAX_API_KEY),
-        "remote_image_provider_configured": bool(OPENROUTER_API_KEY or DEEPSEEK_API_KEY or MINIMAX_API_KEY),
+        "remote_image_provider_configured": bool(OPENROUTER_API_KEY or DEEPSEEK_API_KEY),
         "scratchpad_admin_editing": SCRATCHPAD_ADMIN_EDITING_ENABLED,
         "login_pin_enabled": is_login_pin_configured(),
     }

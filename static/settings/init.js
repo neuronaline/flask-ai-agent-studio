@@ -27,7 +27,6 @@
   const ragQueryExpansionMaxVariantsEl = document.getElementById("rag-query-expansion-max-variants-input");
   const fetchRawMaxTextCharsEl = document.getElementById("fetch-raw-max-text-chars-input");
   const fetchSummaryMaxCharsEl = document.getElementById("fetch-summary-max-chars-input");
-  const fetchHtmlConverterEl = document.getElementById("fetch-html-converter-select");
   const temperatureEl = document.getElementById("temperature-input");
   const maxStepsEl = document.getElementById("max-steps-input");
   const maxParallelToolsEl = document.getElementById("max-parallel-tools-input");
@@ -101,7 +100,6 @@
     ragQueryExpansionMaxVariantsEl?.addEventListener("input", getMarkDirty());
     fetchRawMaxTextCharsEl?.addEventListener("input", getMarkDirty());
     fetchSummaryMaxCharsEl?.addEventListener("input", getMarkDirty());
-    fetchHtmlConverterEl?.addEventListener("change", getMarkDirty());
     temperatureEl?.addEventListener("input", getMarkDirty());
     maxStepsEl?.addEventListener("input", getMarkDirty());
     maxParallelToolsEl?.addEventListener("input", getMarkDirty());

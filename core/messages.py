@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 from core import config
 import hashlib
 import json
@@ -1175,6 +1176,7 @@ def _filter_clarification_answers_for_questions(
 def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[int]:
     skip_indexes: set[int] = set()
     answered_assistant_ids: set[str] = set()
+    answered_question_key_sets: list[set[str]] = []
     assistant_index_by_id: dict[str, int] = {}
 
     for index, message in enumerate(messages):
@@ -1188,12 +1190,16 @@ def _collect_answered_clarification_skip_indexes(messages: list[dict]) -> set[in
             continue
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
         clarification_response = extract_clarification_response(metadata)
-        answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else []
+        answers = clarification_response.get("answers") if isinstance(clarification_response, dict) else {}
         assistant_message_id = str((clarification_response or {}).get("assistant_message_id") or "").strip()
-        if isinstance(answers, list) and answers and assistant_message_id:
+        if isinstance(answers, dict) and answers and assistant_message_id:
             answered_assistant_ids.add(assistant_message_id)
+        if isinstance(answers, dict) and answers:
+            answer_keys = {str(key or "").strip() for key in answers if str(key or "").strip()}
+            if answer_keys:
+                answered_question_key_sets.append(answer_keys)
 
-    if not answered_assistant_ids:
+    if not answered_assistant_ids and not answered_question_key_sets:
         return skip_indexes
 
     for assistant_index, assistant_message in enumerate(messages):
@@ -2033,6 +2039,7 @@ def _canvas_inspection_tool_flags(active_tool_names: list[str]) -> dict[str, boo
     return {
         "search": "search_canvas_document" in active_set,
         "batch_read": "batch_read_canvas_documents" in active_set,
+        "read": "read_canvas_document" in active_set,
     }
 
 
@@ -2045,6 +2052,8 @@ def _build_canvas_search_guidance_line(active_tool_names: list[str]) -> str | No
 
 def _build_canvas_inspect_first_line(active_tool_names: list[str]) -> str | None:
     flags = _canvas_inspection_tool_flags(active_tool_names)
+    if flags["read"]:
+        return "- If the target lines are not visible yet, inspect first with read_canvas_document."
     if flags["batch_read"]:
         return "- If the target lines are not visible yet, inspect first with batch_read_canvas_documents."
     return None
@@ -2053,7 +2062,7 @@ def _build_canvas_inspect_first_line(active_tool_names: list[str]) -> str | None
 def _build_canvas_parallel_read_guidance_line(active_tool_names: list[str]) -> str | None:
     ordered_names = [
         tool_name
-        for tool_name in ("search_canvas_document", "batch_read_canvas_documents")
+        for tool_name in ("search_canvas_document", "read_canvas_document", "batch_read_canvas_documents")
         if tool_name in set(active_tool_names or [])
     ]
     if not ordered_names:
@@ -2070,6 +2079,8 @@ def _build_canvas_parallel_read_guidance_line(active_tool_names: list[str]) -> s
 
 def _build_canvas_hidden_excerpt_guidance_line(active_tool_names: list[str]) -> str | None:
     flags = _canvas_inspection_tool_flags(active_tool_names)
+    if flags["read"]:
+        return "- If the excerpt says [Excerpt: lines 1–N of M], use read_canvas_document before editing hidden lines."
     if flags["batch_read"]:
         return (
             "- If the excerpt says [Excerpt: lines 1–N of M], use batch_read_canvas_documents before editing hidden lines."
@@ -2081,21 +2092,20 @@ def _build_canvas_preview_compaction_note(active_tool_names: list[str], clipped_
     if clipped_line_count <= 0:
         return None
     flags = _canvas_inspection_tool_flags(active_tool_names)
-    if flags["batch_read"]:
+    if flags["read"]:
+        tool_guidance = "use read_canvas_document if exact full line text matters"
+    elif flags["batch_read"]:
         tool_guidance = "use batch_read_canvas_documents if exact full line text matters"
     else:
-        active_set = set(active_tool_names or [])
-        read_tools = [t for t in ("scroll_canvas_document", "expand_canvas_document") if t in active_set]
-        if read_tools:
-            tool_guidance = " or ".join(read_tools)
-        else:
-            tool_guidance = "exact full line text may require enabling a canvas read tool"
+        tool_guidance = "exact full line text may require enabling a canvas read tool"
     return f"- Preview compaction: {int(clipped_line_count)} long line(s) were clipped for token efficiency; {tool_guidance}."
 
 
 def _build_canvas_truncated_excerpt_guidance(active_tool_names: list[str]) -> str:
     flags = _canvas_inspection_tool_flags(active_tool_names)
-    if flags["batch_read"]:
+    if flags["read"]:
+        inspect_guidance = "Call read_canvas_document for a targeted range before editing."
+    elif flags["batch_read"]:
         inspect_guidance = "Call batch_read_canvas_documents for a targeted range before editing."
     else:
         inspect_guidance = "Do not guess line numbers outside the visible excerpt when no canvas read tool is enabled."
@@ -2133,7 +2143,7 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
 
     lines = [
         "## Canvas",
-        "- Prefer the smallest valid change. Use batch_canvas_edits for all line-level operations.",
+        "- Prefer the smallest valid change. Use batch_canvas_edits for every content change.",
         "- Batch known non-overlapping edits for the same document with batch_canvas_edits.",
         "- Use batch_canvas_edits with a single replace operation for bulk find-replace.",
         "- Verify affected region with a read-only tool after mutating.",
@@ -2141,7 +2151,7 @@ def _build_canvas_editing_guidance(active_tool_names: list[str], canvas_payload:
         "- Do not use line-based tools on an ignored document until re-enabled with ignored=false.",
         "- When targeting, prefer document_path over document_id when shown in the prompt.",
         "- All code must be inside the `lines` array as properly escaped JSON strings.",
-        "- Use batch_canvas_edits with a single replace operation when most of the document should change.",
+        "- Use batch_canvas_edits with a single replace_all operation when most or all of the document should change.",
     ]
     if "create_canvas_document" in active_set:
         lines.insert(2, "- create_canvas_document always needs BOTH title and content.")
@@ -2241,10 +2251,9 @@ def _build_canvas_runtime_context_sections(
         active_lines.append(
             "- Guidance: The active canvas document is fully visible in the current excerpt. Canvas is already fully visible, so use the visible line numbers directly for line-level edits."
         )
-    # Snapshot rule: remind the model that expand_canvas_document returns a call-time snapshot
-    if "expand_canvas_document" in set(active_tool_names or []):
+    if "read_canvas_document" in set(active_tool_names or []):
         active_lines.append(
-            "- Snapshot rule: expand_canvas_document returns a call-time snapshot — call it again before relying on that older view."
+            "- Snapshot rule: read_canvas_document returns a call-time snapshot — call it again before relying on an older view."
         )
     if canvas_payload["mode"] == "project":
         active_lines.append(
@@ -2428,11 +2437,8 @@ def build_tool_call_contract(
 
     web_research_tool_names = {
         "search_web",
-        "search_news",
-        "search_news_google",
         "search_scholar",
         "fetch_url",
-        "fetch_url_summarized",
     }
     if any(name in normalized_tool_names for name in web_research_tool_names):
         rules.append(
@@ -2440,9 +2446,9 @@ def build_tool_call_contract(
         )
 
     normalized_search_tool_query_limit = _normalize_search_tool_query_limit(search_tool_query_limit)
-    if any(name in normalized_tool_names for name in {"search_web", "search_news", "search_news_google", "search_scholar"}):
+    if any(name in normalized_tool_names for name in {"search_web", "search_scholar"}):
         rules.append(
-            f"Each search_web/search_news call may include between 1 and {normalized_search_tool_query_limit} queries in its queries array. If you need more queries, split them across multiple calls."
+            f"Each search call may include between 1 and {normalized_search_tool_query_limit} queries in its queries array. If you need more queries, split them across multiple calls."
         )
 
     if "search_web" in normalized_tool_names:
@@ -3186,9 +3192,6 @@ def prepend_runtime_context(
             include_dynamic_context=True,
         )
 
-    if not injection_content:
-        return [runtime_message, *messages]
-
     # Per the "Static System / Dynamic Footer" pattern, dynamic per-turn
     # context (timestamps, active tools, tool execution history) MUST be
     # appended to the last user message — never as a second system message.
@@ -3197,11 +3200,21 @@ def prepend_runtime_context(
     #
     # Deep-copy every message dict to avoid mutating caller-owned objects
     # (a shallow list() is not enough when the function modifies dict contents
-    # such as msg["content"]).
-    import copy
+    # such as msg[\"content\"]).
     messages = copy.deepcopy(list(messages))
-    _append_injection_to_last_user_message(messages, injection_content)
-    return [runtime_message, *messages]
+
+    # Replace the existing system message (index 0) with the freshly built
+    # runtime system message instead of prepending a second one.  Two system
+    # messages break prefix cache matching per CACHE_AND_MESSAGE_RULES.md.
+    if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+        messages[0] = runtime_message
+    else:
+        messages.insert(0, runtime_message)
+
+    if injection_content:
+        _append_injection_to_last_user_message(messages, injection_content)
+
+    return messages
 
 
 def _normalize_search_tool_query_limit(value: int | None) -> int:

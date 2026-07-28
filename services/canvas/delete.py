@@ -45,7 +45,7 @@ def delete_canvas_document(
                     runtime_state, document_id=str(removed.get("id") or "") or None, document_path=removed.get("path")
                 )
             except (ValueError, CanvasError):
-                LOGGER.warning("Failed to delete canvas document: document_id=%s, document_path=%s", doc_id, doc_path)
+                LOGGER.warning("Failed to delete child/related canvas document during cleanup: document_id=%s, document_path=%s", doc_id, doc_path)
                 continue
         runtime_state["active_document_id"] = None
         _refresh_canvas_runtime_state(runtime_state)

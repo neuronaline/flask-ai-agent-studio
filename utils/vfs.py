@@ -3,8 +3,8 @@ Virtual File System (VFS) — Shadow Store for Token-Efficient File Access
 
 Per AI Memory and Context Management doc Section 2:
 - File contents are NEVER written directly to the context window by default.
-- Tools return lightweight pointers (Tier 3); the full content is materialised
-  on explicit demand via materialise_file.
+- File operations return lightweight pointers while the shadow store retains
+  current content for internal edit and write operations.
 - Shadow store maintains an in-memory key-value mapping of file path → content.
 """
 
@@ -33,7 +33,7 @@ class ShadowFile:
 
     Per doc Section 2.2 schema:
     - path, hash, content, last_access, dirty
-    - content is NEVER sent to AI unless materialise_file is called.
+    - content remains internal to the shadow store.
     """
     path: str
     hash: str
@@ -147,41 +147,6 @@ class ShadowFileSystem:
         self._total_tokens += tokens
         LOGGER.debug("VFS: Loaded %s (%d lines, %d tokens)", resolved_path, shadow.lines, tokens)
         return shadow.to_pointer()
-
-    def materialise_file(self, path: str) -> str | None:
-        """Inject full file content into a Tier-2-appendable string.
-
-        Per doc Section 2.3 materialise_file:
-        1. Retrieves content from shadow store (loads from disk if needed).
-        2. Returns a header-prefixed content block.
-        3. Updates last_access timestamp.
-
-        Args:
-            path: File path to materialise.
-
-        Returns:
-            Formatted content string ready for Tier 2 append, or None if file
-            cannot be read.
-        """
-        # Ensure it's in the store
-        pointer = self.read_file(path)
-        if not pointer.get("available"):
-            return None
-
-        resolved = self._resolve_path(path)
-        if resolved is None:
-            return None
-
-        shadow = self._store.get(resolved)
-        if shadow is None:
-            return None
-
-        shadow.last_access = datetime.now(timezone.utc)
-        LOGGER.debug("VFS: Materialised %s (%d tokens)", resolved, shadow.tokens_estimate)
-
-        # Format as a Tier-2-appendable block
-        header = f"[File: {resolved} | Hash: {shadow.hash_short}]"
-        return f"{header}\n```\n{shadow.content}\n```\n"
 
     def edit_file(self, path: str, old_string: str, new_string: str) -> dict[str, Any]:
         """Apply a patch to a file in the shadow store.
@@ -360,108 +325,6 @@ class ShadowFileSystem:
             LOGGER.debug("VFS: LRU evicted %d files", evicted)
         return evicted
 
-    def search_codebase(self, query: str, scope: str | None = None, max_results: int = 20) -> dict:
-        """Search across the shadow store and file system for a pattern.
-        
-        Per doc Section 2.3 search_codebase:
-        - Returns matches with path, line, context_before, context_after.
-        - Files not yet in the shadow store are loaded temporarily for searching,
-          then evicted unless they contain matches.
-        - Matched files remain in the shadow store for future access.
-        
-        Args:
-            query: Text or regex pattern to search for.
-            scope: Optional directory scope.
-            max_results: Maximum matches to return.
-            
-        Returns:
-            dict with matches list and total_matches count.
-        """
-        import re as _re
-        
-        matches = []
-        seen_files: set[str] = set()
-        search_paths: list[str] = []
-        
-        # Search shadow store first
-        try:
-            scope_prefix = str(Path(scope).resolve()) + "/" if scope else None
-        except Exception:
-            scope_prefix = None
-        for shadow in self._store.values():
-            if scope_prefix and not shadow.path.startswith(scope_prefix):
-                continue
-            seen_files.add(shadow.path)
-            for lineno, line in enumerate(shadow.content.splitlines(), 1):
-                if query in line or _re.search(query, line, _re.IGNORECASE):
-                    before = shadow.content.splitlines()[max(0, lineno-3):lineno-1]
-                    after = shadow.content.splitlines()[lineno:lineno+2]
-                    matches.append({
-                        "path": shadow.path,
-                        "line": lineno,
-                        "context": line.strip(),
-                        "context_before": "\n".join(b.strip() for b in before[-2:]),
-                        "context_after": "\n".join(a.strip() for a in after[:2]),
-                    })
-                    if len(matches) >= max_results:
-                        break
-            if len(matches) >= max_results:
-                break
-        
-        # Search filesystem for non-loaded files if needed
-        if len(matches) < max_results:
-            search_root = Path(scope) if scope else Path.cwd()
-            try:
-                for fpath in search_root.rglob("*"):
-                    if not fpath.is_file():
-                        continue
-                    resolved = str(fpath.resolve())
-                    if resolved in seen_files:
-                        continue
-                    try:
-                        if fpath.stat().st_size > 1_000_000:  # skip >1MB
-                            continue
-                        content = fpath.read_text(encoding="utf-8", errors="replace")
-                    except Exception:
-                        continue
-                    has_match = False
-                    for lineno, line in enumerate(content.splitlines(), 1):
-                        if query in line or _re.search(query, line, _re.IGNORECASE):
-                            before = content.splitlines()[max(0, lineno-3):lineno-1]
-                            after = content.splitlines()[lineno:lineno+2]
-                            matches.append({
-                                "path": resolved,
-                                "line": lineno,
-                                "context": line.strip(),
-                                "context_before": "\n".join(b.strip() for b in before[-2:]),
-                                "context_after": "\n".join(a.strip() for a in after[:2]),
-                            })
-                            has_match = True
-                            if len(matches) >= max_results:
-                                break
-                    # Only keep matched files in shadow store
-                    if has_match and resolved not in self._store:
-                        file_hash = _compute_hash(content)
-                        tokens = estimate_text_tokens(content)
-                        self._ensure_budget(tokens)
-                        self._store[resolved] = ShadowFile(
-                            path=resolved,
-                            hash=file_hash,
-                            content=content,
-                            last_access=datetime.now(timezone.utc),
-                            dirty=False,
-                        )
-                        self._total_tokens += tokens
-                    if len(matches) >= max_results:
-                        break
-            except Exception:
-                pass
-        
-        return {
-            "matches": matches[:max_results],
-            "total_matches": len(matches),
-        }
-
     def get_stats(self) -> dict[str, Any]:
         """Return current VFS statistics for the Dynamic Status Line.
 
@@ -499,20 +362,33 @@ class ShadowFileSystem:
         # If already absolute and exists, use it
         p = Path(path)
         if p.is_absolute():
-            return str(p.resolve()) if p.exists() else None
+            resolved = p.resolve()
+            if not resolved.exists():
+                return None
+        else:
+            # Try resolving relative to cwd
+            abs_p = Path.cwd() / path
+            if abs_p.exists():
+                resolved = abs_p.resolve()
+            else:
+                # Try resolving relative to project root (grandparent of utils/)
+                project_root = Path(__file__).resolve().parent.parent
+                project_p = project_root / path
+                if project_p.exists():
+                    resolved = project_p.resolve()
+                else:
+                    return None
 
-        # Try resolving relative to cwd
-        abs_p = Path.cwd() / path
-        if abs_p.exists():
-            return str(abs_p.resolve())
-
-        # Try resolving relative to project root (grandparent of utils/)
+        # Reject paths outside the project root to prevent access to
+        # system files (e.g., /etc/passwd) or other sensitive locations.
         project_root = Path(__file__).resolve().parent.parent
-        project_p = project_root / path
-        if project_p.exists():
-            return str(project_p.resolve())
+        try:
+            resolved.relative_to(project_root)
+        except ValueError:
+            LOGGER.warning("VFS: Path %s is outside project root — rejected", resolved)
+            return None
 
-        return None
+        return str(resolved)
 
     def _ensure_budget(self, needed_tokens: int) -> None:
         """Evict files if adding ``needed_tokens`` would exceed budget."""

@@ -8,13 +8,16 @@ from core.config import (
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
     DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
-    SEARCH_TOOL_QUERY_LIMIT_MAX,
-    SEARCH_TOOL_QUERY_LIMIT_MIN,
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
+    SEARCH_TOOL_QUERY_LIMIT_MAX,
+    SEARCH_TOOL_QUERY_LIMIT_MIN,
     get_runtime_setting,
 )
 from services.canvas import get_canvas_document_capabilities
+from utils.logging_config import get_logger
+
+LOGGER = get_logger(__name__)
 
 SCRATCHPAD_SECTION_ENUM = list(SCRATCHPAD_SECTION_ORDER)
 SCRATCHPAD_SECTION_DESCRIPTION = "Section to update: " + "; ".join(
@@ -31,6 +34,22 @@ CANVAS_LINE_ARRAY_DESCRIPTION = (
 
 # Pre-computed constant instead of calling a function each time
 CANVAS_EDIT_OPERATION_VARIANTS: list[dict] = [
+    {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["replace_all"],
+                "description": "Replace the entire document content.",
+            },
+            "content": {
+                "type": "string",
+                "description": "Complete replacement document content.",
+            },
+        },
+        "required": ["action", "content"],
+        "additionalProperties": False,
+    },
     {
         "type": "object",
         "properties": {
@@ -333,7 +352,7 @@ TOOL_SPECS = [
     {
         "name": "search_web",
         "description": (
-            "Search the web using the SERP API (Google/Bing). Use this only when you need current information, external verification, or facts that are not already answerable from the current conversation. "
+            "Search Google through Bright Data SERP. Use this only when you need current information, external verification, or facts that are not already answerable from the current conversation. "
             "Provide one or more search queries. Do not pass max_results or other result-limit controls; the runtime already applies the search result cap."
         ),
         "parameters": {
@@ -363,12 +382,10 @@ TOOL_SPECS = [
     {
         "name": "fetch_url",
         "description": (
-            "Fetch and read the content of a specific web page. Returns cleaned text, metadata, and a page outline. "
+            "Fetch a specific web page and return either cleaned content or a focused AI summary. "
             "Use after search_web when you actually need the page's exact content or source wording. "
-            "For very large pages the content may be clipped to fit the token budget; "
-            "when that happens the result includes an outline of the page sections plus preserved leading, middle, and trailing excerpts when space allows. "
-            "By default content is auto-compressed for pages >~10k chars (keeping head/middle/tail). Set compress=false to get the full uncompressed content, "
-            "then use context management tools (compress_context_node, purge_context_nodes) to manage token budget afterward."
+            "Set output_mode='summary' for a concise distilled result, optionally focused on a question or topic. "
+            "In content mode, large pages may be clipped to fit the token budget."
         ),
         "parameters": {
             "type": "object",
@@ -380,140 +397,44 @@ TOOL_SPECS = [
                 "compress": {
                     "type": "boolean",
                     "description": "When true (default), auto-compress content by keeping head/middle/tail portions for pages >~10k chars. Set false to get full uncompressed content.",
-                }
-            },
-            "required": ["url"],
-        },
-        "prompt": {
-            "purpose": "Reads the cleaned content of a specific URL.",
-            "inputs": {"url": "full http/https URL", "compress": "true (default) for compressed, false for full content"},
-            "guidance": (
-                "Large pages are automatically clipped to stay within the token budget. "
-                "When content is clipped the result shows a Page Outline of the section headings. "
-                "The tool also tries to preserve a middle excerpt so important details are not biased toward only the start or end of the page. "
-                "Do not fetch a page unless you actually need its exact content or source wording. "
-                "Do not repeat the same URL in the same turn. "
-                "By default pages are compressed: set compress=false if you need the full uncompressed content, "
-                "then use context management tools (compress_context_node, purge_context_nodes, merge_context_nodes) to manage the token budget. "
-                "To recall content from a previously fetched URL across turns, store it in conversation memory."
-            ),
-        },
-    },
-    {
-        "name": "fetch_url_summarized",
-        "description": (
-            "Fetch a specific web page, send the cleaned page text to a dedicated summarizer model, and return only the resulting clean summary. "
-            "Use this when the parent assistant needs a concise distilled page summary instead of raw page text. "
-            "The returned tool result intentionally hides the full fetched content from the parent assistant and favors dense sectioned summaries over raw excerpts."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "url": {
+                },
+                "output_mode": {
                     "type": "string",
-                    "description": "Full URL of the page (must start with http:// or https://).",
+                    "enum": ["content", "summary"],
+                    "description": "Return cleaned page content (default) or an AI-generated summary.",
                 },
                 "focus": {
                     "type": "string",
-                    "description": "Optional question, angle, or topic to focus the summary on.",
+                    "description": "Optional question or topic to prioritize when output_mode='summary'.",
                 },
             },
             "required": ["url"],
         },
         "prompt": {
-            "purpose": "Reads a URL and returns only an AI-generated summary of the page.",
-            "inputs": {"url": "full http/https URL", "focus": "optional focus or question"},
-            "guidance": (
-                "Use this when you want the page distilled before it reaches you, such as long articles where only the key points matter. "
-                "If focus is given, the summary should prioritize that question or angle. "
-                "Expect short labeled sections with key facts, constraints, and any unresolved uncertainty the source still leaves open. "
-                "Use fetch_url instead when you need raw extracted text, metadata, page outline details, or exact wording from the source page."
-            ),
-        },
-    },
-    {
-        "name": "search_news",
-        "description": (
-            "Search recent news articles via Google News through the SERP API. Returns title, link, publication time and source for each article. "
-            "Use this only when the request needs current news coverage, external verification, or broad news discovery. "
-            "Filter by language. If you need the full article text, follow up with fetch_url on the returned links."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "queries": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": f"List of news search queries (1–{DEFAULT_SEARCH_TOOL_QUERY_LIMIT}).",
-                    "minItems": 1,
-                    "maxItems": DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
-                },
-                "lang": {
-                    "type": "string",
-                    "enum": ["tr", "en"],
-                    "description": "Search language/region. 'tr' for Turkish results, 'en' for English.",
-                },
-            },
-            "required": ["queries"],
-        },
-        "prompt": {
-            "purpose": "Searches news headlines/links/dates/sources via the SERP API.",
+            "purpose": "Reads a URL as cleaned content or a focused AI summary.",
             "inputs": {
-                "queries": f"1-{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} news queries",
-                "lang": "tr|en",
+                "url": "full http/https URL",
+                "compress": "true (default) for compressed content, false for full content",
+                "output_mode": "content (default) or summary",
+                "focus": "optional summary focus or question",
             },
             "guidance": (
-                "Use this for broad recent-news discovery when you actually need headlines, sources, and timestamps before reading full articles. "
-                "Prefer search_news_google for Turkish financial news, local outlets, or when Google News coverage is specifically preferred. "
-                f"Never pass more than {DEFAULT_SEARCH_TOOL_QUERY_LIMIT} queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly. "
-                "If the answer is already known or does not require current news verification, do not search."
-            ),
-        },
-    },
-    {
-        "name": "search_news_google",
-        "description": (
-            "Search Google News via the SERP API. Returns title, link, publication time and source for each article. "
-            "Use this only when the request needs current news coverage or current news verification and Google News coverage is specifically preferred, especially for Turkish financial news, local outlets, or when general news yields weak coverage. "
-            "Filter by language. If you need the full article text, follow up with fetch_url on the returned links."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "queries": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": f"List of news search queries (1–{DEFAULT_SEARCH_TOOL_QUERY_LIMIT}).",
-                    "minItems": 1,
-                    "maxItems": DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
-                },
-                "lang": {
-                    "type": "string",
-                    "enum": ["tr", "en"],
-                    "description": "Search language/region. 'tr' for Turkish results, 'en' for English.",
-                },
-            },
-            "required": ["queries"],
-        },
-        "prompt": {
-            "purpose": "Searches news headlines/links/dates/sources via the SERP API.",
-            "inputs": {
-                "queries": f"1-{DEFAULT_SEARCH_TOOL_QUERY_LIMIT} news queries",
-                "lang": "tr|en",
-            },
-            "guidance": (
-                "Use this when Google News coverage is likely stronger than the default news source for the topic or locale and the request genuinely needs current news verification. "
-                f"Never pass more than {DEFAULT_SEARCH_TOOL_QUERY_LIMIT} queries in one call. After scanning the feed, fetch only the few links that are actually needed."
+                "Do not fetch a page unless you actually need its exact content or source wording. "
+                "Do not repeat the same URL in the same turn. "
+                "Use output_mode='summary' for long pages when only a concise synthesis is needed; provide focus when the summary should answer a specific question. "
+                "Use output_mode='content' when exact wording, metadata, or the page outline matters. "
+                "In content mode, set compress=false only when the complete extracted content is necessary. "
+                "To recall content from a previously fetched URL across turns, store it in conversation memory."
             ),
         },
     },
     {
         "name": "search_scholar",
         "description": (
-            "Search academic papers via Google Scholar through the SERP API. Returns title, URL, snippet/abstract, authors, "
+            "Search academic papers via Google Scholar through Bright Data SERP. Returns title, URL, snippet/abstract, authors, "
             "publication year, venue, and citation count for each result. "
             "Use this for academic research, literature reviews, finding papers, or verifying scholarly sources. "
-            "The tool delegates to the SERP API which handles browser automation server-side."
+            "Bright Data handles the SERP collection server-side."
         ),
         "parameters": {
             "type": "object",
@@ -785,7 +706,7 @@ TOOL_SPECS = [
     },
     {
         "name": "batch_canvas_edits",
-        "description": "Apply multiple non-overlapping line edit operations to one canvas document in a single call.",
+        "description": "Replace all content or apply one or more line edits to one or more canvas documents.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -799,7 +720,7 @@ TOOL_SPECS = [
                 },
                 "operations": {
                     "type": "array",
-                    "description": "Ordered list of non-overlapping replace, insert, or delete operations to apply against the same document snapshot.",
+                    "description": "A replace_all operation or ordered non-overlapping replace, insert, and delete operations.",
                     "minItems": 1,
                     "items": {"oneOf": CANVAS_EDIT_OPERATION_VARIANTS},
                 },
@@ -819,7 +740,7 @@ TOOL_SPECS = [
                                 "type": "array",
                                 "minItems": 1,
                                 "items": {"oneOf": CANVAS_EDIT_OPERATION_VARIANTS},
-                                "description": "Ordered list of non-overlapping replace, insert, or delete operations for this target.",
+                                "description": "A replace_all operation or ordered non-overlapping line edits for this target.",
                             },
                         },
                         "required": ["operations"],
@@ -833,7 +754,7 @@ TOOL_SPECS = [
             "anyOf": [{"required": ["operations"]}, {"required": ["targets"]}],
         },
         "prompt": {
-            "purpose": "Applies multiple disjoint line edits to one or more canvas documents in a single call.",
+            "purpose": "Replaces complete document content or applies localized edits to one or more canvas documents.",
             "inputs": {
                 "document_id": "optional target id",
                 "document_path": "optional target project-relative path",
@@ -842,77 +763,16 @@ TOOL_SPECS = [
                 "atomic": "optional rollback flag",
             },
             "guidance": (
-                "Prefer one batch_canvas_edits call when you already know several non-overlapping edits for one document or multiple documents. "
+                "Use action='replace_all' with content to replace a complete document; replace_all must be the only operation for that target. "
+                "Otherwise prefer one batch_canvas_edits call when you know one or more localized edits for one document or multiple documents. "
                 "Every operation must target a disjoint region or insertion anchor. "
-                "Every operation must be a plain JSON object with an action field set to replace, insert, or delete. "
+                "Every operation must be a plain JSON object with action set to replace_all, replace, insert, or delete. "
                 "Do not nest a single operation inside an extra array or wrapper object. "
-                "For replace use start_line, end_line, and lines. For insert use after_line and lines. For delete use start_line and end_line. "
+                "For replace_all use content. For replace use start_line, end_line, and lines. For insert use after_line and lines. For delete use start_line and end_line. "
                 "Line numbers are interpreted against the pre-batch document and adjusted automatically for earlier operations in the same batch. "
                 "When you are editing from a previously seen snippet, include expected_lines and expected_start_line on each operation so stale edits are rejected safely. "
                 "Use targets when multiple files should change together. In project mode, prefer document_path when possible."
             ),
-        },
-    },
-    {
-        "name": "set_canvas_viewport",
-        "description": "Pin a text line range from a text-addressable canvas document so it is automatically injected into later prompts for a limited number of turns.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {
-                    "type": "string",
-                    "description": "Optional target project-relative path. Prefer this over document_id in project mode.",
-                },
-                "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to pin."},
-                "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to pin."},
-                "ttl_turns": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "description": "How many future turns to keep the viewport pinned. Use 0 to keep it pinned until explicitly cleared. Ignored when permanent=true.",
-                },
-                "permanent": {
-                    "type": "boolean",
-                    "description": "When true, pin the viewport until explicitly cleared and ignore ttl_turns.",
-                },
-                "auto_unpin_on_edit": {
-                    "type": "boolean",
-                    "description": "When true, automatically clear the viewport if an overlapping edit changes that region.",
-                },
-            },
-            "required": ["start_line", "end_line"],
-        },
-        "prompt": {
-            "purpose": "Pins a canvas range for automatic reuse in subsequent prompts.",
-            "inputs": {
-                "document_id": "optional target id",
-                "document_path": "optional target project-relative path",
-                "start_line": "viewport start",
-                "end_line": "viewport end",
-                "ttl_turns": "number of future turns to keep it pinned",
-                "permanent": "pin until explicitly cleared",
-                "auto_unpin_on_edit": "whether overlapping edits clear it automatically",
-            },
-            "guidance": "Use this only for text-addressable canvas documents when you expect to keep working in the same known line range for multiple turns and want to avoid repeated scroll or expand calls. Use permanent=true when the range should stay pinned until you explicitly clear it.",
-        },
-    },
-    {
-        "name": "clear_canvas_viewport",
-        "description": "Clear one pinned canvas viewport or all pinned viewports.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {
-                    "type": "string",
-                    "description": "Optional target project-relative path. When omitted with document_id, clears all viewports.",
-                },
-            },
-        },
-        "prompt": {
-            "purpose": "Removes one or all pinned canvas viewports.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path"},
-            "guidance": "Use this when a pinned viewport is no longer useful or should stop consuming prompt space. If both document_id and document_path are omitted, the tool clears all pinned viewports.",
         },
     },
     {
@@ -949,102 +809,31 @@ TOOL_SPECS = [
         },
     },
     {
-        "name": "rewrite_canvas_document",
-        "description": "Replace the entire content of a canvas document. Use for bulk rewrites or when most of the document should change. Do not default to this when only part of the file needs to change.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this in project mode."},
-                "content": {"type": "string", "description": "The complete new document content."},
-            },
-            "required": ["content"],
-        },
-        "prompt": {
-            "purpose": "Replaces the entire content of a canvas document with new content.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "content": "complete new document content"},
-            "guidance": "Do not default to this when only part of the file needs to change. Prefer batch_canvas_edits for localized edits. Use this only for bulk rewrites where most of the document should change.",
-        },
-    },
-    {
-        "name": "replace_canvas_lines",
-        "description": "Replace specific lines in a canvas document. Use for localized line-level edits.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this in project mode."},
-                "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to replace."},
-                "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to replace."},
-                "lines": {"type": "array", "items": {"type": "string"}, "description": "Replacement lines as properly escaped JSON strings."},
-            },
-            "required": ["start_line", "end_line", "lines"],
-        },
-        "prompt": {
-            "purpose": "Replaces a specific inclusive line range in a canvas document with new lines.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "start_line": "1-based start", "end_line": "1-based end", "lines": "replacement lines"},
-            "guidance": "Multiple localized replace_canvas_lines calls are fine for non-overlapping edits. Prefer batch_canvas_edits when several edits target the same document.",
-        },
-    },
-    {
-        "name": "expand_canvas_document",
-        "description": "Expand the visible excerpt of a canvas document to show more lines. Returns a call-time snapshot of the document content around the specified range. document_id is optional when only one document exists.",
+        "name": "read_canvas_document",
+        "description": "Read a canvas document or a focused 1-based line range. Returns a call-time snapshot.",
         "parameters": {
             "type": "object",
             "properties": {
                 "document_id": {"type": "string", "description": "Optional target canvas document id. Defaults to the active document."},
                 "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this in project mode."},
-                "start_line": {"type": "integer", "minimum": 1, "description": "Optional 1-based start line for the expanded range."},
-                "end_line": {"type": "integer", "minimum": 1, "description": "Optional 1-based end line for the expanded range."},
+                "start_line": {"type": "integer", "minimum": 1, "description": "Optional 1-based first line to return."},
+                "end_line": {"type": "integer", "minimum": 1, "description": "Optional 1-based last line to return."},
+                "max_lines": {"type": "integer", "minimum": 1, "description": "Maximum number of lines to return. Defaults to 200."},
             },
         },
         "prompt": {
-            "purpose": "Expands the visible excerpt of a canvas document to show more lines.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "start_line": "optional start", "end_line": "optional end"},
-            "guidance": "Use document_path from the workspace summary or manifest. expand_canvas_document returns a call-time snapshot — call it again before relying on that older view if the document may have changed since the last expand. Snapshot rule: Always call expand_canvas_document again before relying on an older view of the document content.",
-        },
-    },
-    {
-        "name": "scroll_canvas_document",
-        "description": "Scroll to a specific line range in a canvas document and return the visible lines. Use before line-level edits when the target lines are not yet visible.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {"type": "string", "description": "Optional target project-relative path. Prefer this in project mode."},
-                "start_line": {"type": "integer", "minimum": 1, "description": "1-based first line to scroll to."},
-                "end_line": {"type": "integer", "minimum": 1, "description": "1-based last line to scroll to."},
-                "max_window_lines": {"type": "integer", "minimum": 1, "description": "Maximum number of lines to return."},
+            "purpose": "Reads a complete canvas excerpt or a focused line range.",
+            "inputs": {
+                "document_id": "optional target id",
+                "document_path": "optional target project-relative path",
+                "start_line": "optional 1-based start",
+                "end_line": "optional 1-based end",
+                "max_lines": "optional maximum returned lines",
             },
-            "required": ["start_line", "end_line"],
-        },
-        "prompt": {
-            "purpose": "Scrolls to a specific line range and returns the visible lines for inspection before editing.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target project-relative path", "start_line": "scroll start", "end_line": "scroll end", "max_window_lines": "optional max lines to return"},
-            "guidance": "Use this before line-level edits when the target lines are not yet visible in the current excerpt.",
-        },
-    },
-    {
-        "name": "preview_canvas_changes",
-        "description": "Preview the result of pending canvas changes without applying them. Returns the would-be document state after the proposed edits.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "document_id": {"type": "string", "description": "Optional target canvas document id."},
-                "document_path": {"type": "string", "description": "Optional target project-relative path."},
-                "operations": {
-                    "type": "array",
-                    "minItems": 1,
-                    "description": "Proposed edit operations to preview.",
-                    "items": {"type": "object"},
-                },
-            },
-            "required": ["operations"],
-        },
-        "prompt": {
-            "purpose": "Shows the would-be result of proposed canvas edits without committing them.",
-            "inputs": {"document_id": "optional target id", "document_path": "optional target path", "operations": "proposed edit operations"},
-            "guidance": "Use this to verify the impact of a batch of edits before committing them with batch_canvas_edits.",
+            "guidance": (
+                "Omit start_line and end_line to read the default document excerpt, or provide both for a focused range. "
+                "The result is a call-time snapshot; read again before editing if the document may have changed."
+            ),
         },
     },
     {
@@ -1068,218 +857,6 @@ TOOL_SPECS = [
             "purpose": "Retrieves the full content of a previously executed tool call whose result was truncated.",
             "inputs": {"message_id": "the assistant message id", "tool_call_id": "the tool call id to expand"},
             "guidance": "Use this when a previous tool result was truncated and you need the complete output to proceed.",
-        },
-    },
-    # -----------------------------------------------------------------------
-    # Context Management Tools (per AI Memory and Context Management doc)
-    # -----------------------------------------------------------------------
-    {
-        "name": "list_context_summary",
-        "description": (
-            "Provide a lightweight overview of all current context nodes without loading their full payloads. "
-            "Returns node_id, summary, token_count, and timestamp for each node. "
-            "Use this to audit memory footprint before deciding which nodes to purge, merge, or compress."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "sort_by": {
-                    "type": "string",
-                    "enum": ["timestamp", "created_at", "token_count"],
-                    "description": "Sort order: 'timestamp' (chronological, default), 'created_at' (alias for timestamp), or 'token_count' (largest first).",
-                },
-            },
-            "required": [],
-        },
-        "prompt": {
-            "purpose": "Lists all persistent context nodes with summary, token count, and timestamp — no full payloads.",
-            "inputs": {"sort_by": "optional: 'created_at' (default) or 'token_count'"},
-            "guidance": (
-                "Use this first when memory pressure is high to decide which nodes to purge or merge. "
-                "The lightweight overview lets you audit the whole store without paying the cost of reading full payloads."
-            ),
-        },
-    },
-    {
-        "name": "purge_context_nodes",
-        "description": (
-            "Permanently remove specified context nodes from persistent memory. "
-            "Provide a list of node_ids to delete and an optional shared reason. "
-            "If a node contains goal-critical data, extract and condense key content before purging."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "nodes": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of node_id UUIDs to permanently delete. Ignored if purge_all=true.",
-                    "minItems": 1,
-                },
-                "purge_all": {
-                    "type": "boolean",
-                    "description": "If true, purge ALL persistent nodes (crisis cleanup). Ignores 'nodes'. Default: false.",
-                },
-                "reason": {
-                    "type": "string",
-                    "description": "Optional shared description for the deletion batch.",
-                },
-            },
-            "required": ["nodes"],
-        },
-        "prompt": {
-            "purpose": "Permanently removes specified context nodes to free token capacity.",
-            "inputs": {
-                "nodes": "list of node_id UUIDs to delete",
-                "reason": "optional shared description",
-            },
-            "guidance": (
-                "Only purge nodes that are entirely irrelevant to the current goal. "
-                "If a node contains goal-critical data, extract key facts first and either append them to another node "
-                "or create a new condensed node via the regular keep_alive mechanism, then purge the original. "
-                "Use list_context_summary first to identify candidates."
-            ),
-        },
-    },
-    {
-        "name": "merge_context_nodes",
-        "description": (
-            "Combine two or more related context nodes into a single node, reducing node count without discarding information. "
-            "The payloads of all listed nodes are concatenated and stored as a single new node. "
-            "The source nodes are purged automatically. The new node inherits the earliest timestamp from the source set."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "nodes": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of 2+ node_id UUIDs to merge into one.",
-                    "minItems": 2,
-                },
-                "new_summary": {
-                    "type": "string",
-                    "description": "Condensed summary covering all merged nodes (max ~50 tokens).",
-                },
-            },
-            "required": ["nodes", "new_summary"],
-        },
-        "prompt": {
-            "purpose": "Merges multiple related context nodes into one denser node to reduce memory fragmentation.",
-            "inputs": {
-                "nodes": "list of 2+ node_id UUIDs",
-                "new_summary": "condensed summary (max ~50 tokens)",
-            },
-            "guidance": (
-                "Use this when multiple related nodes each hold distinct facts that should be consolidated. "
-                "Merging is an alternative to purging orphaned nodes individually; consolidate related data before eviction. "
-                "The source nodes are purged automatically after merge."
-            ),
-        },
-    },
-    {
-        "name": "compress_context_node",
-        "description": (
-            "Compress the payload of a large context node by truncating its middle bulk while preserving the "
-            "structurally informative head (~35%) and tail (~50%) sections, plus a thin middle sample (~15%). "
-            "This reduces the node's token footprint without discarding it entirely. "
-            "A node can only be compressed once — the compressed flag makes re-compression impossible."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "node_id": {
-                    "type": "string",
-                    "description": "UUID of the node to compress.",
-                },
-            },
-            "required": ["node_id"],
-        },
-        "prompt": {
-            "purpose": "Compresses a context node by keeping head/tail excerpts and discarding the middle bulk.",
-            "inputs": {"node_id": "UUID of the node to compress"},
-            "guidance": (
-                "Only compress nodes that are well above the compression threshold and contain structural value "
-                "in their head/tail but filler in the middle. "
-                "Compression is one-way — once compressed (compressed=true), a node cannot be compressed again. "
-                "If a compressed node still consumes too many tokens, purge it or merge it with others."
-            ),
-        },
-    },
-    # -----------------------------------------------------------------------
-    # Virtual File System Tools (per AI Memory and Context Management doc)
-    # -----------------------------------------------------------------------
-    {
-        "name": "search_codebase",
-        "description": (
-            "Search across the shadow store and file system for a text or regex pattern. "
-            "Returns matches with path, line number, and surrounding context lines. "
-            "Files not yet loaded are scanned temporarily and cached if they contain matches."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Query string or regex pattern to search for.",
-                },
-                "scope": {
-                    "type": "string",
-                    "description": "Optional directory scope to limit the search.",
-                },
-                "max_results": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 50,
-                    "description": "Maximum number of matches to return (default: 20).",
-                },
-            },
-            "required": ["query"],
-        },
-        "prompt": {
-            "purpose": "Searches codebase for matching patterns across loaded and unloaded files.",
-            "inputs": {
-                "query": "search query or regex",
-                "scope": "optional directory scope",
-                "max_results": "optional result limit (1-50)",
-            },
-            "guidance": (
-                "Use this to locate where specific functions, variables, or text patterns "
-                "appear in the codebase. The search covers both files already loaded in the "
-                "shadow store and the wider file system. Matched files stay in the shadow "
-                "store for subsequent materialisation calls."
-            ),
-        },
-    },
-    {
-        "name": "materialise_file",
-        "description": (
-            "Inject the full current content of a file into the context for detailed analysis. "
-            "Use this only when you need to examine exact line content, write a patch, or understand "
-            "implementation details. Returns the full file content as a code block. "
-            "For most needs — checking if a file exists, its size, or its rough structure — the "
-            "lightweight pointer from read_file is sufficient and much cheaper."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "File path to materialise (loaded from disk if not already in the shadow store).",
-                },
-            },
-            "required": ["path"],
-        },
-        "prompt": {
-            "purpose": "Injects the full content of a previously-read file into Tier 2 context for deep analysis.",
-            "inputs": {"path": "file path to materialise (loaded from disk if needed)"},
-            "guidance": (
-                "Use this sparingly — materialising a large file consumes significant token budget "
-                "(~8 tokens per line). Prefer the lightweight file pointer from read_file for existence "
-                "checks, size estimation, and structural understanding. "
-                "Once materialised, the content stays in the conversational context. "
-                "If the file is later edited, call materialise_file again to see the new version."
-            ),
         },
     },
     {
@@ -1333,7 +910,13 @@ TOOL_SPECS = [
 ]
 
 TOOL_SPEC_BY_NAME = {tool["name"]: tool for tool in TOOL_SPECS}
-SEARCH_QUERY_LIMITED_TOOL_NAMES = {"search_web", "search_news", "search_news_google", "search_scholar"}
+SEARCH_QUERY_LIMITED_TOOL_NAMES = {"search_web", "search_scholar"}
+ADDITIONAL_RUNTIME_TOOL_NAMES = frozenset({
+    "save_to_conversation_memory",
+    "delete_conversation_memory_entry",
+    "save_to_persona_memory",
+    "delete_persona_memory_entry",
+})
 
 _TOOL_RUNTIME_DEFAULTS = {
     "read_only": False,
@@ -1353,26 +936,6 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
     "ask_clarifying_question": {
         "exclusive_turn": True,
         "state_domains": ("clarification",),
-    },
-    "list_context_summary": {
-        "ui_hidden": True,
-    },
-    "purge_context_nodes": {
-        "ui_hidden": True,
-    },
-    "merge_context_nodes": {
-        "ui_hidden": True,
-    },
-    "compress_context_node": {
-        "ui_hidden": True,
-    },
-    "materialise_file": {
-        "read_only": True,
-        "parallel_safe": True,
-    },
-    "search_codebase": {
-        "read_only": True,
-        "parallel_safe": True,
     },
     "delegate_task": {
         "ui_hidden": True,
@@ -1396,23 +959,6 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "prompt_visible": False,
     },
     "fetch_url": {
-        "read_only": True,
-        "parallel_safe": True,
-        "session_cacheable": True,
-        "state_domains": ("web",),
-    },
-    "fetch_url_summarized": {
-        "read_only": True,
-        "parallel_safe": True,
-        "state_domains": ("web",),
-    },
-    "search_news": {
-        "read_only": True,
-        "parallel_safe": True,
-        "session_cacheable": True,
-        "state_domains": ("web",),
-    },
-    "search_news_google": {
         "read_only": True,
         "parallel_safe": True,
         "session_cacheable": True,
@@ -1444,46 +990,16 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "requires_text_addressable_canvas": True,
         "requires_editable_canvas": True,
     },
-    "set_canvas_viewport": {
-        "state_domains": ("canvas",),
-        "requires_canvas_document": True,
-        "requires_text_addressable_canvas": True,
-    },
-    "clear_canvas_viewport": {
-        "state_domains": ("canvas",),
-        "requires_canvas_document": True,
-    },
     "delete_canvas_document": {
         "state_domains": ("canvas",),
         "requires_canvas_document": True,
     },
-    "rewrite_canvas_document": {
-        "state_domains": ("canvas",),
-        "requires_canvas_document": True,
-        "requires_text_addressable_canvas": True,
-        "requires_editable_canvas": True,
-    },
-    "replace_canvas_lines": {
-        "state_domains": ("canvas",),
-        "requires_canvas_document": True,
-        "requires_text_addressable_canvas": True,
-        "requires_editable_canvas": True,
-    },
-    "expand_canvas_document": {
-        "read_only": True,
-        "state_domains": ("canvas",),
-        "requires_canvas_document": True,
-    },
-    "scroll_canvas_document": {
-        "state_domains": ("canvas",),
-        "requires_canvas_document": True,
-        "requires_text_addressable_canvas": True,
-    },
-    "preview_canvas_changes": {
+    "read_canvas_document": {
         "read_only": True,
         "parallel_safe": True,
         "state_domains": ("canvas",),
         "requires_canvas_document": True,
+        "requires_text_addressable_canvas": True,
     },
     "read_scratchpad": {
         "read_only": True,
@@ -1666,8 +1182,8 @@ def _build_search_query_limit_spec(tool: dict, search_tool_query_limit: int | No
     prompt_inputs = prompt.get("inputs") if isinstance(prompt.get("inputs"), dict) else {}
     if tool_name == "search_web":
         prompt_inputs["queries"] = f"{limit_range} search queries"
-    elif tool_name in {"search_news", "search_news_google"}:
-        prompt_inputs["queries"] = f"{limit_range} news queries"
+    elif tool_name == "search_scholar":
+        prompt_inputs["queries"] = f"{limit_range} scholar queries"
     prompt["inputs"] = prompt_inputs
 
     guidance = str(prompt.get("guidance") or "").strip()
@@ -1675,14 +1191,6 @@ def _build_search_query_limit_spec(tool: dict, search_tool_query_limit: int | No
         "search_web": (
             "Never pass more than 5 queries in a single call. If you need more search terms, split them across multiple search_web calls. ",
             f"Never pass more than {limit} queries in a single call. If you need more search terms, split them across multiple search_web calls. ",
-        ),
-        "search_news": (
-            "Never pass more than 5 queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly. ",
-            f"Never pass more than {limit} queries in one call. If you need article details, follow up with fetch_url on the most relevant links instead of widening the same news query repeatedly. ",
-        ),
-        "search_news_google": (
-            "Never pass more than 5 queries in one call. After scanning the feed, fetch only the few links that are actually needed.",
-            f"Never pass more than {limit} queries in one call. After scanning the feed, fetch only the few links that are actually needed.",
         ),
         "search_scholar": (
             "Never pass more than 5 queries in one call. If you need the full paper text, follow up with fetch_url on the returned links. Results include citation counts and publication years for evaluation.",
@@ -1740,7 +1248,11 @@ def resolve_runtime_tool_names(
     Tools disabled by user constraints are removed from the callable list entirely,
     rather than being handled via backend override errors.
     """
-    names = list(active_tool_names or [])
+    allowed_names = set(TOOL_RUNTIME_METADATA) | set(ADDITIONAL_RUNTIME_TOOL_NAMES)
+    names = [name for name in (active_tool_names or []) if name in allowed_names]
+    dropped = [name for name in (active_tool_names or []) if name not in allowed_names]
+    if dropped:
+        LOGGER.warning("resolve_runtime_tool_names: dropping unknown tool names %s", dropped)
     if not names:
         return []
 
@@ -1775,18 +1287,12 @@ def resolve_runtime_tool_names(
 
 
 _TOOL_SPEC_PRIORITY = {
-    "expand_canvas_document": 0,
-    "scroll_canvas_document": 1,
+    "read_canvas_document": 0,
     "search_canvas_document": 2,
     "batch_read_canvas_documents": 3,
     "create_canvas_document": 10,
-    "rewrite_canvas_document": 11,
-    "replace_canvas_lines": 12,
     "batch_canvas_edits": 13,
-    "set_canvas_viewport": 14,
-    "clear_canvas_viewport": 15,
     "delete_canvas_document": 16,
-    "preview_canvas_changes": 17,
 }
 
 
