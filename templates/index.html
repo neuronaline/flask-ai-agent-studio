@@ -4,7 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ChatBot</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/css/base.css" />
+  <link rel="stylesheet" href="/static/css/chat.css" />
+  <link rel="stylesheet" href="/static/css/canvas.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -435,10 +437,29 @@
 <script src="/static/js/sidebar.js?v={{ app_js_version }}"></script>
 <script src="/static/js/clarification.js?v={{ app_js_version }}"></script>
 <script src="/static/js/traces.js?v={{ app_js_version }}"></script>
-<script src="/static/js/message.js?v={{ app_js_version }}"></script>
+<!-- message module (7 files) -->
+<script src="/static/js/message/selection.js?v={{ app_js_version }}"></script>
+<script src="/static/js/message/editing.js?v={{ app_js_version }}"></script>
+<script src="/static/js/message/actions.js?v={{ app_js_version }}"></script>
+<script src="/static/js/message/streaming.js?v={{ app_js_version }}"></script>
+<script src="/static/js/message/history.js?v={{ app_js_version }}"></script>
+<script src="/static/js/message/render.js?v={{ app_js_version }}"></script>
+<script src="/static/js/message/index.js?v={{ app_js_version }}"></script>
 <script src="/static/js/export.js?v={{ app_js_version }}"></script>
 <script src="/static/js/notifications.js?v={{ app_js_version }}"></script>
-<script src="/static/js/canvas.js?v={{ app_js_version }}"></script>
+<!-- canvas module (12 files) -->
+<script src="/static/js/canvas/normalize.js?v={{ app_js_version }}"></script>
+<script src="/static/js/canvas/streaming.js?v={{ app_js_version }}"></script>
+<script src="/static/js/canvas/tree.js?v={{ app_js_version }}"></script>
+<script src="/static/js/canvas/search.js?v={{ app_js_version }}"></script>
+<script src="/static/js/canvas/api.js?v={{ app_js_version }}"></script>
+<script src="/static/js/canvas/modal.js?v={{ app_js_version }}"></script>
+<script src="/static/js/canvas/mutations.js?v={{ app_js_version }}"></script>
+<script src="/static/js/canvas/zoom.js?v={{ app_js_version }}"></script>
+<script src="/static/js/canvas/menu.js?v={{ app_js_version }}"></script>
+<script src="/static/js/canvas/page.js?v={{ app_js_version }}"></script>
+<script src="/static/js/canvas/render.js?v={{ app_js_version }}"></script>
+<script src="/static/js/canvas/index.js?v={{ app_js_version }}"></script>
 <script src="/static/js/chat.js?v={{ app_js_version }}"></script>
 <script src="/static/app.js?v={{ app_js_version }}"></script>
 <script src="/static/js/events.js?v={{ app_js_version }}"></script>

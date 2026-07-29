@@ -19,17 +19,7 @@ function getHistoryMessageSortValue(message) {
   return Number.isFinite(messageId) ? messageId : 0;
 }
 
-function sortHistoryMessagesByPosition(entries = []) {
-  return [...(Array.isArray(entries) ? entries : [])].sort((left, right) => {
-    const positionDelta = getHistoryMessageSortValue(left) - getHistoryMessageSortValue(right);
-    if (positionDelta !== 0) {
-      return positionDelta;
-    }
-    return Number(left?.id || 0) - Number(right?.id || 0);
-  });
-}
-
-function getSelectionSetForMode(mode = uiState.messageSelectionMode) {
+function getHistoryMessage(messageId) {
   if (mode === "summary") {
     return uiState.selectedSummaryMessageIds;
   }
@@ -113,20 +103,6 @@ function isPersistedMessageId(messageId) {
 function getHistoryMessage(messageId) {
   const index = getHistoryMessageIndex(messageId);
   return index >= 0 ? chatState.history[index] : null;
-}
-
-function isPrunableHistoryMessage(message) {
-  if (!message || (message.role !== "user" && message.role !== "assistant")) {
-    return false;
-  }
-  if (message.role === "assistant" && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
-    return false;
-  }
-  const metadata = message.metadata && typeof message.metadata === "object" ? message.metadata : null;
-  if (metadata?.is_summary === true) {
-    return false;
-  }
-  return String(message.content || "").trim().length > 0;
 }
 
 function isEditableHistoryMessage(message) {
@@ -582,14 +558,6 @@ async function regenerateAssistantMessage(messageId) {
   editingMessageId = Number(previousUserMessage.id);
   clearInlineEditingTarget();
   await sendMessage({ forcedText: String(previousUserMessage.content || "") });
-}
-
-function createAssistantMessageActions(message) {
-  if (!message || message.role !== "assistant") {
-    return null;
-  }
-
-  return createMessageActions(message, { editable: true });
 }
 
 /* ------------------------------------------------------------------ */
@@ -1121,11 +1089,6 @@ function getSummaryModeValue() {
   return String(appSettings.chat_summary_mode || "auto").trim() || "auto";
 }
 
-function getSummarySkipFirstValue() {
-  const rawValue = Number.parseInt(String(appSettings.summary_skip_first || "0"), 10);
-  return Number.isFinite(rawValue) ? Math.max(0, rawValue) : 0;
-}
-
 /* ------------------------------------------------------------------ */
 /*  Message Group Creation                                             */
 /* ------------------------------------------------------------------ */
@@ -1341,13 +1304,6 @@ function createMessageGroup(role, text, metadata = null, options = {}) {
   if (!options.isInlineEditingTarget && footerActions) {
     group.appendChild(footerActions);
   }
-  return group;
-}
-
-function appendGroup(role, text, metadata = null, options = {}) {
-  const group = createMessageGroup(role, text, metadata, options);
-  messagesEl.appendChild(group);
-  scrollToBottom();
   return group;
 }
 
@@ -1575,34 +1531,13 @@ function refreshEditBanner() {
   editBannerText.textContent = "Editing an earlier message. Sending now will replace that turn and continue from there.";
 }
 
-function beginEditingMessage(messageId) {
-  if (chatState.isStreaming || chatState.isFixing) {
-    return;
-  }
-
-  const message = getHistoryMessage(messageId);
-  if (!message || message.role !== "user") {
-    return;
-  }
-
-  clearInlineEditingTarget();
-  editingMessageId = Number(message.id);
-  inputEl.value = buildComposerSlashCommandEditableText(message.content, message.metadata);
-  autoResize(inputEl);
-  syncSlashCommandMenuWithInput({ preserveSelection: false });
-  clearSelectedImage();
-  refreshEditBanner();
-  renderConversationHistory();
-  inputEl.focus();
-  inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
-}
-
 /* ------------------------------------------------------------------ */
-/*  startNewChat — extracted from app.js                               */
+/*  startNewChat
 /* ------------------------------------------------------------------ */
 
 function startNewChat() {
   clearPendingDeleteMessage({ render: false });
+  resetTokenStats();
   uiState.conversationRefreshGeneration += 1;
   uiState.pendingConversationRefreshTimers.forEach((timerId) => window.clearTimeout(timerId));
   uiState.pendingConversationRefreshTimers.clear();
@@ -1629,7 +1564,6 @@ function startNewChat() {
   clearInlineEditingTarget();
   resetCanvasWorkspaceState();
   clearSelectedImage();
-  resetTokenStats();
   renderConversationHistory();
   renderCanvasPanel();
   updateExportPanel();

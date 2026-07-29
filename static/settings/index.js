@@ -1,3 +1,443 @@
+// ── Merged from context.js ──────────────────────────────────────────────────
+(function () {
+  "use strict";
+
+  // ─── DOM refs ────────────────────────────────────────────────────────────────
+  const contextCompactionThresholdEl = document.getElementById("context-compaction-threshold-input");
+  const contextCompactionKeepRecentRoundsEl = document.getElementById("context-compaction-keep-recent-rounds-input");
+
+  // ─── Context settings apply ───────────────────────────────────────────────────
+  function syncContextSettingsToForm(appSettings) {
+    if (contextCompactionThresholdEl) contextCompactionThresholdEl.value = String(appSettings.context_compaction_threshold ?? 0.85);
+    if (contextCompactionKeepRecentRoundsEl) contextCompactionKeepRecentRoundsEl.value = String(appSettings.context_compaction_keep_recent_rounds ?? 2);
+  }
+
+  // ─── Context payload helpers ──────────────────────────────────────────────────
+  function readContextSettingsPayload() {
+    return {
+      context_compaction_threshold: window.__settingsCore.readFloatSetting(contextCompactionThresholdEl, 0.85, { min: 0.5, max: 0.98 }),
+      context_compaction_keep_recent_rounds: window.__settingsCore.readNumericSetting(contextCompactionKeepRecentRoundsEl, 2, { min: 0, max: 6 }),
+    };
+  }
+
+  // ─── Context strategy availability ─────────────────────────────────────────────
+  function syncContextStrategyAvailability() {
+    // placeholder — currently no context features are disabled by feature flags
+  }
+
+  // ─── Export ──────────────────────────────────────────────────────────────────
+  window.__settingsContext = {
+    syncContextSettingsToForm,
+    readContextSettingsPayload,
+    syncContextStrategyAvailability,
+  };
+})();
+
+// ── Merged from canvas.js ────────────────────────────────────────────────────
+(function () {
+  "use strict";
+
+  // ─── DOM refs ────────────────────────────────────────────────────────────────
+  const canvasPromptLinesEl = document.getElementById("canvas-prompt-lines-input");
+  const canvasPromptTokensEl = document.getElementById("canvas-prompt-tokens-input");
+  const canvasPromptCharsEl = document.getElementById("canvas-prompt-chars-input");
+  const canvasCodeLineCharsEl = document.getElementById("canvas-code-line-chars-input");
+  const canvasTextLineCharsEl = document.getElementById("canvas-text-line-chars-input");
+  const canvasExpandLinesEl = document.getElementById("canvas-expand-lines-input");
+  const canvasScrollLinesEl = document.getElementById("canvas-scroll-lines-input");
+
+  // ─── Canvas sync ───────────────────────────────────────────────────────────────
+  function syncCanvasSettingsToForm(appSettings) {
+    if (canvasPromptLinesEl) canvasPromptLinesEl.value = String(appSettings.canvas_prompt_max_lines || 250);
+    if (canvasPromptTokensEl) canvasPromptTokensEl.value = String(appSettings.canvas_prompt_max_tokens || 4000);
+    if (canvasPromptCharsEl) canvasPromptCharsEl.value = String(appSettings.canvas_prompt_max_chars || 20000);
+    if (canvasCodeLineCharsEl) canvasCodeLineCharsEl.value = String(appSettings.canvas_prompt_code_line_max_chars || 180);
+    if (canvasTextLineCharsEl) canvasTextLineCharsEl.value = String(appSettings.canvas_prompt_text_line_max_chars || 100);
+    if (canvasExpandLinesEl) canvasExpandLinesEl.value = String(appSettings.canvas_expand_max_lines || 1600);
+    if (canvasScrollLinesEl) canvasScrollLinesEl.value = String(appSettings.canvas_scroll_window_lines || 200);
+  }
+
+  // ─── Canvas payload helpers ────────────────────────────────────────────────────
+  function readCanvasSettingsPayload() {
+    return {
+      canvas_prompt_max_lines: window.__settingsCore.readNumericSetting(canvasPromptLinesEl, 250, { allowZero: false }),
+      canvas_prompt_max_tokens: window.__settingsCore.readNumericSetting(canvasPromptTokensEl, 4000, { allowZero: false }),
+      canvas_prompt_max_chars: window.__settingsCore.readNumericSetting(canvasPromptCharsEl, 20000, { allowZero: false }),
+      canvas_prompt_code_line_max_chars: window.__settingsCore.readNumericSetting(canvasCodeLineCharsEl, 180, { allowZero: false }),
+      canvas_prompt_text_line_max_chars: window.__settingsCore.readNumericSetting(canvasTextLineCharsEl, 100, { allowZero: false }),
+      canvas_expand_max_lines: window.__settingsCore.readNumericSetting(canvasExpandLinesEl, 1600, { allowZero: false }),
+      canvas_scroll_window_lines: window.__settingsCore.readNumericSetting(canvasScrollLinesEl, 200, { allowZero: false }),
+    };
+  }
+
+  // ─── Export ──────────────────────────────────────────────────────────────────
+  window.__settingsCanvas = {
+    syncCanvasSettingsToForm,
+    readCanvasSettingsPayload,
+  };
+})();
+
+// ── Merged from fetch.js ─────────────────────────────────────────────────────
+(function () {
+  "use strict";
+
+  // ─── DOM refs ────────────────────────────────────────────────────────────────
+  const fetchThresholdEl = document.getElementById("fetch-threshold-input");
+  const fetchAggressivenessEl = document.getElementById("fetch-aggressiveness-input");
+  const fetchSummarizeMaxInputCharsEl = document.getElementById("fetch-summarize-max-input-chars-input");
+  const fetchSummarizeMaxOutputTokensEl = document.getElementById("fetch-summarize-max-output-tokens-input");
+  const fetchRawMaxTextCharsEl = document.getElementById("fetch-raw-max-text-chars-input");
+  const fetchSummaryMaxCharsEl = document.getElementById("fetch-summary-max-chars-input");
+
+  // ─── Fetch settings apply ─────────────────────────────────────────────────────
+  function syncFetchSettingsToForm(appSettings) {
+    if (fetchThresholdEl) fetchThresholdEl.value = String(appSettings.fetch_url_token_threshold || 3500);
+    if (fetchAggressivenessEl) fetchAggressivenessEl.value = String(appSettings.fetch_url_clip_aggressiveness || 50);
+    if (fetchSummarizeMaxInputCharsEl) fetchSummarizeMaxInputCharsEl.value = String(appSettings.fetch_url_summary_max_input_chars || 80000);
+    if (fetchSummarizeMaxOutputTokensEl) fetchSummarizeMaxOutputTokensEl.value = String(appSettings.fetch_url_summary_max_output_tokens || 2400);
+    if (fetchRawMaxTextCharsEl) fetchRawMaxTextCharsEl.value = String(appSettings.fetch_raw_max_text_chars || 24000);
+    if (fetchSummaryMaxCharsEl) fetchSummaryMaxCharsEl.value = String(appSettings.fetch_summary_max_chars || 8000);
+  }
+
+  // ─── Fetch payload helpers ───────────────────────────────────────────────────
+  function readFetchSettingsPayload() {
+    return {
+      fetch_url_token_threshold: window.__settingsCore.readNumericSetting(fetchThresholdEl, 3500, { allowZero: false }),
+      fetch_url_clip_aggressiveness: window.__settingsCore.readNumericSetting(fetchAggressivenessEl, 50),
+      fetch_url_summary_max_input_chars: window.__settingsCore.readNumericSetting(fetchSummarizeMaxInputCharsEl, 80000, { allowZero: false, min: 4000, max: 100000 }),
+      fetch_url_summary_max_output_tokens: window.__settingsCore.readNumericSetting(fetchSummarizeMaxOutputTokensEl, 2400, { allowZero: false, min: 200, max: 4000 }),
+      fetch_raw_max_text_chars: window.__settingsCore.readNumericSetting(fetchRawMaxTextCharsEl, 24000, { allowZero: false, min: 1000 }),
+      fetch_summary_max_chars: window.__settingsCore.readNumericSetting(fetchSummaryMaxCharsEl, 8000, { allowZero: false, min: 500 }),
+    };
+  }
+
+  // ─── Export ──────────────────────────────────────────────────────────────────
+  window.__settingsFetch = {
+    syncFetchSettingsToForm,
+    readFetchSettingsPayload,
+  };
+})();
+
+// ── Merged from tools.js ─────────────────────────────────────────────────────
+(function () {
+  "use strict";
+
+  // ─── DOM refs ────────────────────────────────────────────────────────────────
+  const subAgentToolToggleEls = Array.from(document.querySelectorAll("input[name='sub-agent-allowed-tool']"));
+  const subAgentCanvasAutoSaveEl = document.getElementById("sub-agent-canvas-auto-save-toggle");
+  const subAgentCanvasAutoOpenEl = document.getElementById("sub-agent-canvas-auto-open-toggle");
+
+  // ─── Tool selection ─────────────────────────────────────────────────────────
+  function getSelectedSubAgentTools() {
+    return subAgentToolToggleEls.filter((element) => element.checked).map((element) => element.value);
+  }
+
+  // ─── Apply helpers ───────────────────────────────────────────────────────────
+  function applySelectedSubAgentTools(selected) {
+    const active = new Set(Array.isArray(selected) ? selected : []);
+    subAgentToolToggleEls.forEach((element) => {
+      element.checked = active.has(element.value);
+    });
+  }
+
+  // ─── Tool toggles ref ─────────────────────────────────────────────────────────
+  function getToolToggleEls() {
+    return Array.from(document.querySelectorAll("input[name='parent-tool']"));
+  }
+
+  function getSelectedTools() {
+    return getToolToggleEls().filter((element) => element.checked).map((element) => element.value);
+  }
+
+  function applySelectedTools(selected) {
+    const active = new Set(Array.isArray(selected) ? selected : []);
+    getToolToggleEls().forEach((element) => {
+      element.checked = active.has(element.value);
+    });
+  }
+
+  // ─── Sub-agent canvas automation ────────────────────────────────────────────
+  function syncSubAgentCanvasSettings(appSettings) {
+    if (subAgentCanvasAutoSaveEl) subAgentCanvasAutoSaveEl.checked = Boolean(appSettings.sub_agent_canvas_auto_save ?? true);
+    if (subAgentCanvasAutoOpenEl) subAgentCanvasAutoOpenEl.checked = Boolean(appSettings.sub_agent_canvas_auto_open ?? false);
+  }
+
+  function readSubAgentCanvasPayload() {
+    return {
+      sub_agent_canvas_auto_save: subAgentCanvasAutoSaveEl ? subAgentCanvasAutoSaveEl.checked : true,
+      sub_agent_canvas_auto_open: subAgentCanvasAutoOpenEl ? subAgentCanvasAutoOpenEl.checked : false,
+    };
+  }
+
+  // ─── Overview stats ──────────────────────────────────────────────────────────
+  function syncOverviewStats() {
+    const statToolsEl = document.getElementById("settings-stat-tools");
+    if (statToolsEl) {
+      const toolCount = getSelectedTools().length;
+      statToolsEl.textContent = toolCount === 1 ? "1 enabled" : `${toolCount} enabled`;
+    }
+  }
+
+  // ─── Mark dirty on sub-agent canvas toggle change ────────────────────────────
+  function initDirtyListeners() {
+    [subAgentCanvasAutoSaveEl, subAgentCanvasAutoOpenEl].forEach((el) => {
+      if (el) el.addEventListener("change", () => window.__settingsCore?.markDirty?.());
+    });
+  }
+
+  initDirtyListeners();
+
+  // ─── Export ──────────────────────────────────────────────────────────────────
+  window.__settingsTools = {
+    getSelectedSubAgentTools,
+    applySelectedSubAgentTools,
+    getSelectedTools,
+    applySelectedTools,
+    syncSubAgentCanvasSettings,
+    readSubAgentCanvasPayload,
+    syncOverviewStats,
+  };
+})();
+
+// ── Merged from tabs.js ──────────────────────────────────────────────────────
+(function () {
+  "use strict";
+
+  // ─── DOM refs ────────────────────────────────────────────────────────────────
+  const tabButtons = Array.from(document.querySelectorAll("[data-settings-tab]"));
+  const tabPanels = Array.from(document.querySelectorAll("[data-settings-panel]"));
+
+  // ─── activateTab ─────────────────────────────────────────────────────────────
+  function activateTab(tabId, updateHash = true) {
+    const normalizedTabId = String(tabId || "general");
+    const nextId = (window.__settingsCore?.SETTINGS_TAB_ALIASES || {})[normalizedTabId] || normalizedTabId;
+
+    tabButtons.forEach((button) => {
+      const isActive = button.dataset.settingsTab === nextId;
+      button.classList.toggle("active", isActive);
+      button.setAttribute("aria-selected", String(isActive));
+    });
+
+    tabPanels.forEach((panel) => {
+      const isActive = panel.dataset.settingsPanel === nextId;
+      panel.classList.toggle("active", isActive);
+      panel.toggleAttribute("hidden", !isActive);
+    });
+
+    if (updateHash) {
+      history.replaceState(null, "", `#${nextId}`);
+    }
+  }
+
+  // ─── initializeTabs ─────────────────────────────────────────────────────────
+  function initializeTabs() {
+    tabButtons.forEach((button) => {
+      button.addEventListener("click", () => activateTab(button.dataset.settingsTab));
+    });
+
+    const hash = String(window.location.hash || "").replace(/^#/, "");
+    const resolvedHash = (window.__settingsCore?.SETTINGS_TAB_ALIASES || {})[hash] || hash;
+    const initialTab = tabButtons.some((button) => button.dataset.settingsTab === resolvedHash) ? resolvedHash : "general";
+    activateTab(initialTab, false);
+  }
+
+  // ─── Export ──────────────────────────────────────────────────────────────────
+  window.__settingsTabs = {
+    activateTab,
+    initializeTabs,
+  };
+})();
+
+// ── Merged from init.js ──────────────────────────────────────────────────────
+(function () {
+  "use strict";
+
+  // ─── DOM refs ────────────────────────────────────────────────────────────────
+  const imageProcessingMethodEl = document.getElementById("image-processing-method-select");
+  const openrouterHttpRefererEl = document.getElementById("openrouter-http-referer-input");
+  const openrouterAppTitleEl = document.getElementById("openrouter-app-title-input");
+  const loginSessionTimeoutMinutesEl = document.getElementById("login-session-timeout-minutes-input");
+  const loginMaxFailedAttemptsEl = document.getElementById("login-max-failed-attempts-input");
+  const loginLockoutSecondsEl = document.getElementById("login-lockout-seconds-input");
+  const loginRememberSessionDaysEl = document.getElementById("login-remember-session-days-input");
+  const conversationMemoryEnabledEl = document.getElementById("conversation-memory-enabled-toggle");
+  const conversationTruncationEnabledEl = document.getElementById("conversation-truncation-enabled-toggle");
+  const conversationMaxMessagesEl = document.getElementById("conversation-max-messages-input");
+  const conversationMaxMessageCharsEl = document.getElementById("conversation-max-message-chars-input");
+  const ocrEnabledEl = document.getElementById("ocr-enabled-toggle");
+  const ragEnabledEl = document.getElementById("rag-enabled-toggle");
+  const youtubeTranscriptsEnabledEl = document.getElementById("youtube-transcripts-enabled-toggle");
+  const chatSummaryModelEl = document.getElementById("chat-summary-model-select");
+  const ragChunkSizeEl = document.getElementById("rag-chunk-size-input");
+  const ragChunkOverlapEl = document.getElementById("rag-chunk-overlap-input");
+  const ragMaxChunksPerSourceEl = document.getElementById("rag-max-chunks-per-source-input");
+  const ragSearchTopKEl = document.getElementById("rag-search-top-k-input");
+  const ragSearchMinSimilarityEl = document.getElementById("rag-search-min-similarity-input");
+  const ragQueryExpansionEnabledEl = document.getElementById("rag-query-expansion-enabled-toggle");
+  const ragQueryExpansionMaxVariantsEl = document.getElementById("rag-query-expansion-max-variants-input");
+  const fetchRawMaxTextCharsEl = document.getElementById("fetch-raw-max-text-chars-input");
+  const fetchSummaryMaxCharsEl = document.getElementById("fetch-summary-max-chars-input");
+  const temperatureEl = document.getElementById("temperature-input");
+  const maxStepsEl = document.getElementById("max-steps-input");
+  const maxParallelToolsEl = document.getElementById("max-parallel-tools-input");
+  const searchToolQueryLimitEl = document.getElementById("search-tool-query-limit-input");
+  const clarificationMaxQuestionsEl = document.getElementById("clarification-max-questions-input");
+  const openrouterPromptCacheEnabledEl = document.getElementById("openrouter-prompt-cache-enabled-toggle");
+  const openrouterAnthropicCacheTtlEls = document.querySelectorAll("input[name='openrouter-anthropic-cache-ttl']");
+  const subAgentMaxStepsEl = document.getElementById("sub-agent-max-steps-input");
+  const subAgentTimeoutSecondsEl = document.getElementById("sub-agent-timeout-seconds-input");
+  const subAgentRetryAttemptsEl = document.getElementById("sub-agent-retry-attempts-input");
+  const subAgentRetryDelaySecondsEl = document.getElementById("sub-agent-retry-delay-seconds-input");
+  const subAgentMaxParallelToolsEl = document.getElementById("sub-agent-max-parallel-tools-input");
+  const webCacheTtlHoursEl = document.getElementById("web-cache-ttl-hours-input");
+  const summaryModeEl = document.getElementById("summary-mode-select");
+  const summaryDetailLevelEl = document.getElementById("summary-detail-level-select");
+  const summaryTriggerEl = document.getElementById("summary-trigger-input");
+  const summarySkipFirstEl = document.getElementById("summary-skip-first-input");
+  const summarySkipLastEl = document.getElementById("summary-skip-last-input");
+  const promptPreflightSummaryTokenCountEl = document.getElementById("prompt-preflight-summary-token-count-input");
+  const summarySourceTargetTokensEl = document.getElementById("summary-source-target-tokens-input");
+  const summaryRetryMinSourceTokensEl = document.getElementById("summary-retry-min-source-tokens-input");
+  const promptMaxInputTokensEl = document.getElementById("prompt-max-input-tokens-input");
+  const promptResponseTokenReserveEl = document.getElementById("prompt-response-token-reserve-input");
+  const promptRecentHistoryMaxTokensEl = document.getElementById("prompt-recent-history-max-tokens-input");
+  const promptSummaryMaxTokensEl = document.getElementById("prompt-summary-max-tokens-input");
+  const promptRagMaxTokensEl = document.getElementById("prompt-rag-max-tokens-input");
+  const promptToolTraceMaxTokensEl = document.getElementById("prompt-tool-trace-max-tokens-input");
+  const ragSensitivityEl = document.getElementById("rag-sensitivity-select");
+  const ragContextSizeEl = document.getElementById("rag-context-size-select");
+  const ragAutoInjectEnabledEl = document.getElementById("rag-auto-inject-enabled-toggle");
+  const contextCompactionThresholdEl = document.getElementById("context-compaction-threshold-input");
+  const contextCompactionKeepRecentRoundsEl = document.getElementById("context-compaction-keep-recent-rounds-input");
+  const canvasPromptMaxLinesEl = document.getElementById("canvas-prompt-max-lines-input");
+  const canvasPromptMaxTokensEl = document.getElementById("canvas-prompt-max-tokens-input");
+  const canvasPromptMaxCharsEl = document.getElementById("canvas-prompt-max-chars-input");
+  const reasoningAutoCollapseEl = document.getElementById("reasoning-auto-collapse-toggle");
+  const saveButtons = Array.from(document.querySelectorAll(".settings-save-trigger"));
+
+  // ─── Delegated helpers ───────────────────────────────────────────────────────
+  function getMarkDirty() {
+    return window.__settingsCore?.markDirty ?? (() => {});
+  }
+
+  function getSaveAllSettings() {
+    return window.saveAllSettings ?? (() => {});
+  }
+
+  // ─── Event listeners ─────────────────────────────────────────────────────────
+  function attachEventListeners() {
+    imageProcessingMethodEl?.addEventListener("change", getMarkDirty());
+    openrouterHttpRefererEl?.addEventListener("input", getMarkDirty());
+    openrouterAppTitleEl?.addEventListener("input", getMarkDirty());
+    loginSessionTimeoutMinutesEl?.addEventListener("input", getMarkDirty());
+    loginMaxFailedAttemptsEl?.addEventListener("input", getMarkDirty());
+    loginLockoutSecondsEl?.addEventListener("input", getMarkDirty());
+    loginRememberSessionDaysEl?.addEventListener("input", getMarkDirty());
+    conversationMemoryEnabledEl?.addEventListener("change", getMarkDirty());
+    conversationTruncationEnabledEl?.addEventListener("change", getMarkDirty());
+    conversationMaxMessagesEl?.addEventListener("input", getMarkDirty());
+    conversationMaxMessageCharsEl?.addEventListener("input", getMarkDirty());
+    ocrEnabledEl?.addEventListener("change", getMarkDirty());
+    ragEnabledEl?.addEventListener("change", getMarkDirty());
+    youtubeTranscriptsEnabledEl?.addEventListener("change", getMarkDirty());
+    chatSummaryModelEl?.addEventListener("change", getMarkDirty());
+    ragChunkSizeEl?.addEventListener("input", getMarkDirty());
+    ragChunkOverlapEl?.addEventListener("input", getMarkDirty());
+    ragMaxChunksPerSourceEl?.addEventListener("input", getMarkDirty());
+    ragSearchTopKEl?.addEventListener("input", getMarkDirty());
+    ragSearchMinSimilarityEl?.addEventListener("input", getMarkDirty());
+    ragQueryExpansionEnabledEl?.addEventListener("change", getMarkDirty());
+    ragQueryExpansionMaxVariantsEl?.addEventListener("input", getMarkDirty());
+    fetchRawMaxTextCharsEl?.addEventListener("input", getMarkDirty());
+    fetchSummaryMaxCharsEl?.addEventListener("input", getMarkDirty());
+    temperatureEl?.addEventListener("input", getMarkDirty());
+    maxStepsEl?.addEventListener("input", getMarkDirty());
+    maxParallelToolsEl?.addEventListener("input", getMarkDirty());
+    searchToolQueryLimitEl?.addEventListener("input", getMarkDirty());
+    clarificationMaxQuestionsEl?.addEventListener("input", getMarkDirty());
+    openrouterPromptCacheEnabledEl?.addEventListener("change", getMarkDirty());
+    openrouterAnthropicCacheTtlEls.forEach((el) => el.addEventListener("change", getMarkDirty()));
+    subAgentMaxStepsEl?.addEventListener("input", getMarkDirty());
+    subAgentTimeoutSecondsEl?.addEventListener("input", getMarkDirty());
+    subAgentRetryAttemptsEl?.addEventListener("input", getMarkDirty());
+    subAgentRetryDelaySecondsEl?.addEventListener("input", getMarkDirty());
+    subAgentMaxParallelToolsEl?.addEventListener("input", getMarkDirty());
+    webCacheTtlHoursEl?.addEventListener("input", getMarkDirty());
+    summaryModeEl?.addEventListener("change", getMarkDirty());
+    summaryDetailLevelEl?.addEventListener("change", getMarkDirty());
+    summaryTriggerEl?.addEventListener("input", getMarkDirty());
+    summarySkipFirstEl?.addEventListener("input", getMarkDirty());
+    summarySkipLastEl?.addEventListener("input", getMarkDirty());
+    promptPreflightSummaryTokenCountEl?.addEventListener("input", getMarkDirty());
+    summarySourceTargetTokensEl?.addEventListener("input", getMarkDirty());
+    summaryRetryMinSourceTokensEl?.addEventListener("input", getMarkDirty());
+    promptMaxInputTokensEl?.addEventListener("input", getMarkDirty());
+    promptResponseTokenReserveEl?.addEventListener("input", getMarkDirty());
+    promptRecentHistoryMaxTokensEl?.addEventListener("input", getMarkDirty());
+    promptSummaryMaxTokensEl?.addEventListener("input", getMarkDirty());
+    promptRagMaxTokensEl?.addEventListener("input", getMarkDirty());
+    promptToolTraceMaxTokensEl?.addEventListener("input", getMarkDirty());
+    ragSensitivityEl?.addEventListener("change", getMarkDirty());
+    ragContextSizeEl?.addEventListener("change", getMarkDirty());
+    ragAutoInjectEnabledEl?.addEventListener("change", getMarkDirty());
+    contextCompactionThresholdEl?.addEventListener("input", getMarkDirty());
+    contextCompactionKeepRecentRoundsEl?.addEventListener("input", getMarkDirty());
+    canvasPromptMaxLinesEl?.addEventListener("input", getMarkDirty());
+    canvasPromptMaxTokensEl?.addEventListener("input", getMarkDirty());
+    canvasPromptMaxCharsEl?.addEventListener("input", getMarkDirty());
+    reasoningAutoCollapseEl?.addEventListener("change", getMarkDirty());
+
+    // Pruning controls
+    document.getElementById("pruning-enabled-toggle")?.addEventListener("change", getMarkDirty());
+    document.getElementById("pruning-aggressive-keep-count-input")?.addEventListener("input", getMarkDirty());
+    document.getElementById("pruning-failed-attempts-threshold-input")?.addEventListener("input", getMarkDirty());
+
+    saveButtons.forEach((button) => {
+      button.addEventListener("click", () => void getSaveAllSettings()());
+    });
+  }
+
+  // ─── beforeunload handler ────────────────────────────────────────────────────
+  function attachBeforeUnloadHandler() {
+    window.addEventListener("beforeunload", (event) => {
+      const hasUnsavedSettingsChanges = window.__settingsCore?.hasUnsavedSettingsChanges ?? false;
+      const hasPersonaChanges = window.__personaModule?.hasUnsavedPersonaChanges?.() ?? false;
+      if (!hasUnsavedSettingsChanges && !hasPersonaChanges) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
+  }
+
+  // ─── Keyboard shortcut (Ctrl+S / Cmd+S) ─────────────────────────────────────
+  function attachKeyboardShortcutHandler() {
+    window.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void getSaveAllSettings()();
+      }
+    });
+  }
+
+  // ─── Initialize ─────────────────────────────────────────────────────────────
+  function initialize() {
+    attachEventListeners();
+    attachBeforeUnloadHandler();
+    attachKeyboardShortcutHandler();
+  }
+
+  // ─── Export ──────────────────────────────────────────────────────────────────
+  window.__settingsInit = {
+    initialize,
+    attachEventListeners,
+    attachBeforeUnloadHandler,
+    attachKeyboardShortcutHandler,
+  };
+
+  // Self-initialize
+  initialize();
+})();
+
+// ── Original index.js entry point ─────────────────────────────────────────────
 // Settings entry point — wires all modules together and provides top-level coordination
 (function () {
   "use strict";
