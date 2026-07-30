@@ -175,12 +175,16 @@ class TestAssembleContextPlan:
 class TestBuildFullApiMessages:
     """Converting a ContextPlan into provider-ready messages."""
 
-    def test_appends_tier3_to_last_user(self, migration_fixture_db):
+    def test_appends_tier3_as_distinct_delimited_user_footer(self, migration_fixture_db):
         conn, conv_ids = migration_fixture_db
         plan = assemble_context_plan(conv_ids["plain"], conn=conn)
         msgs = build_full_api_messages(plan)
         assert len(msgs) >= 1
         assert "Status:" in msgs[-1]["content"]
+        assert msgs[-1]["role"] == "user"
+        assert msgs[-1]["content"].startswith("<runtime_context>")
+        assert msgs[-1]["content"].endswith("</runtime_context>")
+        assert "not a new user request" in msgs[-1]["content"]
 
     def test_first_message_is_system(self, migration_fixture_db):
         conn, conv_ids = migration_fixture_db

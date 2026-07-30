@@ -5644,18 +5644,13 @@ def run_agent_stream(
                 request_kwargs["tools"] = turn_tools
                 request_kwargs["tool_choice"] = "auto"
         request_kwargs = apply_chat_parameter_overrides(request_kwargs, request_parameter_overrides)
-        # Inject session-scoped cache key for provider-side prompt caching.
-        # This enables DeepSeek's automatic disk caching (prefix matching) and
-        # OpenRouter's prompt_cache_key mechanism, achieving 70-90% cache hit rates.
-        # The key is stable per conversation: all LLM calls within the same conversation
-        # share the same key, enabling the provider to deduplicate identical prefixes.
-        # apply_model_target_request_options maps the key to the correct provider key
-        # (snake_case prompt_cache_key for OpenRouter, camelCase promptCacheKey for DeepSeek).
-        _cache_key = str(
+        # Keep OpenRouter requests for a conversation on the same provider/model
+        # route. DeepSeek caching remains automatic and prefix-based.
+        _session_id = str(
             (runtime_state.get("agent_context") or {}).get("conversation_id") or trace_id or ""
         )
         request_kwargs = apply_model_target_request_options(
-            request_kwargs, model_target, prompt_cache_key=_cache_key or None,
+            request_kwargs, model_target, session_id=_session_id or None,
         )
 
         cache_estimate_context = build_openrouter_cache_estimate_context(

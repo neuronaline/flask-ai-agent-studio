@@ -445,6 +445,45 @@ class TestOpenRouterModelRegistry:
         assert merged["messages"][0]["content"] == request_kwargs["messages"][0]["content"]
         assert merged["extra_body"] == {"provider": {"sort": "throughput"}}
 
+    def test_apply_model_target_request_options_adds_openrouter_sticky_session_id(self):
+        target = {
+            "record": {
+                "provider": model_registry.OPENROUTER_PROVIDER,
+                "api_model": "openai/gpt-5.2",
+            },
+            "extra_body": {"provider": {"sort": "throughput"}},
+        }
+
+        merged = model_registry.apply_model_target_request_options(
+            {"messages": [{"role": "user", "content": "Hello"}]},
+            target,
+            session_id="conversation-42",
+        )
+
+        assert merged["extra_body"] == {
+            "provider": {"sort": "throughput"},
+            "session_id": "conversation-42",
+        }
+        assert "prompt_cache_key" not in merged["extra_body"]
+        assert "promptCacheKey" not in merged["extra_body"]
+
+    def test_apply_model_target_request_options_does_not_send_cache_key_to_deepseek(self):
+        target = {
+            "record": {
+                "provider": model_registry.DEEPSEEK_PROVIDER,
+                "api_model": "deepseek-v4-pro",
+            },
+        }
+
+        merged = model_registry.apply_model_target_request_options(
+            {"messages": [{"role": "user", "content": "Hello"}]},
+            target,
+            session_id="conversation-42",
+        )
+
+        assert "extra_body" not in merged
+        assert "session_id" not in merged
+
     def test_build_openrouter_cache_estimate_context_supports_implicit_deepseek_caching(self):
         messages = [
             {"role": "system", "content": "Stable instructions."},

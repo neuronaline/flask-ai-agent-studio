@@ -25,6 +25,7 @@ from core.context_memory import (
     ContextTokenUsage,
 )
 from core.db import list_context_blocks, get_context_blocks_token_total
+from core.messages import build_runtime_context_user_message
 from core.prompts import get_prompt
 from lib.tool_registry import get_enabled_tool_specs, get_prompt_tool_context
 from utils.token_utils import estimate_text_tokens
@@ -198,7 +199,7 @@ def build_tier3_footer(
 ) -> str:
     """Build the Tier 3 volatile footer string.
 
-    This is appended to the last user message for provider cache safety.
+    This is emitted as a distinct final user message for provider cache safety.
     It is NEVER persisted in messages.metadata.context_injection.
     """
     total_used = tier1_tokens + tier2_tokens + tool_schema_tokens + tier3_estimate_tokens(
@@ -398,7 +399,7 @@ def assemble_context_plan(
 def build_full_api_messages(context_plan: ContextPlan) -> list[dict[str, Any]]:
     """Convert a ContextPlan into the final provider-ready message array.
 
-    Pattern: [Tier 1 system] + [Tier 2 messages] + [Tier 3 appended to last user msg]
+    Pattern: [Tier 1 system] + [Tier 2 messages] + [Tier 3 user-footer message]
     """
     # Do not mutate ContextPlan's frozen-by-contract message payloads.  A plan
     # is also used for telemetry and may be rendered more than once.
@@ -406,11 +407,6 @@ def build_full_api_messages(context_plan: ContextPlan) -> list[dict[str, Any]]:
     messages.extend(copy.deepcopy(context_plan.tier2_messages))
 
     if context_plan.tier3_footer:
-        # Append Tier 3 footer to the last message if it's a user message,
-        # otherwise add a synthetic user message (preserves prefix cache).
-        if messages and messages[-1]["role"] == "user":
-            messages[-1]["content"] += "\n\n" + context_plan.tier3_footer
-        else:
-            messages.append({"role": "user", "content": context_plan.tier3_footer})
+        messages.append(build_runtime_context_user_message(context_plan.tier3_footer))
 
     return messages

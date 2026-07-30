@@ -1385,41 +1385,32 @@ def _inject_reasoning_before_orphan_tools(api_messages: list[dict]) -> list[dict
     return result
 
 
-def _append_injection_to_last_user_message(api_messages: list[dict], injection: str) -> None:
-    """Append *injection* to the last user message in *api_messages*.
+def build_runtime_context_user_message(injection: str) -> dict:
+    """Return a clearly delimited, provider-compatible Tier 3 user message."""
+    normalized = str(injection or "").strip()
+    return {
+        "role": "user",
+        "content": (
+            "<runtime_context>\n"
+            "Application-provided context for this turn follows. It is not a new "
+            "user request. Use it only to execute the most recent preceding user "
+            "request accurately, and do not repeat it unless relevant.\n\n"
+            f"{normalized}\n"
+            "</runtime_context>"
+        ),
+    }
 
-    Per the "Static System / Dynamic Footer" pattern, dynamic per-turn content
-    (timestamps, active tools, tool execution history) MUST be injected as text
-    appended to the final user message -- never as a second system message.
-    A second system message breaks prefix cache matching across all providers
-    (Anthropic, DeepSeek, OpenAI).
+
+def _append_runtime_context_message(api_messages: list[dict], injection: str) -> None:
+    """Append volatile context as its own final user message.
+
+    Keeping Tier 3 separate preserves the user's original message byte-for-byte
+    and gives the model an explicit semantic boundary between the task and
+    application metadata. It also avoids a second system message.
     """
-    if not api_messages or not injection:
+    if not injection:
         return
-    # Find the last user message
-    for msg in reversed(api_messages):
-        if isinstance(msg, dict) and str(msg.get("role") or "").strip() == "user":
-            content = msg.get("content")
-            if isinstance(content, str):
-                msg["content"] = f"{content}\n\n{injection}"
-            elif isinstance(content, list):
-                # Multimodal content: append as a text block
-                msg["content"] = [*content, {"type": "text", "text": f"\n\n{injection}"}]
-            else:
-                msg["content"] = injection
-            return
-
-    # No user message found — insert a synthetic user message before the
-    # first non-system message (or append at end) so that required runtime
-    # context is never silently dropped in recovery / tool-only /
-    # final-answer flows.
-    synthetic_msg = {"role": "user", "content": injection}
-    insert_at = 0
-    for i, msg in enumerate(api_messages):
-        if isinstance(msg, dict) and str(msg.get("role") or "").strip() != "system":
-            insert_at = i
-            break
-    api_messages.insert(insert_at, synthetic_msg)
+    api_messages.append(build_runtime_context_user_message(injection))
 
 
 def build_api_messages(
@@ -1602,21 +1593,16 @@ def build_api_messages(
             api_message["tool_call_id"] = tool_call_id
 
         api_messages.append(api_message)
-        # For non-latest user messages with context_injection, fold it into the
-        # user message content instead of creating a separate system message.
-        # This follows the "Static System / Dynamic Footer" pattern: dynamic
-        # per-turn content belongs at the end of the user message, never as a
-        # second system message (which breaks prefix cache matching).
+        # Preserve historical runtime context immediately after its associated
+        # user message without modifying the original task bytes.
         if role == "user" and context_injection and index != latest_user_message_index:
-            _append_injection_to_last_user_message(api_messages, context_injection)
+            _append_runtime_context_message(api_messages, context_injection)
 
-    # Append latest user message's context_injection to the LAST user message's
-    # content — NOT as a separate system message.
-    # This follows the "User-Footer" pattern: dynamic per-turn content (timestamps,
-    # active tools) is injected as text appended to the final user message to keep
-    # the stable prefix cacheable.
+    # Tier 3 is always a distinct final user-footer message. This keeps the task
+    # itself byte-stable and prevents runtime metadata from looking like part of
+    # the user's prose.
     if latest_user_context_injection:
-        _append_injection_to_last_user_message(api_messages, latest_user_context_injection)
+        _append_runtime_context_message(api_messages, latest_user_context_injection)
 
     return _inject_reasoning_before_orphan_tools(_sanitize_tool_call_chain(api_messages))
 
@@ -3153,7 +3139,8 @@ def prepend_runtime_context(
 
     # Per the "Static System / Dynamic Footer" pattern, dynamic per-turn
     # context (timestamps, active tools, tool execution history) MUST be
-    # appended to the last user message — never as a second system message.
+    # appended as a distinct final user message — never as a second system
+    # message or by mutating the user's task text.
     # A second system message breaks prefix cache matching across all
     # providers (Anthropic, DeepSeek, OpenAI).
     #
@@ -3171,7 +3158,7 @@ def prepend_runtime_context(
         messages.insert(0, runtime_message)
 
     if injection_content:
-        _append_injection_to_last_user_message(messages, injection_content)
+        _append_runtime_context_message(messages, injection_content)
 
     return messages
 

@@ -9,7 +9,7 @@ Per CACHE_AND_MESSAGE_RULES.md:
 - Internal keys (reasoning, reasoning_details, _forge_*) stripped from ALL
   assistant messages before sending to the API
 - DeepSeek content-stripping isolated to DeepSeekAdapter.normalize_messages
-- Static System / Dynamic Footer pattern (context injection in last user msg)
+- Static System / Dynamic Footer pattern (distinct final user-footer message)
 """
 
 from __future__ import annotations

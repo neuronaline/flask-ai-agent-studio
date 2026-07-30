@@ -1431,20 +1431,21 @@ def apply_model_target_request_options(
     request_kwargs: dict[str, Any],
     target: dict[str, Any] | None,
     *,
-    prompt_cache_key: str | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
-    """Apply model target request options, including prompt caching keys.
+    """Apply model target request options, including cache routing.
 
-    Per How to Build a Cache-Friendly AI Coding Agent doc:
-    - OpenRouter non-Anthropic: sends ``prompt_cache_key`` (snake_case) in extra_body
-    - DeepSeek direct: sends ``promptCacheKey`` (camelCase) in extra_body
-    - Anthropic via OpenRouter: uses ``cache_control`` markers in messages (already handled)
+    OpenRouter accepts a top-level ``session_id`` for provider/model stickiness.
+    The OpenAI SDK transports this extension through ``extra_body`` and merges
+    it into the wire-level request body.
+    DeepSeek prompt caching is automatic and prefix-based, so no undocumented
+    cache-key field is sent to its OpenAI-compatible endpoint.
 
     Args:
         request_kwargs: Base request kwargs.
         target: Model target dict from resolve_model_target().
-        prompt_cache_key: Optional session/conversation cache key. When set and
-            the provider supports session-based caching, it is added to extra_body.
+        session_id: Optional conversation identifier used for OpenRouter sticky
+            routing. It is deliberately omitted for other providers.
 
     Returns:
         Updated request kwargs with caching options applied.
@@ -1467,25 +1468,18 @@ def apply_model_target_request_options(
             existing_extra_body = {}
         merged_request_kwargs["extra_body"] = _merge_nested_dicts(existing_extra_body, extra_body)
 
-    # Add session-based prompt cache key for providers that support it.
-    # This enables the server to associate requests from the same conversation
-    # and serve cached prefixes across consecutive LLM calls within the same turn.
-    if prompt_cache_key:
+    # OpenRouter's documented sticky-routing field is wire-level `session_id`.
+    # The OpenAI SDK carries non-standard top-level fields via `extra_body`.
+    # Do not forward provider-specific guesses through `extra_body`: DeepSeek
+    # caching is automatic and unknown fields can invalidate the request.
+    if session_id:
         provider = str(record.get("provider") or "").strip() if isinstance(record, dict) else ""
-        existing_extra = merged_request_kwargs.get("extra_body")
-        if not isinstance(existing_extra, dict):
-            existing_extra = {}
-        updated_extra = dict(existing_extra)
         if provider == OPENROUTER_PROVIDER:
-            # OpenRouter non-Anthropic: snake_case prompt_cache_key
-            updated_extra.setdefault("prompt_cache_key", prompt_cache_key)
-        elif provider == DEEPSEEK_PROVIDER:
-            # DeepSeek direct: camelCase promptCacheKey for session alignment
-            updated_extra.setdefault("promptCacheKey", prompt_cache_key)
-        else:
-            # Fallback for other OpenAI-compatible providers
-            updated_extra.setdefault("promptCacheKey", prompt_cache_key)
-        if updated_extra != existing_extra:
+            existing_extra = merged_request_kwargs.get("extra_body")
+            if not isinstance(existing_extra, dict):
+                existing_extra = {}
+            updated_extra = dict(existing_extra)
+            updated_extra.setdefault("session_id", str(session_id)[:256])
             merged_request_kwargs["extra_body"] = updated_extra
 
     return merged_request_kwargs
@@ -1509,5 +1503,3 @@ def _get_openrouter_anthropic_ttl(settings: dict[str, Any] | None) -> str:
         return "5m"
     raw_ttl = str(settings.get("openrouter_anthropic_cache_ttl") or "").strip().lower()
     return "1h" if raw_ttl == "1h" else "5m"
-
-
