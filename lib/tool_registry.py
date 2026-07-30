@@ -1100,6 +1100,68 @@ TOOL_SPECS = [
             ),
         },
     },
+    {
+        "name": "list_conversation_images",
+        "description": (
+            "List all images uploaded in the current conversation. "
+            "Returns image ID, filename, source message role, and creation time. "
+            "Use this to discover which images are available before calling analyze_image."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+        "prompt": {
+            "purpose": "Lists all stored images available in this conversation for inspection.",
+            "inputs": {},
+            "guidance": (
+                "Call this first when you need to know what images are available. "
+                "The returned image_ids can be passed to analyze_image. "
+                "Images from deleted messages are automatically excluded."
+            ),
+        },
+    },
+    {
+        "name": "analyze_image",
+        "description": (
+            "Ask the configured vision helper model a focused question about one or more "
+            "conversation images. Provide image IDs (from list_conversation_images) and a "
+            "specific question. The helper model analyzes the images and returns an answer. "
+            "Use this when you need visual details, text from images, or scene understanding "
+            "that requires a vision-capable model."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "image_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Image IDs to analyze. Obtain from list_conversation_images.",
+                    "minItems": 1,
+                    "maxItems": 8,
+                },
+                "question": {
+                    "type": "string",
+                    "description": "Focused question about the images. Be specific.",
+                },
+            },
+            "required": ["image_ids", "question"],
+        },
+        "prompt": {
+            "purpose": "Sends conversation images to a vision model for detailed visual analysis.",
+            "inputs": {
+                "image_ids": "list of image IDs from list_conversation_images",
+                "question": "specific question about the images",
+            },
+            "guidance": (
+                "Use this when you need to understand visual content in uploaded images. "
+                "Always call list_conversation_images first to get valid image IDs. "
+                "Ask a specific, focused question. The vision helper will return a text answer. "
+                "If the helper is unavailable, OCR fallback text may be returned."
+            ),
+        },
+    },
 ]
 
 TOOL_SPEC_BY_NAME = {tool["name"]: tool for tool in TOOL_SPECS}
@@ -1218,6 +1280,16 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "read_only": True,
         "parallel_safe": True,
         "state_domains": ("web",),
+    },
+    "list_conversation_images": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("image",),
+    },
+    "analyze_image": {
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("image",),
     },
 }
 

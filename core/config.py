@@ -181,6 +181,19 @@ CONVERSATION_MEMORY_ENABLED = _parse_bool_env("CONVERSATION_MEMORY_ENABLED", Tru
 OCR_PRELOAD_ON_STARTUP = _parse_bool_env("OCR_PRELOAD", True)
 IMAGE_UPLOADS_ENABLED = OCR_ENABLED or bool(OPENROUTER_API_KEY) or bool(DEEPSEEK_API_KEY)
 OCR_SUPPORTED_PROVIDERS = ["paddleocr"]
+IMAGE_HELPER_MAX_IMAGES_MIN = 1
+IMAGE_HELPER_MAX_IMAGES_MAX = 8
+IMAGE_HELPER_MAX_IMAGES_DEFAULT = 4
+
+
+def coerce_image_helper_max_images(settings: dict | None = None) -> int:
+    source = settings if isinstance(settings, dict) else {}
+    raw = source.get("image_helper_max_images")
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        return IMAGE_HELPER_MAX_IMAGES_DEFAULT
+    return max(IMAGE_HELPER_MAX_IMAGES_MIN, min(val, IMAGE_HELPER_MAX_IMAGES_MAX))
 
 # ── Limits & defaults shared across settings validation ──
 _MAX_STEPS = 1

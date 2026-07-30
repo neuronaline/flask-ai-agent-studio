@@ -11,6 +11,8 @@ from core.config import (
     CLARIFICATION_QUESTION_LIMIT_MIN,
     CONTENT_MAX_CHARS,
     DEFAULT_SETTINGS,
+    IMAGE_HELPER_MAX_IMAGES_MAX,
+    IMAGE_HELPER_MAX_IMAGES_MIN,
     MAX_PARALLEL_TOOLS_MAX,
     MAX_PARALLEL_TOOLS_MIN,
     RAG_CONTEXT_SIZE_PRESETS,
@@ -33,6 +35,7 @@ from core.config import (
     SUB_AGENT_TIMEOUT_SECONDS_MIN,
     WEB_CACHE_TTL_HOURS_MAX,
     WEB_CACHE_TTL_HOURS_MIN,
+    coerce_image_helper_max_images,
     get_feature_flags,
 )
 from core.db import (
@@ -129,6 +132,7 @@ from lib.model_registry import (
     IMAGE_PROCESSING_METHODS,
     MODEL_OPERATION_KEYS,
     canonicalize_model_id,
+    can_model_process_images,
     get_all_models,
     get_custom_model_contract,
     get_default_chat_model_id,
@@ -178,6 +182,8 @@ TOOL_PERMISSION_LABELS = {
     "batch_read_canvas_documents": "Read multiple canvas documents",
     "read_canvas_document": "Read canvas document",
     "delete_canvas_document": "Delete canvas document",
+    "list_conversation_images": "List conversation images",
+    "analyze_image": "Ask vision helper about images",
     "expand_truncated_tool_result": "Expand truncated tool result",
     "purge": "Purge selected context blocks",
     "compact_context": "Compact the conversation context",
@@ -199,6 +205,8 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "batch_read_canvas_documents": "Read multiple canvas documents or ranges in one call.",
     "read_canvas_document": "Read one canvas document or a focused line range.",
     "delete_canvas_document": "Permanently remove a canvas document from the conversation.",
+    "list_conversation_images": "List all images uploaded in the current conversation with metadata.",
+    "analyze_image": "Send conversation images to the configured vision helper model for analysis.",
     "expand_truncated_tool_result": "Retrieve the full uncropped content of a previously executed tool call that was truncated in the conversation history.",
     "purge": "Permanently remove selected visible context blocks and any required tool-call dependencies.",
     "compact_context": "Replace the active conversation ledger with a validated compact state and resume instruction.",
@@ -261,6 +269,8 @@ def _get_tool_permission_section_key(name: str) -> str:
         "ask_clarifying_question",
         "transcribe_youtube_video",
         "search_knowledge_base",
+        "list_conversation_images",
+        "analyze_image",
     }:
         return "assistant"
     if name in {
@@ -402,6 +412,9 @@ def _build_model_section(raw: dict) -> dict:
     configured_active_tools = normalize_active_tool_names(raw.get("active_tools"))
     if raw.get("active_tools") is None:
         configured_active_tools = get_active_tool_names(raw)
+    available_vision_models = [
+        m for m in available_models if m.get("supports_vision")
+    ]
     return {
         "max_steps": int(raw.get("max_steps", DEFAULT_SETTINGS["max_steps"])),
         "max_parallel_tools": get_max_parallel_tools(raw),
@@ -420,6 +433,9 @@ def _build_model_section(raw: dict) -> dict:
             get_operation_model_fallback_preferences(raw)
         ),
         "image_processing_method": normalize_image_processing_method(raw.get("image_processing_method")),
+        "image_helper_model": raw.get("image_helper_model") or "",
+        "image_helper_max_images": coerce_image_helper_max_images(raw),
+        "available_vision_models": available_vision_models,
         "active_tools": configured_active_tools,
     }
 
@@ -742,6 +758,8 @@ def register_page_routes(app) -> None:
         operation_model_preferences_raw = data.get("operation_model_preferences")
         operation_model_fallback_preferences_raw = data.get("operation_model_fallback_preferences")
         image_processing_method_raw = data.get("image_processing_method")
+        image_helper_model_raw = data.get("image_helper_model")
+        image_helper_max_images_raw = data.get("image_helper_max_images")
         active_tools_raw = data.get("active_tools")
         chat_summary_model_raw = data.get("chat_summary_model")
 
@@ -954,6 +972,30 @@ def register_page_routes(app) -> None:
                     {"error": "image_processing_method must be one of multimodal or local_ocr."}
                 ), 400
             settings["image_processing_method"] = normalized_image_processing_method
+
+        if image_helper_model_raw is not None:
+            normalized_helper = str(image_helper_model_raw or "").strip()
+            if normalized_helper:
+                if not can_model_process_images(normalized_helper, settings):
+                    return jsonify(
+                        {"error": "image_helper_model must be a vision-capable model."}
+                    ), 400
+            settings["image_helper_model"] = normalized_helper
+
+        if image_helper_max_images_raw is not None:
+            try:
+                val = int(image_helper_max_images_raw)
+            except (TypeError, ValueError):
+                return jsonify(
+                    {"error": "image_helper_max_images must be an integer."}
+                ), 400
+            if not (IMAGE_HELPER_MAX_IMAGES_MIN <= val <= IMAGE_HELPER_MAX_IMAGES_MAX):
+                return jsonify(
+                    {
+                        "error": f"image_helper_max_images must be between {IMAGE_HELPER_MAX_IMAGES_MIN} and {IMAGE_HELPER_MAX_IMAGES_MAX}."
+                    }
+                ), 400
+            settings["image_helper_max_images"] = str(val)
 
         if active_tools_raw is not None:
             if not isinstance(active_tools_raw, list):
@@ -1799,6 +1841,8 @@ def register_page_routes(app) -> None:
         "fetch_url_token_threshold",
         "general_instructions",
         "image_processing_method",
+        "image_helper_max_images",
+        "image_helper_model",
         "login_lockout_seconds",
         "login_max_failed_attempts",
         "login_remember_session_days",

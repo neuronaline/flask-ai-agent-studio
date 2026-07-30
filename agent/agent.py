@@ -4138,6 +4138,94 @@ def _run_compact_context(tool_args: dict, runtime_state: dict) -> tuple[dict, st
 _TOOL_EXECUTORS["compact_context"] = _run_compact_context
 
 
+def _run_list_conversation_images(tool_args: dict, runtime_state: dict):
+    """List all images in the current conversation."""
+    del tool_args
+    conversation_id, _ = _get_agent_state_mutation_context(runtime_state)
+    if conversation_id is None:
+        return {"error": "Cannot determine conversation context."}, "list_conversation_images: missing conversation context"
+
+    from core.db import list_conversation_image_assets
+
+    try:
+        assets = list_conversation_image_assets(conversation_id)
+    except Exception as exc:
+        return {"error": str(exc)}, f"list_conversation_images: failed — {exc}"
+
+    if not assets:
+        return {"images": [], "count": 0}, "list_conversation_images: no images in this conversation"
+
+    summary_lines = [f"{len(assets)} image(s) found:"]
+    for a in assets:
+        role = a.get("message_role") or "unknown"
+        summary_lines.append(
+            f"  - {a['image_id'][:12]}… | {a['filename']} | from {role} message | {a.get('created_at', '?')}"
+        )
+
+    return {
+        "images": [
+            {
+                "image_id": a["image_id"],
+                "filename": a["filename"],
+                "message_role": a.get("message_role"),
+                "created_at": a.get("created_at"),
+            }
+            for a in assets
+        ],
+        "count": len(assets),
+    }, "\n".join(summary_lines)
+
+
+_TOOL_EXECUTORS["list_conversation_images"] = _run_list_conversation_images
+
+
+def _run_analyze_image(tool_args: dict, runtime_state: dict):
+    """Answer a question about conversation images via the vision helper."""
+    image_ids = tool_args.get("image_ids")
+    question = tool_args.get("question", "")
+
+    if not isinstance(image_ids, list) or len(image_ids) == 0:
+        return {"error": "image_ids must be a non-empty list."}, "analyze_image: missing image_ids"
+    if not isinstance(question, str) or not question.strip():
+        return {"error": "question is required."}, "analyze_image: missing question"
+
+    conversation_id, source_message_id = _get_agent_state_mutation_context(runtime_state)
+    if conversation_id is None:
+        return {"error": "Cannot determine conversation context."}, "analyze_image: missing conversation context"
+
+    from services.image_service import analyze_images_with_vl
+
+    settings = get_app_settings()
+    try:
+        result = analyze_images_with_vl(
+            image_ids,
+            question,
+            conversation_id=conversation_id,
+            settings=settings,
+            source_message_id=source_message_id,
+        )
+    except Exception as exc:
+        return {"error": str(exc)}, f"analyze_image: failed — {exc}"
+
+    answer = result.get("answer", "")
+    fallback = result.get("fallback_ocr", False)
+    tag = " [OCR fallback]" if fallback else ""
+    summary = (
+        f"analyze_image{tag}: {len(result.get('image_ids', []))} image(s), "
+        f"model={result.get('helper_model', 'unknown')}"
+    )
+    return {
+        "answer": answer,
+        "image_ids": result.get("image_ids", []),
+        "helper_model": result.get("helper_model"),
+        "usage": result.get("usage"),
+        "fallback_ocr": fallback,
+    }, summary
+
+
+_TOOL_EXECUTORS["analyze_image"] = _run_analyze_image
+
+
 def _execute_tool(tool_name: str, tool_args: dict, runtime_state: dict | None = None):
     runtime_state = runtime_state if isinstance(runtime_state, dict) else {}
     tool_name = _normalize_tool_name(tool_name)

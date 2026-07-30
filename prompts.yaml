@@ -78,6 +78,8 @@ policies:
     guidance: |
       Ask follow-up questions about a stored prior image. Write questions in
       English. If multiple earlier images could match, clarify which one.
+      Use list_conversation_images to see available images, then
+      analyze_image to ask the vision helper for analysis.
 
 # ---------------------------------------------------------------------------
 # 4. MEMORY — Persona and conversation memory
@@ -191,6 +193,7 @@ agent:
     ask_clarifying_question: "Ensure each question has id and label fields. Check that required questions are included."
     expand_truncated_tool_result: "Verify message_id and tool_call_id both refer to an existing tool result in this conversation."
     analyze_image: "Verify the image_id refers to a stored image in this conversation. If from another conversation, ask the user to re-upload."
+    list_conversation_images: "This tool requires no arguments. It lists all non-deleted images in the conversation."
     generic: "Tool '{tool_name}' failed. Check the arguments, try a different tool for the same goal, or re-read the relevant state first."
 
 # ---------------------------------------------------------------------------
@@ -308,6 +311,16 @@ tools:
     description: "Remove an entry from persona memory."
     purpose: Clean up outdated behavioral rules.
     guidance: "Use when a previously learned pattern no longer applies."
+
+  list_conversation_images:
+    description: "List all images uploaded in the current conversation."
+    purpose: Discover available images before analyzing them.
+    guidance: "Call this first before using analyze_image to find valid image IDs. Returns image ID, filename, source message role, and creation time."
+
+  analyze_image:
+    description: "Ask a vision helper model to analyze one or more conversation images."
+    purpose: Get visual details or text from images via a dedicated vision model.
+    guidance: "Always call list_conversation_images first. Provide specific image IDs and a focused question. The vision model returns a text answer — use it alongside your own reasoning. If the helper is unavailable, OCR fallback may be provided."
 
 # ---------------------------------------------------------------------------
 # 7. FETCH — Web page summarization

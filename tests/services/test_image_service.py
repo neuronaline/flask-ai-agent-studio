@@ -5,10 +5,27 @@ from unittest.mock import patch
 
 import pytest
 
-from services.image_service import analyze_uploaded_image, answer_image_question
+from services.image_service import (
+    analyze_images_with_vl,
+    analyze_uploaded_image,
+    answer_image_question,
+)
 
 
 class TestImageService:
+    def test_analyze_images_rejects_image_not_visible_in_conversation(self):
+        with patch(
+            "services.image_service._resolve_helper_model_id",
+            return_value="openrouter:test-vision",
+        ), patch("core.db.list_conversation_image_assets", return_value=[]):
+            with pytest.raises(ValueError, match="not available in this conversation"):
+                analyze_images_with_vl(
+                    ["deleted-image-id"],
+                    "What is in this image?",
+                    conversation_id=9,
+                    settings={"image_helper_max_images": 4},
+                )
+
     def test_analyze_uploaded_image_preserves_provider_failures(self):
         with patch("services.image_service.get_runtime_setting", return_value=True), patch(
             "services.image_service._resolve_processing_plan",
@@ -104,8 +121,5 @@ class TestImageService:
         assert logged_kwargs["params"]["source_message_id"] == 15
         assert logged_kwargs["params"]["operation"] == "image_question"
         assert "messages" in logged_kwargs["params"]["request_payload"]
-        assert (
-            str(logged_kwargs["params"]["request_payload"]["messages"][0]["content"][1]["image_url"]["url"]).startswith(
-                "data:image/png;base64,"
-            )
-        )
+        image_url = logged_kwargs["params"]["request_payload"]["messages"][0]["content"][1]["image_url"]["url"]
+        assert image_url.endswith(";base64,<stripped>"), f"Expected sanitized URL, got: {image_url}"

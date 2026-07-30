@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import base64
 
-from core.config import IMAGE_UPLOADS_DISABLED_FEATURE_ERROR, get_runtime_setting
+from core.config import (
+    IMAGE_UPLOADS_DISABLED_FEATURE_ERROR,
+    coerce_image_helper_max_images,
+    get_runtime_setting,
+)
 from core.prompts import get_prompt
 from utils.image_utils import (
     build_image_analysis_prompt,
@@ -119,7 +123,7 @@ def _run_helper_llm_image_analysis(
                 "api_model": str(target.get("api_model") or ""),
                 "operation": "image_analysis",
                 "call_type": "image_analysis",
-                "request_payload": request_kwargs,
+                "request_payload": _sanitize_request_payload_for_activity(request_kwargs),
                 "response_status": STATUS_ERROR,
                 "error_type": type(_exc).__name__,
                 "error_message": str(_exc),
@@ -134,7 +138,7 @@ def _run_helper_llm_image_analysis(
         "api_model": str(target.get("api_model") or ""),
         "operation": "image_analysis",
         "call_type": "image_analysis",
-        "request_payload": request_kwargs,
+        "request_payload": _sanitize_request_payload_for_activity(request_kwargs),
         "response_status": STATUS_OK,
         "latency_ms": _timer.elapsed_ms,
         "source_message_id": source_message_id,
@@ -292,7 +296,7 @@ def answer_image_question(
                 "api_model": str(target.get("api_model") or ""),
                 "operation": "image_question",
                 "call_type": "image_question",
-                "request_payload": request_kwargs,
+                "request_payload": _sanitize_request_payload_for_activity(request_kwargs),
                 "response_status": STATUS_ERROR,
                 "error_type": type(_exc).__name__,
                 "error_message": str(_exc),
@@ -307,7 +311,7 @@ def answer_image_question(
         "api_model": str(target.get("api_model") or ""),
         "operation": "image_question",
         "call_type": "image_question",
-        "request_payload": request_kwargs,
+        "request_payload": _sanitize_request_payload_for_activity(request_kwargs),
         "response_status": STATUS_OK,
         "latency_ms": _timer.elapsed_ms,
         "source_message_id": source_message_id,
@@ -325,3 +329,227 @@ def answer_image_question(
     if not answer:
         raise RuntimeError("Image follow-up model returned an empty answer.")
     return answer
+
+
+def _sanitize_request_payload_for_activity(request_kwargs: dict) -> dict:
+    """Return a copy of request_kwargs safe for activity logging.
+
+    Strips base64 data URLs from image_url content blocks to prevent
+    raw image bytes from leaking into the activity/invocation log.
+    """
+    import copy
+
+    safe = copy.deepcopy(request_kwargs)
+    messages = safe.get("messages")
+    if not isinstance(messages, list):
+        return safe
+    for msg in messages:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            image_url = block.get("image_url") if isinstance(block.get("image_url"), dict) else None
+            if image_url and isinstance(image_url.get("url"), str):
+                url_val = image_url["url"]
+                if url_val.startswith("data:"):
+                    mime_prefix = url_val.split(";")[0] if ";" in url_val else url_val.split(",")[0]
+                    image_url["url"] = f"{mime_prefix};base64,<stripped>"
+    return safe
+
+
+def analyze_images_with_vl(
+    image_ids: list[str],
+    question: str,
+    *,
+    conversation_id: int,
+    settings: dict | None = None,
+    source_message_id: int | None = None,
+) -> dict:
+    """Answer a question about one or more conversation-scoped images.
+
+    Sends the question and up to ``image_helper_max_images`` images to the
+    configured vision-language helper model. On VL failure, falls back to
+    local OCR when available.
+
+    Returns a dict with keys: ``answer``, ``image_ids``, ``helper_model``,
+    ``usage``, ``fallback_ocr``, ``fallback_details``.
+    """
+    from core.db import (
+        get_image_asset,
+        list_conversation_image_assets,
+        read_image_asset_bytes,
+    )
+
+    normalized_question = str(question or "").strip()
+    if not normalized_question:
+        raise ValueError("question is required.")
+
+    max_images = coerce_image_helper_max_images(settings)
+    if len(image_ids) > max_images:
+        raise ValueError(
+            f"Too many images: {len(image_ids)} requested, max {max_images} allowed."
+        )
+
+    helper_model_id = _resolve_helper_model_id(settings)
+    if not helper_model_id:
+        raise RuntimeError("No vision-capable helper model is configured. Set one in Settings > Image processing.")
+
+    # Resolve all images — they must belong to this conversation and remain
+    # visible.  In particular, do not allow a remembered ID to revive an image
+    # from a deleted message.
+    visible_image_ids = {
+        asset["image_id"] for asset in list_conversation_image_assets(conversation_id)
+    }
+    assets: list[dict] = []
+    for img_id in image_ids:
+        normalized_id = str(img_id or "").strip()
+        if not normalized_id:
+            raise ValueError("Invalid empty image_id.")
+        if normalized_id not in visible_image_ids:
+            raise ValueError(f"Image '{normalized_id}' is not available in this conversation.")
+        asset = get_image_asset(normalized_id, conversation_id=conversation_id)
+        if not asset:
+            raise ValueError(f"Image '{normalized_id}' not found in this conversation.")
+        assets.append(asset)
+
+    # Build multimodal request with all images
+    image_urls: list[str] = []
+    for asset in assets:
+        _, img_bytes = read_image_asset_bytes(asset["image_id"], conversation_id=conversation_id)
+        if img_bytes is None:
+            raise RuntimeError(f"Image '{asset['image_id']}' file is missing from disk.")
+        optimized_bytes, optimized_mime = optimize_image_for_processing(
+            img_bytes, asset.get("mime_type", "image/png"), purpose="vision"
+        )
+        image_b64 = base64.b64encode(optimized_bytes).decode("utf-8")
+        image_urls.append(f"data:{optimized_mime};base64,{image_b64}")
+
+    content_blocks: list[dict] = [{"type": "text", "text": normalized_question}]
+    for url in image_urls:
+        content_blocks.append({"type": "image_url", "image_url": {"url": url}})
+
+    target = resolve_model_target(helper_model_id, settings)
+    request_kwargs = {
+        "model": target["api_model"],
+        "messages": [{"role": "user", "content": content_blocks}],
+        "temperature": 0.2,
+    }
+    request_kwargs = apply_model_target_request_options(request_kwargs, target)
+
+    from services.activity_service import (
+        ActivityTimer,
+        STATUS_ERROR,
+        STATUS_OK,
+        extract_usage_from_response,
+        log_activity_call,
+    )
+    _timer = ActivityTimer()
+
+    # --- VL attempt ---
+    try:
+        with _timer:
+            response = target["client"].chat.completions.create(**request_kwargs)
+    except Exception as _exc:
+        log_activity_call(
+            conversation_id=max(0, int(conversation_id)),
+            params={
+                "provider": str((target.get("record") or {}).get("provider") or ""),
+                "api_model": str(target.get("api_model") or ""),
+                "operation": "analyze_images",
+                "call_type": "analyze_images",
+                "request_payload": _sanitize_request_payload_for_activity(request_kwargs),
+                "response_status": STATUS_ERROR,
+                "error_type": type(_exc).__name__,
+                "error_message": str(_exc),
+                "latency_ms": _timer.elapsed_ms,
+                "source_message_id": source_message_id,
+            },
+        )
+        # Fall back to OCR
+        if not get_runtime_setting("OCR_ENABLED"):
+            raise RuntimeError(
+                f"Vision helper model failed ({type(_exc).__name__}) and OCR is disabled."
+            ) from _exc
+        return _fallback_ocr_for_images(assets, normalized_question, conversation_id, source_message_id,
+                                        vl_error=str(_exc), vl_latency_ms=_timer.elapsed_ms)
+
+    _usage = extract_usage_from_response(response)
+    log_activity_call(
+        conversation_id=max(0, int(conversation_id)),
+        params={
+            "provider": str((target.get("record") or {}).get("provider") or ""),
+            "api_model": str(target.get("api_model") or ""),
+            "operation": "analyze_images",
+            "call_type": "analyze_images",
+            "request_payload": _sanitize_request_payload_for_activity(request_kwargs),
+            "response_status": STATUS_OK,
+            "latency_ms": _timer.elapsed_ms,
+            "source_message_id": source_message_id,
+            **(_usage or {}),
+        },
+    )
+
+    choice = response.choices[0] if getattr(response, "choices", None) else None
+    message = getattr(choice, "message", None) if choice else None
+    answer = normalize_freeform_answer_text(
+        extract_text_from_response_content(getattr(message, "content", "")).strip()
+    )
+    if not answer:
+        answer = "(The vision model returned an empty response.)"
+
+    return {
+        "answer": answer,
+        "image_ids": [a["image_id"] for a in assets],
+        "helper_model": helper_model_id,
+        "usage": _usage or {},
+        "fallback_ocr": False,
+        "fallback_details": None,
+    }
+
+
+def _fallback_ocr_for_images(
+    assets: list[dict],
+    question: str,
+    conversation_id: int,
+    source_message_id: int | None,
+    vl_error: str = "",
+    vl_latency_ms: int = 0,
+) -> dict:
+    """Run OCR on each image and return a degraded result."""
+    from core.db import read_image_asset_bytes
+
+    ocr_results: list[dict] = []
+    for asset in assets:
+        _, img_bytes = read_image_asset_bytes(asset["image_id"], conversation_id=conversation_id)
+        if img_bytes is None:
+            ocr_results.append({"image_id": asset["image_id"], "error": "image file missing"})
+            continue
+        try:
+            ocr_text = extract_image_text(img_bytes, asset.get("mime_type", "image/png"))
+            ocr_results.append({"image_id": asset["image_id"], "ocr_text": ocr_text})
+        except Exception as _exc:
+            ocr_results.append({"image_id": asset["image_id"], "error": str(_exc)})
+
+    combined_ocr = "\n\n".join(
+        f"--- Image {r['image_id'][:8]} ---\n{r.get('ocr_text') or r.get('error', 'OCR failed')}"
+        for r in ocr_results
+    )
+    answer = (
+        f"[OCR fallback — VL model unavailable: {vl_error}]\n\n"
+        f"Question: {question}\n\n"
+        f"Extracted text:\n{combined_ocr}"
+    )
+    return {
+        "answer": answer,
+        "image_ids": [a["image_id"] for a in assets],
+        "helper_model": "ocr_fallback",
+        "usage": {},
+        "fallback_ocr": True,
+        "fallback_details": {
+            "vl_error": vl_error,
+            "vl_latency_ms": vl_latency_ms,
+            "ocr_results": ocr_results,
+        },
+    }

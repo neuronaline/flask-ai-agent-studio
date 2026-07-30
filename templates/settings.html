@@ -138,6 +138,28 @@
                   </section>
                 </div>
               </div>
+
+              <div class="settings-page-section-card">
+                <div class="settings-page-section-card__header">
+                  <div>
+                    <span class="settings-section-kicker">Vision helper</span>
+                    <h3>On-demand image analysis</h3>
+                  </div>
+                  <p>When using a text-only chat model, the assistant can ask a separate vision model to inspect images. Configure the helper model and how many images it may analyze per request.</p>
+                </div>
+                <div class="settings-subsection-grid settings-subsection-grid--two">
+                  <section class="settings-subsection">
+                    <label class="settings-label" for="image-helper-model-select">Vision helper model</label>
+                    <select id="image-helper-model-select">
+                      <option value="">None (disabled)</option>
+                    </select>
+                  </section>
+                  <section class="settings-subsection">
+                    <label class="settings-label" for="image-helper-max-images-input">Max images per request (1–8)</label>
+                    <input type="number" class="settings-number" id="image-helper-max-images-input" min="1" max="8" value="4" />
+                  </section>
+                </div>
+              </div>
             </div>
           </div>
         </section>

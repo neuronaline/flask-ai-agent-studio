@@ -170,6 +170,7 @@ from lib.model_registry import (
     can_model_process_images,
     DEFAULT_CHAT_MODEL,
     get_default_chat_model_id,
+    get_image_helper_model_id,
     get_model_record,
     get_operation_model,
     model_prefers_cache_friendly_prefix,
@@ -4590,20 +4591,43 @@ def chat():
 
         try:
             processing_stage = "image"
+            normalized_processing_method = normalize_image_processing_method(settings.get("image_processing_method"))
+            primary_is_vision = can_model_process_images(model, settings)
+            helper_configured = bool(get_image_helper_model_id(settings))
+
             for uploaded_file in uploaded_images:
                 image_name, image_mime_type, image_bytes = read_uploaded_image(uploaded_file)
                 created_image_asset = create_image_asset(conv_id, image_name, image_mime_type, image_bytes)
                 created_image_assets.append(created_image_asset)
-                vision_analysis = analyze_uploaded_image(
-                    image_bytes,
-                    image_mime_type,
-                    user_text=latest_user_message["content"],
-                    model_id=model,
-                    settings=settings,
-                    processing_method=normalize_image_processing_method(settings.get("image_processing_method")),
-                    conversation_id=conv_id,
-                    source_message_id=int(latest_user_message.get("id") or 0) or None,
+
+                # In VL mode with a text-only primary and a configured helper,
+                # defer analysis — the agent can call analyze_image later.
+                # Otherwise, run the normal analysis path (direct vision or OCR).
+                skip_analysis = (
+                    normalized_processing_method == "multimodal"
+                    and not primary_is_vision
+                    and helper_configured
                 )
+
+                if skip_analysis:
+                    vision_analysis = {
+                        "analysis_method": "deferred",
+                        "assistant_guidance": (
+                            "Image analysis deferred. Use list_conversation_images and "
+                            "analyze_image to inspect this image on demand."
+                        ),
+                    }
+                else:
+                    vision_analysis = analyze_uploaded_image(
+                        image_bytes,
+                        image_mime_type,
+                        user_text=latest_user_message["content"],
+                        model_id=model,
+                        settings=settings,
+                        processing_method=normalized_processing_method,
+                        conversation_id=conv_id,
+                        source_message_id=int(latest_user_message.get("id") or 0) or None,
+                    )
                 attachment = {
                     "kind": "image",
                     "image_id": created_image_asset["image_id"],
@@ -4782,6 +4806,11 @@ def chat():
         active_tool_names = override_names if override_names is not None else get_active_tool_names(settings)
     else:
         active_tool_names = get_active_tool_names(settings)
+
+    # Remove image analysis tools when no vision helper model is configured
+    image_tool_names = {"list_conversation_images", "analyze_image"}
+    if not get_image_helper_model_id(settings):
+        active_tool_names = [n for n in active_tool_names if n not in image_tool_names]
     is_first_turn = False
     if conv_id is not None:
         try:

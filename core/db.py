@@ -3132,6 +3132,40 @@ def get_image_asset(image_id: str, conversation_id: int | None = None) -> dict |
     return image_asset_row_to_dict(row)
 
 
+def list_conversation_image_assets(conversation_id: int) -> list[dict]:
+    """Return all non-deleted image assets for a conversation.
+
+    Only returns images whose linked message is not deleted (deleted_at IS NULL).
+    Images without a message_id are included (uploaded but not yet attached).
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT ia.image_id, ia.conversation_id, ia.message_id, ia.filename,
+                      ia.mime_type, ia.initial_analysis, ia.created_at,
+                      m.role as message_role
+               FROM image_assets ia
+               LEFT JOIN messages m ON m.id = ia.message_id AND m.deleted_at IS NULL
+               WHERE ia.conversation_id = ?
+                 AND (ia.message_id IS NULL OR m.id IS NOT NULL)
+               ORDER BY ia.created_at ASC, ia.image_id ASC""",
+            (conversation_id,),
+        ).fetchall()
+    return [_image_asset_list_row_to_dict(row) for row in rows]
+
+
+def _image_asset_list_row_to_dict(row) -> dict:
+    return {
+        "image_id": row["image_id"],
+        "conversation_id": row["conversation_id"],
+        "message_id": row["message_id"],
+        "filename": row["filename"],
+        "mime_type": row["mime_type"],
+        "initial_analysis": _normalize_initial_image_analysis(row["initial_analysis"]),
+        "created_at": row["created_at"],
+        "message_role": row["message_role"],
+    }
+
+
 def get_latest_conversation_image_asset(conversation_id: int) -> dict | None:
     with get_db() as conn:
         row = conn.execute(

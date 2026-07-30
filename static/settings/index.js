@@ -254,6 +254,8 @@
 
   // ─── DOM refs ────────────────────────────────────────────────────────────────
   const imageProcessingMethodEl = document.getElementById("image-processing-method-select");
+  const imageHelperModelEl = document.getElementById("image-helper-model-select");
+  const imageHelperMaxImagesEl = document.getElementById("image-helper-max-images-input");
   const openrouterHttpRefererEl = document.getElementById("openrouter-http-referer-input");
   const openrouterAppTitleEl = document.getElementById("openrouter-app-title-input");
   const loginSessionTimeoutMinutesEl = document.getElementById("login-session-timeout-minutes-input");
@@ -505,6 +507,8 @@
   const promptRagMaxTokensEl = document.getElementById("prompt-rag-max-tokens-input");
   const promptToolTraceMaxTokensEl = document.getElementById("prompt-tool-trace-max-tokens-input");
   const imageProcessingMethodEl = document.getElementById("image-processing-method-select");
+  const imageHelperModelEl = document.getElementById("image-helper-model-select");
+  const imageHelperMaxImagesEl = document.getElementById("image-helper-max-images-input");
   const ragInjectOptionsEl = document.getElementById("rag-inject-options");
   const ragSensitivityEl = document.getElementById("rag-sensitivity-select");
   const ragContextSizeEl = document.getElementById("rag-context-size-select");
@@ -651,6 +655,19 @@
 
     if (imageProcessingMethodEl) imageProcessingMethodEl.value = appSettings.image_processing_method || "multimodal";
 
+    if (imageHelperModelEl) {
+      const visionModels = appSettings.available_vision_models || [];
+      imageHelperModelEl.innerHTML = '<option value="">None (disabled)</option>';
+      visionModels.forEach(function (m) {
+        var opt = document.createElement("option");
+        opt.value = m.id || "";
+        opt.textContent = (m.display_name || m.id || "") + (m.provider ? " (" + m.provider + ")" : "");
+        if (m.id === appSettings.image_helper_model) opt.selected = true;
+        imageHelperModelEl.appendChild(opt);
+      });
+    }
+    if (imageHelperMaxImagesEl) imageHelperMaxImagesEl.value = appSettings.image_helper_max_images || 4;
+
     // Models panel — delegates to __customModelsModule + __settingsModels (sub_agent)
     window.__settingsModels?.initializeOperationFallbackDraftRows?.(appSettings.operation_model_fallback_preferences || {});
     window.__settingsModels?.renderModelManagementPanels?.({
@@ -755,6 +772,9 @@
     appSettings.operation_model_preferences = data.operation_model_preferences && typeof data.operation_model_preferences === "object" ? data.operation_model_preferences : {};
     appSettings.operation_model_fallback_preferences = data.operation_model_fallback_preferences && typeof data.operation_model_fallback_preferences === "object" ? data.operation_model_fallback_preferences : {};
     appSettings.image_processing_method = data.image_processing_method || "multimodal";
+    appSettings.image_helper_model = data.image_helper_model || "";
+    appSettings.image_helper_max_images = data.image_helper_max_images || 4;
+    appSettings.available_vision_models = Array.isArray(data.available_vision_models) ? data.available_vision_models : [];
     appSettings.conversation_memory_enabled = Boolean(data.conversation_memory_enabled);
     appSettings.conversation_truncation_enabled = Boolean(data.conversation_truncation_enabled ?? true);
     appSettings.conversation_max_messages = data.conversation_max_messages ?? 20;
@@ -916,6 +936,8 @@
       operation_model_preferences: window.__customModelsModule?.getOperationModelPreferencesDraft?.() ?? {},
       operation_model_fallback_preferences: window.__settingsModels?.getOperationModelFallbackPreferencesDraft?.() ?? {},
       image_processing_method: imageProcessingMethodEl?.value || "multimodal",
+      image_helper_model: imageHelperModelEl?.value || "",
+      image_helper_max_images: readNumericSetting(imageHelperMaxImagesEl, 4, { allowZero: false, min: 1, max: 8 }),
       // Tools / RAG
       active_tools: window.__settingsTools?.getSelectedTools?.() ?? [],
       sub_agent_allowed_tool_names: window.__settingsTools?.getSelectedSubAgentTools?.() ?? [],
