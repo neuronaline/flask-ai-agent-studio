@@ -182,7 +182,10 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
   try {
     const response = await fetch(`/api/conversations/${chatState.currentConvId}/summarize`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": window.__csrfToken,
+      },
       body: JSON.stringify(requestBody),
     });
     const data = await response.json();
@@ -225,6 +228,60 @@ async function runConversationSummary({ triggerButton = null, closePanel = false
       if (closePanel && typeof triggerButton.focus === "function") {
         triggerButton.focus();
       }
+    }
+  }
+}
+
+async function compactConversationContext({ triggerButton = null } = {}) {
+  if (!chatState.currentConvId) {
+    showToast("No active conversation to compact.", "warning");
+    return;
+  }
+
+  const resumeInstruction = window.prompt(
+    "This permanently replaces the conversation history with a compact state summary. What should the assistant continue working on?"
+  );
+  if (resumeInstruction === null) {
+    return;
+  }
+  const normalizedInstruction = String(resumeInstruction).trim();
+  if (!normalizedInstruction) {
+    showToast("A resume instruction is required to compact the context.", "warning");
+    return;
+  }
+  if (!window.confirm("Compact the full conversation now? This cannot be undone.")) {
+    return;
+  }
+
+  const originalButtonText = triggerButton ? triggerButton.textContent : "";
+  setSummaryBusyState(true);
+  startSummaryProgress("Compacting full context…");
+  if (triggerButton) {
+    triggerButton.textContent = "Compacting…";
+  }
+
+  try {
+    const response = await fetch(`/api/conversations/${chatState.currentConvId}/compact-context`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resume_instruction: normalizedInstruction }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to compact the context.");
+    }
+
+    await openConversation(chatState.currentConvId);
+    finishSummaryProgress("Context compacted.");
+    showToast("Conversation context was compacted.", "success");
+    closeSummaryPanel();
+  } catch (error) {
+    failSummaryProgress(error.message || "Failed to compact the context.");
+    showToast(error.message || "Failed to compact the context.", "error");
+  } finally {
+    setSummaryBusyState(false);
+    if (triggerButton) {
+      triggerButton.textContent = originalButtonText || "Compact full context";
     }
   }
 }

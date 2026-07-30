@@ -2607,7 +2607,6 @@ def _build_runtime_volatile_parts(
     runtime_budget_stats: dict | None = None,
     double_check: bool = False,
     double_check_query: str = "",
-    context_node_stats: dict | None = None,
     scratchpad: str = "",
     scratchpad_sections: dict[str, str] | list[tuple[str, str]] | None = None,
     persona_memory: str = "",
@@ -2615,44 +2614,10 @@ def _build_runtime_volatile_parts(
 ):
     parts: list[str] = []
 
-    # Dynamic Status Line (per AI Memory and Context Management doc Section 6.1)
-    # Injected at the start of volatile context so the AI can self-regulate.
-    if context_node_stats and isinstance(context_node_stats, dict):
-        active_tokens = int(context_node_stats.get("active_tokens", 0))
-        model_limit = int(context_node_stats.get("model_limit", 128_000))
-        usage_pct = (active_tokens / model_limit * 100) if model_limit > 0 else 0.0
-        buffer_free = max(0, model_limit - active_tokens)
-
-        # Extended status: nodes + VFS (Section 6.1 format)
-        active_nodes = int(context_node_stats.get("active_nodes", 0))
-        tombstoned_nodes = int(context_node_stats.get("tombstoned_nodes", 0))
-        vfs_stats = context_node_stats.get("vfs_stats") or {}
-
-        status_line = (
-            f"**Status:** Context: {active_tokens:,} / {model_limit:,} "
-            f"({usage_pct:.1f}%) | Buffer: {buffer_free:,}"
-        )
-        if active_nodes > 0 or tombstoned_nodes > 0:
-            status_line += f" | Nodes: {active_nodes} active"
-            if tombstoned_nodes > 0:
-                status_line += f", {tombstoned_nodes} tombstoned"
-        if vfs_stats.get("file_count", 0) > 0:
-            status_line += (
-                f" | VFS: {vfs_stats.get('file_count', 0)} files, "
-                f"{vfs_stats.get('total_tokens', 0):,} tokens"
-            )
-            if vfs_stats.get("dirty_count", 0) > 0:
-                status_line += f", {vfs_stats.get('dirty_count')} dirty"
-        parts.append(f"## Token Usage Status\n{status_line}\n")
-
-        if usage_pct > 90:
-            parts.append(
-                "⚠️ **WARNING**: Token usage exceeds 90%! Consider purging or compressing context nodes to free capacity.\n"
-            )
-        elif usage_pct > 70:
-            parts.append(
-                "💡 **NOTE**: Token usage exceeds 70%. Monitor memory pressure and archive irrelevant nodes if needed.\n"
-            )
+    # Dynamic Status Line (per AI Memory and Context Management doc)
+    # Note: Tier-aware telemetry is now emitted via SSE context_status events
+    # and the Tier 3 footer in services/context_assembly.py.
+    # This legacy path preserves the status line stub for backward compatibility.
 
     parts.append(get_prompt("scratchpad.header", "## Scratchpad (AI Persistent Memory)"))
     scratchpad_intro = get_prompt("scratchpad.intro", "")
@@ -2862,7 +2827,6 @@ def build_runtime_context_injection(
     include_dynamic_context: bool = False,
     double_check: bool = False,
     double_check_query: str = "",
-    context_node_stats: dict | None = None,
 ) -> str:
     normalized_now = (now or datetime.now().astimezone()).astimezone()
     resolved_tool_names = _normalize_tool_name_list(runtime_tool_names)
@@ -2913,7 +2877,6 @@ def build_runtime_context_injection(
             include_time_context=include_time_context,
             previous_canvas_content_hash=previous_canvas_content_hash,
             runtime_budget_stats=runtime_budget_stats,
-            context_node_stats=context_node_stats,
         )
     )
     return _finalize_prompt_text(parts)
@@ -2955,7 +2918,6 @@ def build_runtime_system_message(
     runtime_budget_stats: dict | None = None,
     double_check: bool = False,
     double_check_query: str = "",
-    context_node_stats: dict | None = None,
 ):
     now = (now or datetime.now().astimezone()).astimezone()
     configured_tool_names = _normalize_tool_name_list(active_tool_names)
@@ -3031,7 +2993,6 @@ def build_runtime_system_message(
                 include_time_context=include_time_context,
                 previous_canvas_content_hash=previous_canvas_content_hash,
                 runtime_budget_stats=runtime_budget_stats,
-                context_node_stats=context_node_stats,
             )
         )
     elif include_time_context:
@@ -3078,7 +3039,6 @@ def prepend_runtime_context(
     runtime_budget_stats: dict | None = None,
     double_check: bool = False,
     double_check_query: str = "",
-    context_node_stats: dict | None = None,
 ):
     normalized_now = (now or datetime.now().astimezone()).astimezone()
     resolved_runtime_tool_names = _normalize_tool_name_list(runtime_tool_names)
@@ -3141,7 +3101,6 @@ def prepend_runtime_context(
             runtime_tool_names=resolved_runtime_tool_names,
             canvas_payload=canvas_payload,
             now=normalized_now,
-            context_node_stats=context_node_stats,
         )
 
     normalized_summary_count = summary_count if summary_count is not None else _count_summary_messages(messages)

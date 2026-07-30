@@ -907,6 +907,174 @@ TOOL_SPECS = [
             ),
         },
     },
+    {
+        "name": "purge",
+        "description": (
+            "Permanently remove selected conversation blocks by their public IDs. "
+            "Tool calls and their results form atomic groups — removing one "
+            "automatically includes its partner. Purged blocks cannot be recovered "
+            "through the application. Use this to free context space by removing "
+            "completed, irrelevant, or erroneous conversation sections. "
+            "Always review the dependency closure in the result to confirm which "
+            "blocks were actually removed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Public IDs of blocks to remove (e.g., msg_104, tool_call_105_1, "
+                        "tool_res_106). At least one ID is required. Unknown or invalid "
+                        "IDs fail the entire call."
+                    ),
+                    "minItems": 1,
+                },
+                "summary": {
+                    "type": "string",
+                    "description": (
+                        "Optional dense summary of key facts retained from the purged "
+                        "blocks. This is appended as a new context block so essential "
+                        "information is not lost."
+                    ),
+                },
+            },
+            "required": ["ids"],
+            "additionalProperties": False,
+        },
+        "prompt": {
+            "purpose": "Permanently removes selected conversation blocks to free context space.",
+            "inputs": {
+                "ids": "list of public IDs to purge (e.g. msg_104, tool_call_105_1, tool_res_106)",
+                "summary": "optional retained-facts summary to preserve critical context",
+            },
+            "guidance": (
+                "Use purge to remove completed tasks, irrelevant tool results, "
+                "or erroneous exchanges. Always check the dependency closure in "
+                "the result — removing a tool call also removes its results, and "
+                "vice versa. Provide a summary when the purged blocks contain "
+                "facts worth keeping. Do not purge blocks that are still needed "
+                "for the current task."
+            ),
+        },
+    },
+    {
+        "name": "compact_context",
+        "description": (
+            "Reset the conversation context to a dense, structured state summary. "
+            "This is a complete context reset: all conversation history is removed "
+            "and replaced with a CompactedState summary plus a resume instruction. "
+            "Use this when the conversation is very long and you need to dramatically "
+            "reduce context size while preserving the essential project state. "
+            "This operation is irreversible — only use it when context pressure is "
+            "high and purging individual blocks would be insufficient."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "resume_instruction": {
+                    "type": "string",
+                    "description": (
+                        "A specific instruction describing what the agent should "
+                        "continue working on after compaction. Must be non-empty. "
+                        "Be specific: what task was in progress, what file/module "
+                        "was being worked on, what the next step should be."
+                    ),
+                },
+            },
+            "required": ["resume_instruction"],
+            "additionalProperties": False,
+        },
+        "prompt": {
+            "purpose": "Resets context to a compact state summary to dramatically reduce context size.",
+            "inputs": {
+                "resume_instruction": "what the agent should continue working on after compaction",
+            },
+            "guidance": (
+                "Use compact_context when the conversation is very long and "
+                "purging individual blocks would not free enough space. "
+                "Provide a clear, specific resume_instruction so the agent "
+                "knows exactly what to continue after compaction. "
+                "This operation replaces ALL conversation history — use it "
+                "as a last resort when context usage exceeds ~80%."
+            ),
+        },
+    },
+    {
+        "name": "web_search_agent",
+        "description": (
+            "Research a topic on the web using a dedicated sub-agent. "
+            "The sub-agent searches the web, reads relevant pages, and returns "
+            "a synthesized Markdown report. Raw HTML content stays in the sub-agent "
+            "context — the parent receives only the final intelligence report. "
+            "Use this instead of search_web + fetch_url when you need deeper research "
+            "with multiple search-read-synthesize cycles."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The research question or topic to investigate.",
+                },
+                "focus": {
+                    "type": "string",
+                    "description": "Optional specific focus areas or questions to prioritize.",
+                },
+            },
+            "required": ["query"],
+        },
+        "prompt": {
+            "purpose": "Performs deep web research through an isolated sub-agent and returns a synthesized intelligence report.",
+            "inputs": {
+                "query": "research question",
+                "focus": "optional focus areas",
+            },
+            "guidance": (
+                "Use web_search_agent for in-depth research (3+ search-read cycles). "
+                "Use search_web for quick single-shot lookups. "
+                "The report includes source URLs — cite them. "
+                "Do NOT re-verify the report unless it indicates uncertainty."
+            ),
+        },
+    },
+    {
+        "name": "summarized_fetch",
+        "description": (
+            "Fetch and summarize a specific URL using a dedicated sub-agent. "
+            "The sub-agent reads the page and produces a detailed summary. "
+            "Raw page content stays in the sub-agent context — the parent "
+            "receives only the summary. Use this instead of fetch_url when "
+            "the page is very large or you only need a focused summary."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to fetch and summarize.",
+                },
+                "focus": {
+                    "type": "string",
+                    "description": "Optional specific aspects to focus the summary on.",
+                },
+            },
+            "required": ["url"],
+        },
+        "prompt": {
+            "purpose": "Fetches a web page through an isolated sub-agent and returns a focused summary.",
+            "inputs": {
+                "url": "page URL",
+                "focus": "optional focus areas",
+            },
+            "guidance": (
+                "Use summarized_fetch for large pages or when you need a focused analysis. "
+                "Use fetch_url for quick content retrieval or when you need the raw content. "
+                "The summary includes key facts — do not re-verify unless uncertain."
+            ),
+        },
+    },
 ]
 
 TOOL_SPEC_BY_NAME = {tool["name"]: tool for tool in TOOL_SPECS}
@@ -940,7 +1108,7 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
     "delegate_task": {
         "ui_hidden": True,
         "exclusive_turn": True,
-        "read_only": True,
+        "state_domains": ("delegation",),
     },
     "transcribe_youtube_video": {
         "state_domains": ("video",),
@@ -1005,6 +1173,26 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "read_only": True,
         "parallel_safe": True,
         "state_domains": ("memory",),
+    },
+    "purge": {
+        "state_domains": ("memory",),
+    },
+    "compact_context": {
+        "state_domains": ("memory",),
+    },
+    "web_search_agent": {
+        "ui_hidden": True,
+        "exclusive_turn": True,
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("web",),
+    },
+    "summarized_fetch": {
+        "ui_hidden": True,
+        "exclusive_turn": True,
+        "read_only": True,
+        "parallel_safe": True,
+        "state_domains": ("web",),
     },
 }
 

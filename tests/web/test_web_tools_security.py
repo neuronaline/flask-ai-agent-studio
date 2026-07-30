@@ -161,8 +161,11 @@ def test_bright_data_request_requires_both_credentials(monkeypatch):
 
 
 def test_google_target_url_encodes_non_ascii_query(monkeypatch):
-    monkeypatch.setenv("BRIGHT_DATA_SERP_LANGUAGE", "tr")
-    monkeypatch.setenv("BRIGHT_DATA_SERP_COUNTRY", "TR")
+    settings = {
+        "bright_data_serp_language": "tr",
+        "bright_data_serp_country": "TR",
+    }
+    monkeypatch.setattr(web_tools, "_bright_data_setting", lambda name, default: settings.get(name, default))
 
     target = web_tools._build_google_url("İstanbul en iyi restoranlar")
 

@@ -146,6 +146,9 @@ function setSummaryBusyState(isBusy) {
   if (summarySubmitBtn) {
     summarySubmitBtn.disabled = summaryState.isSummaryOperationInFlight;
   }
+  if (compactContextBtn) {
+    compactContextBtn.disabled = summaryState.isSummaryOperationInFlight;
+  }
   if (summaryFocusInput) {
     summaryFocusInput.disabled = summaryState.isSummaryOperationInFlight;
   }

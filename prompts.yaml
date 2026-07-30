@@ -516,8 +516,8 @@ messages:
   dynamic_context:
     token_usage_header: "## Token Usage"
     token_usage_status: "Context: {active_tokens:,} / {model_limit:,} ({usage_pct:.1f}%) | Buffer: {buffer_free:,}"
-    token_usage_warning_90: "⚠️ Token usage >90%. Purge or compress context nodes to free capacity."
-    token_usage_warning_70: "💡 Token usage >70%. Archive irrelevant nodes if needed."
+    token_usage_warning_90: "⚠️ Token usage >90%. Use `purge` to remove completed blocks or `compact_context` to reset with a dense state summary."
+    token_usage_warning_70: "💡 Token usage >70%. Consider using `purge` to free context space."
     prompt_budget_header: "## Prompt Budget"
     prompt_budget_status: "≈{budget} tokens remaining"
 

@@ -54,11 +54,41 @@ def test_settings_patch_rejects_invalid_activity_retention_days(client):
     assert response.get_json()["error"] == "activity_retention_days must be between 1 and 3650."
 
 
-def test_manual_summarize_returns_404_for_missing_conversation(client):
+def test_compact_context_returns_404_for_missing_conversation(client):
     response = client.post(
-        "/api/conversations/999999/summarize",
-        json={"force": True},
+        "/api/conversations/999999/compact-context",
+        json={"resume_instruction": "Continue the task."},
     )
 
     assert response.status_code == 404
-    assert response.get_json()["error"] == "Not found."
+    assert response.get_json()["error"] == "Conversation not found."
+
+
+def test_compact_context_endpoint_enforces_csrf_in_production(app, client, session_csrf_token):
+    """The UI compaction flow must send the token required by API mutations."""
+    previous_testing = app.config.get("TESTING", False)
+    app.config["TESTING"] = False
+    try:
+        blocked = client.post(
+            "/api/conversations/999999/compact-context",
+            json={"resume_instruction": "Continue the task."},
+        )
+        assert blocked.status_code == 403
+
+        allowed = client.post(
+            "/api/conversations/999999/compact-context",
+            json={"resume_instruction": "Continue the task."},
+            headers={"X-CSRF-Token": session_csrf_token},
+        )
+        assert allowed.status_code == 404
+    finally:
+        app.config["TESTING"] = previous_testing
+
+
+def test_existing_composer_and_summary_routes_remain_registered(client):
+    rules = {rule.rule for rule in client.application.url_map.iter_rules()}
+
+    assert "/api/fix-text" in rules
+    assert "/api/conversations/<int:conv_id>/summarize" in rules
+    assert "/api/conversations/<int:conv_id>/summarize/preview" in rules
+    assert "/api/conversations/<int:conv_id>/summaries/<int:summary_id>/undo" in rules

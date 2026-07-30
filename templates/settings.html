@@ -674,38 +674,6 @@
               <div class="settings-page-section-card">
                 <div class="settings-page-section-card__header">
                   <div>
-                    <span class="settings-section-kicker">Output pruning</span>
-                    <h3>Token-saving pruning</h3>
-                  </div>
-                  <p>Remove verbose tool outputs from history to save tokens. Old edit_file, bash, and stale read_file outputs are compacted into markers.</p>
-                </div>
-                <div class="settings-subsection-grid settings-subsection-grid--two">
-                  <section class="settings-subsection settings-subsection--compact">
-                    <div class="settings-subsection__header">
-                      <span class="settings-subsection__eyebrow">Toggle</span>
-                      <h4 class="settings-subsection__title">Enable pruning</h4>
-                    </div>
-                    <label class="tool-toggle">
-                      <input type="checkbox" id="pruning-enabled-toggle" />
-                      <span>Enable output pruning</span>
-                    </label>
-                  </section>
-                  <section class="settings-subsection">
-                    <div class="settings-subsection__header">
-                      <span class="settings-subsection__eyebrow">Thresholds</span>
-                      <h4 class="settings-subsection__title">Keep count &amp; failure threshold</h4>
-                    </div>
-                    <label class="settings-label" for="pruning-aggressive-keep-count-input">Keep count (5–100)</label>
-                    <input type="number" class="settings-number" id="pruning-aggressive-keep-count-input" min="5" max="100" value="20" />
-                    <label class="settings-label" for="pruning-failed-attempts-threshold-input">Failed attempts (1–20)</label>
-                    <input type="number" class="settings-number" id="pruning-failed-attempts-threshold-input" min="1" max="20" value="3" />
-                  </section>
-                </div>
-              </div>
-
-              <div class="settings-page-section-card">
-                <div class="settings-page-section-card__header">
-                  <div>
                     <span class="settings-section-kicker">Retrieved context</span>
                     <h3>RAG injection</h3>
                   </div>
@@ -1072,6 +1040,29 @@
                   </div>
                 </div>
               </div>
+              <div class="settings-subsection-grid settings-subsection-grid--two">
+                <section class="settings-subsection">
+                  <div class="settings-subsection__header">
+                    <span class="settings-subsection__eyebrow">Bright Data search</span>
+                    <h4 class="settings-subsection__title">Search defaults</h4>
+                    <p class="settings-subsection__copy">Credentials stay in <code>.env</code>; these defaults apply to new web searches.</p>
+                  </div>
+                  <div class="settings-inline-grid">
+                    <div>
+                      <label class="settings-mini-label" for="bright-data-serp-language-select">Language</label>
+                      <select id="bright-data-serp-language-select"><option value="en">English</option><option value="tr">Turkish</option></select>
+                    </div>
+                    <div>
+                      <label class="settings-mini-label" for="bright-data-serp-country-input">Country</label>
+                      <input id="bright-data-serp-country-input" class="settings-text" type="text" maxlength="2" placeholder="US" />
+                    </div>
+                    <div>
+                      <label class="settings-mini-label" for="bright-data-serp-timeout-seconds-input">Timeout (sec)</label>
+                      <input id="bright-data-serp-timeout-seconds-input" class="settings-number" type="number" min="1" max="120" value="30" />
+                    </div>
+                  </div>
+                </section>
+              </div>
             </div>
 
             <!-- Card: Provider & Auth -->
@@ -1364,7 +1355,6 @@
                     <option value="">All</option>
                     <option value="agent_step">Chat / Agent</option>
                     <option value="fetch_summarize">Fetch Summarize</option>
-                    <option value="prune">Prune</option>
                     <option value="image_analysis">Image Analysis</option>
                     <option value="image_question">Image Question</option>
                     <option value="summarize_reformat">Summarize Reformat</option>

@@ -1756,6 +1756,197 @@ def delete_rag_document(source_key):
     )
 
 
+def _compact_context_api_legacy(conv_id):
+    """User-triggered context compaction endpoint.
+
+    Accepts JSON body with 'resume_instruction'. Runs the same compaction
+    logic as the model tool: produces CompactedState via operation model,
+    validates it, and transactionally replaces all conversation blocks.
+
+    Returns the compaction result including new state/resume block IDs.
+    """
+    import json as _json
+    from core.db import (
+        get_db,
+        list_context_blocks,
+        acquire_compaction_lock,
+        release_compaction_lock,
+        execute_compact_context_transaction,
+    )
+    from core.context_memory import validate_compacted_state
+    from agent.agent import _build_compaction_prompt
+
+    data = request.get_json(silent=True) or {}
+    resume_instruction = str(data.get("resume_instruction") or "").strip()
+    if not resume_instruction:
+        return jsonify({"error": "resume_instruction is required and must be non-empty."}), 400
+
+    # Verify conversation exists
+    with get_db() as conn:
+        conv = conn.execute("SELECT id FROM conversations WHERE id = ?", (conv_id,)).fetchone()
+        if not conv:
+            return jsonify({"error": "Conversation not found."}), 404
+
+    # Acquire lock
+    lock_acquired = acquire_compaction_lock(conv_id, timeout=10.0)
+    if not lock_acquired:
+        return jsonify({
+            "error": "Another compaction is already in progress for this conversation. Please wait and retry."
+        }), 409
+
+    try:
+        # Snapshot all active blocks
+        block_dicts = list_context_blocks(conv_id)
+        if not block_dicts:
+            return jsonify({"error": "No conversation blocks to compact."}), 400
+
+        # Build text representation
+        blocks_lines: list[str] = []
+        for bd in block_dicts:
+            pid = str(bd.get("public_id") or "")
+            kind = str(bd.get("kind") or "")
+            role = str(bd.get("api_role") or "")
+            content = str(bd.get("content") or "")
+            tool_name = str(bd.get("tool_name") or "")
+            max_content = 4000
+            if len(content) > max_content:
+                content = content[:max_content] + "... [truncated]"
+            label = f"[{pid}] ({kind}/{role}"
+            if tool_name:
+                label += f", tool={tool_name}"
+            label += ")"
+            blocks_lines.append(f"{label}\n{content}")
+        blocks_text = "\n\n".join(blocks_lines)
+
+        # Call operation model
+        from core.config import get_app_settings
+        from lib.model_registry import (
+            get_operation_model,
+            resolve_model_target,
+            apply_model_target_request_options,
+        )
+        from utils.shared_extract import extract_chat_completion_text
+
+        settings = get_app_settings()
+        compaction_model = get_operation_model("compaction", settings)
+
+        max_retries = 3
+        last_error = None
+        compacted_state = None
+
+        for attempt in range(1, max_retries + 1):
+            import time as _time
+
+            try:
+                system_msg, user_msg = _build_compaction_prompt(blocks_text, resume_instruction)
+                target = resolve_model_target(compaction_model, settings)
+                request_kwargs = apply_model_target_request_options(
+                    {
+                        "model": target["api_model"],
+                        "messages": [
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        "max_tokens": 4096,
+                        "temperature": 0.2,
+                    },
+                    target,
+                )
+
+                response = target["client"].chat.completions.create(**request_kwargs)
+                raw_text = extract_chat_completion_text(response)
+
+                if not raw_text or not raw_text.strip():
+                    last_error = "Operation model returned empty response."
+                    if attempt < max_retries:
+                        _time.sleep(1.0)
+                        continue
+                    break
+
+                raw_text = raw_text.strip()
+                if raw_text.startswith("```"):
+                    lines = raw_text.split("\n")
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].strip() == "```":
+                        lines = lines[:-1]
+                    raw_text = "\n".join(lines)
+
+                try:
+                    parsed = _json.loads(raw_text)
+                except _json.JSONDecodeError as je:
+                    last_error = f"Operation model returned invalid JSON: {je}"
+                    if attempt < max_retries:
+                        _time.sleep(1.0)
+                        continue
+                    break
+
+                validation_errors = validate_compacted_state(parsed)
+                if validation_errors:
+                    last_error = f"CompactedState validation failed: {'; '.join(validation_errors)}"
+                    if attempt < max_retries:
+                        _time.sleep(1.0)
+                        continue
+                    break
+
+                compacted_state = parsed
+                break
+
+            except Exception as exc:
+                last_error = f"Operation model call failed: {exc}"
+                if attempt < max_retries:
+                    _time.sleep(1.0)
+                    continue
+                break
+
+        if compacted_state is None:
+            return jsonify({
+                "error": (
+                    f"Failed to produce a valid CompactedState after "
+                    f"{max_retries} attempt(s). Last error: {last_error}"
+                ),
+            }), 422
+
+        # Execute transaction
+        compacted_json = _json.dumps(compacted_state, ensure_ascii=False, indent=2)
+        result = execute_compact_context_transaction(
+            conv_id,
+            compacted_json,
+            resume_instruction,
+            actor="user",
+        )
+
+        return jsonify(result)
+
+    except Exception as exc:
+        current_app.logger.exception("Compaction failed for conversation_id=%s", conv_id)
+        return jsonify({"error": f"Compaction failed: {exc}"}), 500
+
+    finally:
+        release_compaction_lock(conv_id)
+
+
+def compact_context_api(conv_id):
+    """HTTP transport for the same compaction service used by the model tool."""
+    data = request.get_json(silent=True) or {}
+    resume_instruction = str(data.get("resume_instruction") or "").strip()
+    if not resume_instruction:
+        return jsonify({"error": "resume_instruction is required and must be non-empty."}), 400
+
+    with get_db() as conn:
+        exists = conn.execute("SELECT 1 FROM conversations WHERE id = ?", (conv_id,)).fetchone()
+    if not exists:
+        return jsonify({"error": "Conversation not found."}), 404
+
+    from services.context_compaction import compact_conversation
+
+    result = compact_conversation(conv_id, resume_instruction, actor="user")
+    if result.get("error"):
+        status = 409 if result.get("retryable") and "progress" in str(result["error"]) else 422
+        return jsonify(result), status
+    return jsonify(result)
+
+
 def register_conversation_routes(app) -> None:
     app.route("/api/conversations", methods=["GET"])(list_conversations)
     app.route("/api/personas", methods=["GET"])(list_personas_route)
@@ -1787,3 +1978,4 @@ def register_conversation_routes(app) -> None:
     app.route("/api/rag/upload-metadata", methods=["POST"])(suggest_rag_upload_metadata)
     app.route("/api/rag/sync-conversations", methods=["POST"])(sync_rag_conversations)
     app.route("/api/rag/documents/<source_key>", methods=["DELETE"])(delete_rag_document)
+    app.route("/api/conversations/<int:conv_id>/compact-context", methods=["POST"])(compact_context_api)

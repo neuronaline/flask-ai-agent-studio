@@ -23,6 +23,7 @@ from core.config import (
 from core.db import (
     cache_get,
     cache_set,
+    get_app_settings,
 )
 from core.db import (
     get_search_tool_query_limit as load_search_tool_query_limit,
@@ -40,32 +41,13 @@ _NEWS_TIME_FILTERS = {"d": "qdr:d", "w": "qdr:w", "m": "qdr:m", "y": "qdr:y"}
 _ZERO_WIDTH_TRANSLATION = dict.fromkeys(map(ord, "\u200b\u200c\u200d\ufeff"), None)
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value in (None, ""):
-        return default
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+def _bright_data_setting(name: str, default: str) -> str:
+    """Read non-secret Bright Data preferences from the Settings page."""
     try:
-        value = int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
+        value = get_app_settings().get(name, default)
+    except Exception:
         value = default
-    return max(minimum, min(maximum, value))
-
-
-def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
-    try:
-        value = float(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        value = default
-    return max(minimum, min(maximum, value))
-
-
-def _env_choice(name: str, default: str, choices: set[str]) -> str:
-    value = str(os.getenv(name, default) or default).strip().lower()
-    return value if value in choices else default
+    return str(value or default).strip()
 
 
 def _bright_data_credentials() -> tuple[str, str]:
@@ -92,12 +74,11 @@ def _bright_data_serp_request(target_url: str) -> dict[str, Any]:
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    timeout = _env_float(
-        "BRIGHT_DATA_SERP_TIMEOUT_SECONDS",
-        30.0,
-        minimum=1.0,
-        maximum=120.0,
-    )
+    try:
+        timeout = float(_bright_data_setting("bright_data_serp_timeout_seconds", "30"))
+    except ValueError:
+        timeout = 30.0
+    timeout = max(1.0, min(120.0, timeout))
 
     LOGGER.debug("Bright Data SERP request target=%s", urlparse(target_url).netloc)
     try:
@@ -136,14 +117,12 @@ def _build_google_url(
     news: bool = False,
     when: str | None = None,
 ) -> str:
-    default_lang = _env_choice(
-        "BRIGHT_DATA_SERP_LANGUAGE",
-        "en",
-        {"en", "tr"},
-    )
-    default_country = str(
-        os.getenv("BRIGHT_DATA_SERP_COUNTRY") or _GN_LANG[default_lang]["gl"]
-    ).strip().upper()
+    default_lang = _bright_data_setting("bright_data_serp_language", "en").lower()
+    if default_lang not in _GN_LANG:
+        default_lang = "en"
+    default_country = _bright_data_setting(
+        "bright_data_serp_country", _GN_LANG[default_lang]["gl"]
+    ).upper()
     language = str(lang or default_lang).strip().lower()
     geo = _GN_LANG.get(language, {"hl": language or default_lang, "gl": default_country})
     params: dict[str, str] = {

@@ -77,34 +77,9 @@ Requires a completed installation and virtual environment. Creates and enables a
 
 ---
 
-## ⚙️ Configuration (Environment Variables)
+## ⚙️ Configuration
 
-Most app settings can be dynamically changed via the `/settings` UI and are stored in SQLite. The following environment variables dictate core infrastructure:
-
-### Core & Security
-| Variable | Default | Description |
-| --- | --- | --- |
-| `FLASK_SECRET_KEY` | required | Secret key for Flask sessions. |
-| `LOGIN_PIN` | empty | Enables basic PIN-based authentication if set. |
-| `FORCE_HTTPS` | `false` | Redirects HTTP to HTTPS (requires reverse proxy). |
-| `AGENT_TRACE_LOG_ENABLED` | `true` | Enables JSON-lines trace logging. |
-
-### Storage Directories
-| Variable | Default | Description |
-| --- | --- | --- |
-| `IMAGE_STORAGE_DIR` | `./data/images` | Uploaded images. |
-| `DOCUMENT_STORAGE_DIR`| `./data/documents` | Uploaded documents. |
-| `PROJECT_WORKSPACE_ROOT`|`./data/workspaces`| Sandboxes for workspace tools. |
-| `CHROMA_DB_PATH` | `./chroma_db` | RAG vector database persistence. |
-
-### RAG & AI Features
-| Variable | Default | Description |
-| --- | --- | --- |
-| `RAG_ENABLED` | `true` | Enables knowledge-base features. |
-| `RAG_EMBED_MODEL` | `BAAI/bge-m3` | Embedding model to use. |
-| `BGE_M3_DEVICE` | `auto` | Set to `cpu` or leave `auto` for CUDA. |
-| `OCR_ENABLED` | `true` | Enables local PaddleOCR processing. |
-| `YOUTUBE_TRANSCRIPTS_ENABLED` | `false` | Enables YouTube transcript extraction tool. |
+Copy `.env.example` to `.env` and set a Flask secret plus at least one model-provider key. `LOGIN_PIN` is optional. All non-secret application preferences belong in the `/settings` UI and are stored in SQLite.
 
 ### Web Research
 
@@ -115,9 +90,7 @@ BRIGHT_DATA_API_KEY=your-bright-data-api-key
 BRIGHT_DATA_SERP_ZONE=your-serp-zone
 ```
 
-PageFetch mode, proxy provider (Decodo / DataImpulse), credentials, and tuning options are configured in `proxy.yaml`. Copy `proxy.example.yaml` to get started.
-
-For timeouts, retries, cache, RAG, and prompt-budget settings, start from `.env.example`. Most per-user runtime preferences are configurable from the Settings page and stored in SQLite.
+Set Bright Data search language, country, and timeout from **Settings → Tools**. PageFetch mode, proxy provider (Decodo / DataImpulse), credentials, and tuning options are configured in `proxy.yaml`; copy `proxy.example.yaml` to get started.
 
 ---
 
@@ -166,10 +139,7 @@ The backend exposes the following application endpoints. State-changing requests
 | `POST` | `/api/conversations` | Create a new conversation. |
 | `PATCH` | `/api/conversations/<id>` | Update conversation metadata. |
 | `DELETE` | `/api/conversations/<id>` | Delete a conversation. |
-| `POST` | `/api/conversations/<id>/summarize` | Force history summarization. |
-| `POST` | `/api/conversations/<id>/summarize/preview` | Preview a history summary. |
-| `POST` | `/api/conversations/<id>/summaries/<summary_id>/undo` | Undo a generated summary. |
-| `POST` | `/api/conversations/<id>/prune` | Apply conversation pruning. |
+| `POST` | `/api/conversations/<id>/compact-context` | Explicitly replace the active context ledger with a validated compact state. |
 | `POST` | `/api/conversations/<id>/generate-title` | Generate a conversation title. |
 | `GET,POST` | `/api/conversations/<id>/export` | Export chat (MD, JSON, DOCX, PDF). |
 | `GET` | `/api/conversations/<id>/canvas/export` | Export a canvas document. |

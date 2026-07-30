@@ -425,32 +425,41 @@ def init_db() -> None:
             ON conversation_state_mutations(target_kind, target_key, id);
             CREATE INDEX IF NOT EXISTS idx_personas_updated_at
             ON personas(updated_at, id);
-            CREATE TABLE IF NOT EXISTS context_nodes (
-                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
-                node_id                 TEXT NOT NULL UNIQUE,
-                tool_name               TEXT NOT NULL,
-                args_preview            TEXT NOT NULL DEFAULT '',
-                result_preview          TEXT NOT NULL DEFAULT '',
-                full_content            TEXT,
-                token_count             INTEGER NOT NULL DEFAULT 0,
-                summary                 TEXT NOT NULL DEFAULT '',
-                compressed              INTEGER NOT NULL DEFAULT 0,
-                status                  TEXT NOT NULL DEFAULT 'active',
-                created_at              TEXT NOT NULL DEFAULT (datetime('now')),
-                archived_at             TEXT,
-                deleted_at              TEXT,
-                deletion_reason         TEXT,
-                archived_reason         TEXT,
-                conversation_id         INTEGER NOT NULL,
-                message_id              INTEGER,
+            CREATE TABLE IF NOT EXISTS context_blocks (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                public_id           TEXT NOT NULL UNIQUE,
+                conversation_id     INTEGER NOT NULL,
+                sequence            INTEGER NOT NULL,
+                kind                TEXT NOT NULL,
+                api_role            TEXT NOT NULL,
+                source_message_id   INTEGER,
+                parent_public_id    TEXT,
+                provider_call_id    TEXT,
+                tool_name           TEXT,
+                content             TEXT NOT NULL DEFAULT '',
+                tool_calls_json     TEXT,
+                metadata_json       TEXT,
+                token_estimate      INTEGER NOT NULL DEFAULT 0,
+                created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY (source_message_id) REFERENCES messages(id) ON DELETE SET NULL,
+                UNIQUE (conversation_id, sequence)
+            );
+            CREATE INDEX IF NOT EXISTS idx_context_blocks_active_order
+                ON context_blocks(conversation_id, sequence, id);
+            CREATE TABLE IF NOT EXISTS context_mutations (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id     INTEGER NOT NULL,
+                operation            TEXT NOT NULL,
+                requested_ids_json  TEXT NOT NULL,
+                resolved_ids_json   TEXT NOT NULL,
+                removed_tokens      INTEGER NOT NULL DEFAULT 0,
+                replacement_id      TEXT,
+                content_hashes_json TEXT NOT NULL DEFAULT '[]',
+                actor               TEXT NOT NULL,
+                created_at          TEXT NOT NULL DEFAULT (datetime('now')),
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             );
-            CREATE INDEX IF NOT EXISTS idx_context_nodes_conversation_status
-            ON context_nodes(conversation_id, status, created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_context_nodes_tool_name
-            ON context_nodes(tool_name, created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_context_nodes_node_id
-            ON context_nodes(node_id);
             """
         )
 
@@ -578,457 +587,6 @@ def datetime_utc_now_iso() -> str:
     return str(row["now_iso"] or "").strip()
 
 
-# =============================================================================
-# Context Nodes
-# =============================================================================
-
-
-def _context_node_row_to_dict(row) -> dict | None:
-    if not row:
-        return None
-    return {
-        "id": int(row["id"]),
-        "node_id": str(row["node_id"] or "").strip(),
-        "tool_name": str(row["tool_name"] or "").strip(),
-        "args_preview": str(row["args_preview"] or "").strip(),
-        "result_preview": str(row["result_preview"] or "").strip(),
-        "full_content": str(row["full_content"] or "").strip() if row["full_content"] else None,
-        "token_count": int(row["token_count"] or 0),
-        "summary": str(row["summary"] or "").strip() if row["summary"] else None,
-        "compressed": bool(row["compressed"] if row["compressed"] else 0),
-        "status": str(row["status"] or "active").strip(),
-        "created_at": str(row["created_at"] or "").strip(),
-        "archived_at": str(row["archived_at"] or "").strip() if row["archived_at"] else None,
-        "deleted_at": str(row["deleted_at"] or "").strip() if row["deleted_at"] else None,
-        "deletion_reason": str(row["deletion_reason"] or "").strip() if row["deletion_reason"] else None,
-        "archived_reason": str(row["archived_reason"] or "").strip() if row["archived_reason"] else None,
-        "conversation_id": int(row["conversation_id"]) if row["conversation_id"] is not None else None,
-        "message_id": int(row["message_id"]) if row["message_id"] is not None else None,
-    }
-
-
-def insert_context_node(
-    node_id: str,
-    tool_name: str,
-    args_preview: str,
-    result_preview: str,
-    full_content: str | None,
-    token_count: int,
-    conversation_id: int,
-    message_id: int | None = None,
-) -> dict:
-    normalized_node_id = str(node_id or "").strip()
-    if not normalized_node_id:
-        raise ValueError("node_id is required.")
-
-    normalized_tool_name = str(tool_name or "").strip()[:80]
-    if not normalized_tool_name:
-        raise ValueError("tool_name is required.")
-
-    normalized_args_preview = str(args_preview or "").strip()[:500]
-    normalized_result_preview = str(result_preview or "").strip()[:1000]
-    normalized_full_content = str(full_content or "").strip() if full_content else None
-    normalized_token_count = max(0, int(token_count or 0))
-    normalized_conversation_id = int(conversation_id) if conversation_id else None
-    if not normalized_conversation_id:
-        raise ValueError("conversation_id is required.")
-    normalized_message_id = int(message_id) if message_id else None
-
-    with get_db() as conn:
-        cursor = conn.execute(
-            """INSERT INTO context_nodes (
-                node_id, tool_name, args_preview, result_preview,
-                full_content, token_count, conversation_id, message_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                normalized_node_id,
-                normalized_tool_name,
-                normalized_args_preview,
-                normalized_result_preview,
-                normalized_full_content,
-                normalized_token_count,
-                normalized_conversation_id,
-                normalized_message_id,
-            ),
-        )
-        entry_id = int(cursor.lastrowid)
-        row = conn.execute("SELECT * FROM context_nodes WHERE id = ?", (entry_id,)).fetchone()
-    return _context_node_row_to_dict(row) or {}
-
-
-def get_context_node(node_id: str) -> dict | None:
-    normalized_node_id = str(node_id or "").strip()
-    if not normalized_node_id:
-        return None
-
-    with get_db() as conn:
-        row = conn.execute("SELECT * FROM context_nodes WHERE node_id = ?", (normalized_node_id,)).fetchone()
-    return _context_node_row_to_dict(row)
-
-
-def list_context_nodes(
-    conversation_id: int,
-    status: str | None = None,
-    tool_name: str | None = None,
-    limit: int = 100,
-    sort_by: str = "token_count",
-) -> list[dict]:
-    normalized_limit = max(1, min(100, int(limit or 100)))
-    normalized_conversation_id = int(conversation_id) if conversation_id else None
-    if not normalized_conversation_id:
-        return []
-
-    valid_statuses = {"active", "archived", "deleted"}
-    normalized_status = None
-    if status and status in valid_statuses:
-        normalized_status = status
-
-    normalized_tool_name = str(tool_name or "").strip()[:80] if tool_name else None
-
-    valid_sort_by = {"token_count", "created_at"}
-    normalized_sort_by = sort_by if sort_by in valid_sort_by else "token_count"
-
-    with get_db() as conn:
-        conditions = ["conversation_id = ?"]
-        params = [normalized_conversation_id]
-
-        if normalized_status:
-            conditions.append("status = ?")
-            params.append(normalized_status)
-
-        if normalized_tool_name:
-            conditions.append("tool_name = ?")
-            params.append(normalized_tool_name)
-
-        where_clause = " AND ".join(conditions)
-
-        if normalized_sort_by == "created_at":
-            order_clause = "created_at DESC, id DESC"
-        else:
-            order_clause = "token_count DESC, created_at DESC"
-
-        rows = conn.execute(
-            f"""SELECT * FROM context_nodes
-               WHERE {where_clause}
-               ORDER BY {order_clause}
-               LIMIT ?""",
-            (*params, normalized_limit),
-        ).fetchall()
-
-    return [_context_node_row_to_dict(row) for row in rows if _context_node_row_to_dict(row)]
-
-
-def archive_context_nodes(node_ids: list[str], reason: str) -> int:
-    if not node_ids:
-        return 0
-
-    normalized_node_ids = [str(nid or "").strip() for nid in node_ids if str(nid or "").strip()]
-    if not normalized_node_ids:
-        return 0
-
-    normalized_reason = str(reason or "").strip()[:500] if reason else None
-
-    with get_db() as conn:
-        placeholders = ", ".join("?" for _ in normalized_node_ids)
-        cursor = conn.execute(
-            f"""UPDATE context_nodes
-               SET status = 'archived',
-                   archived_at = datetime('now'),
-                   archived_reason = ?
-               WHERE node_id IN ({placeholders})
-               AND status = 'active'""",
-            (normalized_reason, *normalized_node_ids),
-        )
-    return int(cursor.rowcount or 0)
-
-
-def purge_context_nodes(node_ids: list[str], reason: str) -> dict:
-    if not node_ids:
-        return {"purged": 0, "archived": 0, "not_found": 0}
-
-    normalized_node_ids = [str(nid or "").strip() for nid in node_ids if str(nid or "").strip()]
-    if not normalized_node_ids:
-        return {"purged": 0, "archived": 0, "not_found": 0}
-
-    normalized_reason = str(reason or "").strip()[:500] if reason else None
-
-    with get_db() as conn:
-        placeholders = ", ".join("?" for _ in normalized_node_ids)
-
-        # First, set archived nodes to deleted
-        cursor = conn.execute(
-            f"""UPDATE context_nodes
-               SET status = 'deleted',
-                   deleted_at = datetime('now'),
-                   deletion_reason = ?
-               WHERE node_id IN ({placeholders})
-               AND status = 'archived'""",
-            (normalized_reason, *normalized_node_ids),
-        )
-        archived_count = int(cursor.rowcount or 0)
-
-        # Then, soft-delete active nodes (tombestone)
-        cursor = conn.execute(
-            f"""UPDATE context_nodes
-               SET status = 'deleted',
-                   deleted_at = datetime('now'),
-                   deletion_reason = ?
-               WHERE node_id IN ({placeholders})
-               AND status = 'active'""",
-            (normalized_reason, *normalized_node_ids),
-        )
-        active_count = int(cursor.rowcount or 0)
-
-    return {
-        "purged": archived_count + active_count,
-        "archived": archived_count,
-        "active": active_count,
-    }
-
-
-def get_context_node_stats(conversation_id: int) -> dict:
-    normalized_conversation_id = int(conversation_id) if conversation_id else None
-    if not normalized_conversation_id:
-        return {
-            "total_nodes": 0,
-            "active_nodes": 0,
-            "archived_nodes": 0,
-            "deleted_nodes": 0,
-            "total_tokens": 0,
-            "active_tokens": 0,
-        }
-
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT
-                COUNT(*) as total_nodes,
-                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_nodes,
-                SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END) as archived_nodes,
-                SUM(CASE WHEN status = 'deleted' THEN 1 ELSE 0 END) as deleted_nodes,
-                SUM(token_count) as total_tokens,
-                SUM(CASE WHEN status = 'active' THEN token_count ELSE 0 END) as active_tokens
-               FROM context_nodes
-               WHERE conversation_id = ?""",
-            (normalized_conversation_id,),
-        ).fetchall()
-
-    if not rows:
-        return {
-            "total_nodes": 0,
-            "active_nodes": 0,
-            "archived_nodes": 0,
-            "deleted_nodes": 0,
-            "total_tokens": 0,
-            "active_tokens": 0,
-        }
-
-    row = rows[0]
-    return {
-        "total_nodes": int(row["total_nodes"] or 0),
-        "active_nodes": int(row["active_nodes"] or 0),
-        "archived_nodes": int(row["archived_nodes"] or 0),
-        "deleted_nodes": int(row["deleted_nodes"] or 0),
-        "total_tokens": int(row["total_tokens"] or 0),
-        "active_tokens": int(row["active_tokens"] or 0),
-    }
-
-
-def list_context_summary(
-    conversation_id: int,
-    sort_by: str = "created_at",
-    status: str | None = "active",
-) -> list[dict]:
-    """Lightweight overview of active context nodes — no full payloads.
-
-    Per AI Memory and Context Management doc Section 2.1:
-    Returns node_id, summary, token_count, timestamp for each node.
-
-    Args:
-        conversation_id: Conversation to query.
-        sort_by: 'created_at' or 'token_count'. Default: 'created_at'.
-        status: Filter by status. Default: 'active'.
-
-    Returns:
-        List of lightweight node summaries.
-    """
-    normalized_conversation_id = int(conversation_id) if conversation_id else None
-    if not normalized_conversation_id:
-        return []
-
-    valid_sort_by = {"created_at", "token_count"}
-    normalized_sort_by = sort_by if sort_by in valid_sort_by else "created_at"
-
-    valid_statuses = {"active", "archived", "deleted"}
-    normalized_status = status if status in valid_statuses else "active"
-
-    with get_db() as conn:
-        if normalized_sort_by == "created_at":
-            order_clause = "created_at ASC, id ASC"
-        else:
-            order_clause = "token_count DESC, id DESC"
-
-        rows = conn.execute(
-            f"""SELECT node_id, summary, token_count, created_at
-                FROM context_nodes
-                WHERE conversation_id = ? AND status = ?
-                ORDER BY {order_clause}""",
-            (normalized_conversation_id, normalized_status),
-        ).fetchall()
-
-    result = []
-    for row in rows:
-        result.append({
-            "node_id": str(row["node_id"] or "").strip(),
-            "summary": str(row["summary"] or "").strip() if row["summary"] else None,
-            "token_count": int(row["token_count"] or 0),
-            "timestamp": str(row["created_at"] or "").strip(),
-        })
-    return result
-
-
-def update_context_node(
-    node_id: str,
-    *,
-    full_content: str | None = None,
-    token_count: int | None = None,
-    summary: str | None = None,
-    compressed: bool | None = None,
-) -> dict | None:
-    """Update an existing context node's content, token_count, summary, or compressed flag.
-
-    Used by compress_context_node to update the payload after compression.
-
-    Args:
-        node_id: UUID of the node to update.
-        full_content: Optional new full content.
-        token_count: Optional new token count.
-        summary: Optional new summary.
-        compressed: Optional compressed flag.
-
-    Returns:
-        Updated node dict, or None if not found.
-    """
-    normalized_node_id = str(node_id or "").strip()
-    if not normalized_node_id:
-        return None
-
-    existing = get_context_node(normalized_node_id)
-    if not existing:
-        return None
-
-    updates = {}
-    if full_content is not None:
-        updates["full_content"] = str(full_content).strip() if full_content else None
-    if token_count is not None:
-        updates["token_count"] = max(0, int(token_count))
-    if summary is not None:
-        updates["summary"] = str(summary).strip()[:500] if summary else ""
-    if compressed is not None:
-        updates["compressed"] = 1 if compressed else 0
-
-    if not updates:
-        return existing
-
-    set_parts = ", ".join(f"{key} = ?" for key in updates)
-    values = list(updates.values())
-    values.append(normalized_node_id)
-
-    with get_db() as conn:
-        conn.execute(
-            f"UPDATE context_nodes SET {set_parts} WHERE node_id = ?",
-            tuple(values),
-        )
-
-    return get_context_node(normalized_node_id)
-
-
-def merge_context_nodes(
-    conversation_id: int,
-    node_ids: list[str],
-    new_summary: str,
-) -> dict | None:
-    """Merge two or more context nodes into one, purging the originals.
-
-    Per AI Memory and Context Management doc Section 2.3:
-    - Payloads of listed nodes are concatenated and stored as a single new node.
-    - Source nodes are purged automatically.
-    - New node inherits the earliest timestamp from the source set.
-
-    Args:
-        conversation_id: Conversation ID.
-        node_ids: List of node UUIDs to merge.
-        new_summary: Condensed summary for the merged node (max ~50 tokens).
-
-    Returns:
-        The new merged node dict, or None on failure.
-    """
-    normalized_conversation_id = int(conversation_id) if conversation_id else None
-    if not normalized_conversation_id or not node_ids:
-        return None
-
-    normalized_node_ids = [str(nid or "").strip() for nid in node_ids if str(nid or "").strip()]
-    if len(normalized_node_ids) < 2:
-        return None
-
-    # Fetch all source nodes
-    source_nodes = []
-    for nid in normalized_node_ids:
-        node = get_context_node(nid)
-        if node and node.get("conversation_id") == normalized_conversation_id:
-            source_nodes.append(node)
-
-    if len(source_nodes) < 2:
-        return None
-
-    # Concatenate payloads and find earliest timestamp
-    combined_payload_parts = []
-    earliest_timestamp = None
-    combined_token_count = 0
-    for node in source_nodes:
-        content = node.get("full_content") or node.get("result_preview") or ""
-        if content:
-            combined_payload_parts.append(content)
-        combined_token_count += node.get("token_count") or 0
-        ts = node.get("created_at") or ""
-        if ts and (earliest_timestamp is None or ts < earliest_timestamp):
-            earliest_timestamp = ts
-
-    merged_payload = "\n\n---\n\n".join(part for part in combined_payload_parts if part)
-    if not merged_payload:
-        return None
-
-    # Create new node
-    new_node_id = str(uuid4())
-    normalized_summary = str(new_summary or "").strip()[:500] or "Merged context nodes"
-
-    from utils.token_utils import estimate_text_tokens
-    merged_token_count = estimate_text_tokens(merged_payload)
-
-    with get_db() as conn:
-        conn.execute(
-            """INSERT INTO context_nodes
-               (node_id, tool_name, args_preview, result_preview, full_content,
-                token_count, summary, compressed, conversation_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                new_node_id,
-                "merge_context_nodes",
-                f"Merged {len(source_nodes)} nodes",
-                normalized_summary,
-                merged_payload,
-                merged_token_count,
-                normalized_summary,
-                0,
-                normalized_conversation_id,
-            ),
-        )
-
-    # Purge originals
-    purge_context_nodes(normalized_node_ids, f"Merged into {new_node_id}")
-
-    return get_context_node(new_node_id)
-
-
 def initialize_database() -> None:
     init_db()
     ensure_conversation_title_columns()
@@ -1041,58 +599,1082 @@ def initialize_database() -> None:
     ensure_messages_deleted_at_column()
     ensure_rag_documents_expires_at_column()
     ensure_model_invocations_activity_columns()
-    ensure_context_nodes_columns()
+    ensure_context_blocks_ledger()
+    # Upgrade existing conversations before any request starts using the
+    # ledger as its sole Tier 2 source.  The migration is idempotent, so this
+    # inexpensive check also covers databases that were only partly migrated.
+    backfill_all_conversations()
 
 
-def ensure_context_nodes_columns() -> None:
-    """Add summary and compressed columns to context_nodes table if missing.
-    Also ensure tombstoned status is supported via the status enum.
-    """
+def ensure_context_blocks_ledger() -> None:
+    """Create context_blocks and context_mutations tables if missing (Phase 1 migration)."""
     with get_db() as conn:
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(context_nodes)").fetchall()}
-        if "summary" not in columns:
-            conn.execute("ALTER TABLE context_nodes ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
-        if "compressed" not in columns:
-            conn.execute("ALTER TABLE context_nodes ADD COLUMN compressed INTEGER NOT NULL DEFAULT 0")
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(context_blocks)").fetchall()}
+        if not columns:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS context_blocks (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    public_id           TEXT NOT NULL UNIQUE,
+                    conversation_id     INTEGER NOT NULL,
+                    sequence            INTEGER NOT NULL,
+                    kind                TEXT NOT NULL,
+                    api_role            TEXT NOT NULL,
+                    source_message_id   INTEGER,
+                    parent_public_id    TEXT,
+                    provider_call_id    TEXT,
+                    tool_name           TEXT,
+                    content             TEXT NOT NULL DEFAULT '',
+                    tool_calls_json     TEXT,
+                    metadata_json       TEXT,
+                    token_estimate      INTEGER NOT NULL DEFAULT 0,
+                    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (source_message_id) REFERENCES messages(id) ON DELETE SET NULL,
+                    UNIQUE (conversation_id, sequence)
+                );
+                CREATE INDEX IF NOT EXISTS idx_context_blocks_active_order
+                    ON context_blocks(conversation_id, sequence, id);
+                CREATE TABLE IF NOT EXISTS context_mutations (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id     INTEGER NOT NULL,
+                    operation            TEXT NOT NULL,
+                    requested_ids_json  TEXT NOT NULL,
+                    resolved_ids_json   TEXT NOT NULL,
+                    removed_tokens      INTEGER NOT NULL DEFAULT 0,
+                    replacement_id      TEXT,
+                    content_hashes_json TEXT NOT NULL DEFAULT '[]',
+                    actor               TEXT NOT NULL,
+                    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+            """)
 
 
-def get_tombstone_count(conversation_id: int) -> int:
-    """Count tombstoned (deleted) nodes for a conversation.
+# ---------------------------------------------------------------------------
+# Context Blocks Ledger — Tier 2 repository (Phase 1)
+# ---------------------------------------------------------------------------
 
-    Per Section 6.3: Tombstone count > 5 triggers compaction.
-    """
-    normalized_conversation_id = int(conversation_id) if conversation_id else None
-    if not normalized_conversation_id:
-        return 0
+def _context_block_row_to_dict(row) -> dict | None:
+    """Convert a context_blocks row to a dict."""
+    if not row:
+        return None
+    return {
+        "id": int(row["id"]),
+        "public_id": str(row["public_id"] or "").strip(),
+        "conversation_id": int(row["conversation_id"]),
+        "sequence": int(row["sequence"]),
+        "kind": str(row["kind"] or "").strip(),
+        "api_role": str(row["api_role"] or "").strip(),
+        "source_message_id": int(row["source_message_id"]) if row["source_message_id"] is not None else None,
+        "parent_public_id": str(row["parent_public_id"] or "").strip() if row["parent_public_id"] else None,
+        "provider_call_id": str(row["provider_call_id"] or "").strip() if row["provider_call_id"] else None,
+        "tool_name": str(row["tool_name"] or "").strip() if row["tool_name"] else None,
+        "content": str(row["content"] or ""),
+        "tool_calls_json": str(row["tool_calls_json"]) if row["tool_calls_json"] else None,
+        "metadata_json": str(row["metadata_json"]) if row["metadata_json"] else None,
+        "token_estimate": int(row["token_estimate"] or 0),
+        "created_at": str(row["created_at"] or "").strip(),
+    }
 
-    with get_db() as conn:
+
+def allocate_context_block_sequence(conversation_id: int, *, conn: sqlite3.Connection | None = None) -> int:
+    """Return the next sequence number for a conversation (1-based)."""
+    def _do(conn):
         row = conn.execute(
-            "SELECT COUNT(*) as count FROM context_nodes WHERE conversation_id = ? AND status = 'deleted'",
-            (normalized_conversation_id,),
+            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM context_blocks WHERE conversation_id = ?",
+            (conversation_id,),
         ).fetchone()
-    return int(row["count"]) if row else 0
+        return int(row[0]) if row else 1
 
-
-def hard_delete_tombstoned_nodes(conversation_id: int) -> int:
-    """Physically delete all tombstoned (status='deleted') nodes for a conversation.
-
-    Per Section 6.3: Called during compaction to reclaim space after tombstone
-    accumulation exceeds threshold.
-    """
-    normalized_conversation_id = int(conversation_id) if conversation_id else None
-    if not normalized_conversation_id:
-        return 0
-
+    if conn is not None:
+        return _do(conn)
     with get_db() as conn:
+        return _do(conn)
+
+
+def insert_context_block(
+    public_id: str,
+    conversation_id: int,
+    sequence: int,
+    kind: str,
+    api_role: str,
+    *,
+    source_message_id: int | None = None,
+    parent_public_id: str | None = None,
+    provider_call_id: str | None = None,
+    tool_name: str | None = None,
+    content: str = "",
+    tool_calls_json: str | None = None,
+    metadata_json: str | None = None,
+    token_estimate: int = 0,
+    conn: sqlite3.Connection | None = None,
+) -> dict:
+    """Insert a single context block and return its row dict."""
+    def _do(conn):
         cursor = conn.execute(
-            "DELETE FROM context_nodes WHERE conversation_id = ? AND status = 'deleted'",
-            (normalized_conversation_id,),
+            """INSERT INTO context_blocks (
+                public_id, conversation_id, sequence, kind, api_role,
+                source_message_id, parent_public_id, provider_call_id,
+                tool_name, content, tool_calls_json, metadata_json, token_estimate
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                str(public_id).strip(),
+                int(conversation_id),
+                int(sequence),
+                str(kind).strip(),
+                str(api_role).strip(),
+                int(source_message_id) if source_message_id is not None else None,
+                str(parent_public_id).strip() if parent_public_id else None,
+                str(provider_call_id).strip() if provider_call_id else None,
+                str(tool_name).strip() if tool_name else None,
+                str(content or ""),
+                str(tool_calls_json) if tool_calls_json else None,
+                str(metadata_json) if metadata_json else None,
+                max(0, int(token_estimate or 0)),
+            ),
         )
-    return int(cursor.rowcount or 0)
+        entry_id = int(cursor.lastrowid)
+        row = conn.execute("SELECT * FROM context_blocks WHERE id = ?", (entry_id,)).fetchone()
+        return _context_block_row_to_dict(row) or {}
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+def list_context_blocks(conversation_id: int, *, conn: sqlite3.Connection | None = None) -> list[dict]:
+    """Return all active context blocks in sequence order."""
+    def _do(conn):
+        rows = conn.execute(
+            "SELECT * FROM context_blocks WHERE conversation_id = ? ORDER BY sequence ASC, id ASC",
+            (int(conversation_id),),
+        ).fetchall()
+        return [_context_block_row_to_dict(r) for r in rows if _context_block_row_to_dict(r)]
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+def get_context_block_by_public_id(
+    public_id: str, conversation_id: int | None = None, *, conn: sqlite3.Connection | None = None
+) -> dict | None:
+    """Resolve a public ID to its block row, optionally scoped to a conversation."""
+    def _do(conn):
+        pid = str(public_id or "").strip()
+        if not pid:
+            return None
+        if conversation_id is not None:
+            row = conn.execute(
+                "SELECT * FROM context_blocks WHERE public_id = ? AND conversation_id = ?",
+                (pid, int(conversation_id)),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM context_blocks WHERE public_id = ?", (pid,)
+            ).fetchone()
+        return _context_block_row_to_dict(row)
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+def get_context_blocks_by_public_ids(
+    public_ids: list[str], conversation_id: int, *, conn: sqlite3.Connection | None = None
+) -> dict[str, dict]:
+    """Resolve multiple public IDs; returns {public_id: block_dict} for found blocks."""
+    def _do(conn):
+        if not public_ids:
+            return {}
+        placeholders = ",".join("?" for _ in public_ids)
+        params = [int(conversation_id)] + [str(pid).strip() for pid in public_ids]
+        rows = conn.execute(
+            f"SELECT * FROM context_blocks WHERE conversation_id = ? AND public_id IN ({placeholders})",
+            params,
+        ).fetchall()
+        result = {}
+        for r in rows:
+            d = _context_block_row_to_dict(r)
+            if d:
+                result[d["public_id"]] = d
+        return result
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+def count_context_blocks(conversation_id: int, *, conn: sqlite3.Connection | None = None) -> int:
+    """Return the total number of active blocks for a conversation."""
+    def _do(conn):
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM context_blocks WHERE conversation_id = ?",
+            (int(conversation_id),),
+        ).fetchone()
+        return int(row["cnt"]) if row else 0
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+def delete_context_blocks(
+    public_ids: list[str], conversation_id: int, *, conn: sqlite3.Connection | None = None
+) -> int:
+    """Hard-delete context blocks by public_id, scoped to conversation. Returns count."""
+    def _do(conn):
+        if not public_ids:
+            return 0
+        placeholders = ",".join("?" for _ in public_ids)
+        params = [int(conversation_id)] + [str(pid).strip() for pid in public_ids]
+        cursor = conn.execute(
+            f"DELETE FROM context_blocks WHERE conversation_id = ? AND public_id IN ({placeholders})",
+            params,
+        )
+        return cursor.rowcount
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+def delete_all_context_blocks(conversation_id: int, *, conn: sqlite3.Connection | None = None) -> int:
+    """Delete all context blocks for a conversation. Used during compaction."""
+    def _do(conn):
+        cursor = conn.execute(
+            "DELETE FROM context_blocks WHERE conversation_id = ?", (int(conversation_id),)
+        )
+        return cursor.rowcount
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+def insert_context_mutation(
+    conversation_id: int,
+    operation: str,
+    requested_ids: list[str],
+    resolved_ids: list[str],
+    *,
+    removed_tokens: int = 0,
+    replacement_id: str | None = None,
+    content_hashes: list[str] | None = None,
+    actor: str = "model",
+    conn: sqlite3.Connection | None = None,
+) -> int:
+    """Write an audit record for a purge or compaction operation. Returns mutation id."""
+    import json as _json
+
+    def _do(conn):
+        cursor = conn.execute(
+            """INSERT INTO context_mutations (
+                conversation_id, operation, requested_ids_json, resolved_ids_json,
+                removed_tokens, replacement_id, content_hashes_json, actor
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                int(conversation_id),
+                str(operation).strip(),
+                _json.dumps([str(pid).strip() for pid in requested_ids]),
+                _json.dumps([str(pid).strip() for pid in resolved_ids]),
+                max(0, int(removed_tokens or 0)),
+                str(replacement_id).strip() if replacement_id else None,
+                _json.dumps(list(content_hashes or [])),
+                str(actor).strip(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+# ---------------------------------------------------------------------------
+# Purge — dependency closure and transactional removal (Phase 4)
+# ---------------------------------------------------------------------------
+
+def resolve_purge_dependency_closure(
+    public_ids: list[str],
+    conversation_id: int,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> tuple[list[str], list[str]]:
+    """Resolve requested IDs and expand to a provider-safe dependency closure.
+
+    Rules (per AI Memory and Context Management doc Section 5, Phase 4):
+    - Unknown or invalid IDs fail the whole call.
+    - A tool_call and all its tool_result children form an atomic group.
+    - A tool_result cannot survive without its parent tool_call.
+    - Cross-conversation IDs are rejected.
+
+    Returns (resolved_ids, errors). An empty errors list means success.
+    Resolved IDs are returned in sequence order.
+    """
+    from core.context_memory import validate_public_id, classify_public_id, ContextBlockKind
+
+    if not public_ids:
+        return [], ["No public IDs provided."]
+
+    # Validate format
+    invalid = [pid for pid in public_ids if not validate_public_id(str(pid))]
+    if invalid:
+        return [], [f"Invalid public ID format: {', '.join(invalid)}"]
+
+    def _do(conn):
+        # Resolve against active conversation
+        placeholders = ",".join("?" for _ in public_ids)
+        params = [int(conversation_id)] + [str(pid).strip() for pid in public_ids]
+        rows = conn.execute(
+            f"SELECT public_id, kind, parent_public_id, sequence "
+            f"FROM context_blocks WHERE conversation_id = ? AND public_id IN ({placeholders})",
+            params,
+        ).fetchall()
+
+        found = {row["public_id"]: dict(row) for row in rows}
+        missing = [pid for pid in public_ids if str(pid) not in found]
+        if missing:
+            return [], [f"IDs not found in this conversation: {', '.join(missing)}"]
+
+        # Build dependency closure
+        closure: set[str] = set(public_ids)
+        changed = True
+        while changed:
+            changed = False
+            # Get current closure blocks
+            closure_ids = list(closure)
+            if not closure_ids:
+                break
+            cp = ",".join("?" for _ in closure_ids)
+            cparams = [int(conversation_id)] + closure_ids
+            closure_rows = conn.execute(
+                f"SELECT public_id, kind, parent_public_id "
+                f"FROM context_blocks WHERE conversation_id = ? AND public_id IN ({cp})",
+                cparams,
+            ).fetchall()
+
+            for row in closure_rows:
+                pid = row["public_id"]
+                kind = row["kind"]
+                parent = row["parent_public_id"]
+
+                if kind == ContextBlockKind.TOOL_CALL.value:
+                    # Include all tool_result children
+                    children = conn.execute(
+                        "SELECT public_id FROM context_blocks "
+                        "WHERE conversation_id = ? AND parent_public_id = ?",
+                        (int(conversation_id), pid),
+                    ).fetchall()
+                    for child in children:
+                        if child["public_id"] not in closure:
+                            closure.add(child["public_id"])
+                            changed = True
+
+                elif kind == ContextBlockKind.TOOL_RESULT.value:
+                    # Include parent tool_call
+                    if parent and parent not in closure:
+                        # Verify parent exists in this conversation
+                        parent_row = conn.execute(
+                            "SELECT 1 FROM context_blocks "
+                            "WHERE conversation_id = ? AND public_id = ?",
+                            (int(conversation_id), parent),
+                        ).fetchone()
+                        if parent_row:
+                            closure.add(parent)
+                            changed = True
+
+        # Return resolved IDs in sequence order
+        resolved_placeholders = ",".join("?" for _ in closure)
+        resolved_params = [int(conversation_id)] + list(closure)
+        ordered_rows = conn.execute(
+            f"SELECT public_id FROM context_blocks "
+            f"WHERE conversation_id = ? AND public_id IN ({resolved_placeholders}) "
+            f"ORDER BY sequence ASC, id ASC",
+            resolved_params,
+        ).fetchall()
+        return [row["public_id"] for row in ordered_rows], []
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+def execute_purge_transaction(
+    conversation_id: int,
+    resolved_ids: list[str],
+    *,
+    summary: str | None = None,
+    actor: str = "model",
+    conn: sqlite3.Connection | None = None,
+) -> dict:
+    """Execute a purge transaction: delete blocks, hide messages, write audit, optional summary.
+
+    Performs all operations in one transaction. Returns a result dict with:
+    - requested_ids: original requested IDs (same as resolved after closure)
+    - resolved_ids: all IDs actually removed
+    - removed_tokens: total token estimate of removed blocks
+    - replacement_id: public_id of the summary block, if summary was provided
+    - cache_reset_required: always True (mutation breaks prefix cache)
+    """
+    import hashlib as _hashlib
+    import json as _json
+
+    if not resolved_ids:
+        return {
+            "requested_ids": [],
+            "resolved_ids": [],
+            "removed_tokens": 0,
+            "replacement_id": None,
+            "cache_reset_required": True,
+            "error": "No resolved IDs to purge.",
+        }
+
+    def _do(conn):
+        # 1. Collect block info before deletion
+        placeholders = ",".join("?" for _ in resolved_ids)
+        params = [int(conversation_id)] + [str(pid).strip() for pid in resolved_ids]
+
+        blocks = conn.execute(
+            f"SELECT public_id, source_message_id, token_estimate, content "
+            f"FROM context_blocks WHERE conversation_id = ? AND public_id IN ({placeholders})",
+            params,
+        ).fetchall()
+
+        if not blocks:
+            return {
+                "requested_ids": resolved_ids,
+                "resolved_ids": [],
+                "removed_tokens": 0,
+                "replacement_id": None,
+                "cache_reset_required": True,
+                "error": "No matching blocks found to purge.",
+            }
+
+        removed_public_ids = [b["public_id"] for b in blocks]
+        removed_tokens = sum(int(b["token_estimate"] or 0) for b in blocks)
+        content_hashes = [
+            _hashlib.sha256(str(b["content"] or "").encode("utf-8")).hexdigest()
+            for b in blocks
+        ]
+
+        # 2. Soft-delete only transcript rows that are fully represented by
+        # removed blocks.  A parallel tool-call response has one transcript
+        # row but multiple context blocks; deleting one call/result group must
+        # not make its still-active siblings disappear from the UI.
+        candidate_source_message_ids = {
+            int(b["source_message_id"])
+            for b in blocks
+            if b["source_message_id"] is not None
+        }
+        source_message_ids: list[int] = []
+        for message_id in candidate_source_message_ids:
+            remaining = conn.execute(
+                "SELECT 1 FROM context_blocks "
+                "WHERE conversation_id = ? AND source_message_id = ? "
+                f"AND public_id NOT IN ({placeholders}) LIMIT 1",
+                [int(conversation_id), message_id] + [str(pid).strip() for pid in resolved_ids],
+            ).fetchone()
+            if remaining is None:
+                source_message_ids.append(message_id)
+        if source_message_ids:
+            sm_placeholders = ",".join("?" for _ in source_message_ids)
+            conn.execute(
+                f"UPDATE messages SET deleted_at = datetime('now') "
+                f"WHERE conversation_id = ? AND id IN ({sm_placeholders})",
+                [int(conversation_id)] + source_message_ids,
+            )
+
+        # 3. Hard-delete context blocks
+        conn.execute(
+            f"DELETE FROM context_blocks WHERE conversation_id = ? AND public_id IN ({placeholders})",
+            params,
+        )
+
+        # 4. Write audit record
+        insert_context_mutation(
+            conversation_id=int(conversation_id),
+            operation="purge",
+            requested_ids=[str(pid).strip() for pid in resolved_ids],
+            resolved_ids=removed_public_ids,
+            removed_tokens=removed_tokens,
+            content_hashes=content_hashes,
+            actor=str(actor).strip(),
+            conn=conn,
+        )
+
+        # 5. Optional summary block
+        replacement_id = None
+        summary_text = str(summary or "").strip()
+        if summary_text:
+            seq = allocate_context_block_sequence(conversation_id, conn=conn)
+            import uuid
+            block_id = str(uuid.uuid4())[:8]
+            replacement_id = f"summary_{block_id}"
+            insert_context_block(
+                public_id=replacement_id,
+                conversation_id=conversation_id,
+                sequence=seq,
+                kind="summary",
+                api_role="assistant",
+                content=summary_text,
+                token_estimate=_estimate_text_tokens(summary_text),
+                conn=conn,
+            )
+
+        return {
+            "requested_ids": [str(pid).strip() for pid in resolved_ids],
+            "resolved_ids": removed_public_ids,
+            "removed_tokens": removed_tokens,
+            "replacement_id": replacement_id,
+            "cache_reset_required": True,
+        }
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+def get_context_blocks_token_total(conversation_id: int, *, conn: sqlite3.Connection | None = None) -> int:
+    """Return the sum of token_estimate across all blocks for a conversation."""
+    def _do(conn):
+        row = conn.execute(
+            "SELECT COALESCE(SUM(token_estimate), 0) as total FROM context_blocks WHERE conversation_id = ?",
+            (int(conversation_id),),
+        ).fetchone()
+        return int(row["total"]) if row else 0
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+# ---------------------------------------------------------------------------
+# Compaction lock — prevents concurrent compaction on the same conversation
+# ---------------------------------------------------------------------------
+
+import threading as _threading
+
+_compaction_locks: dict[int, _threading.Lock] = {}
+_compaction_locks_lock = _threading.Lock()
+
+
+def acquire_compaction_lock(conversation_id: int, *, timeout: float = 10.0) -> bool:
+    """Acquire the per-conversation compaction lock.
+
+    Returns True if the lock was acquired, False if it timed out
+    (another compaction is in progress).
+    """
+    cid = int(conversation_id)
+    with _compaction_locks_lock:
+        lock = _compaction_locks.get(cid)
+        if lock is None:
+            lock = _threading.Lock()
+            _compaction_locks[cid] = lock
+
+    acquired = lock.acquire(timeout=timeout)
+    return acquired
+
+
+def release_compaction_lock(conversation_id: int) -> None:
+    """Release the per-conversation compaction lock."""
+    cid = int(conversation_id)
+    with _compaction_locks_lock:
+        lock = _compaction_locks.get(cid)
+        if lock is None:
+            return
+    try:
+        lock.release()
+    except RuntimeError:
+        pass  # Lock was not held
+
+
+# ---------------------------------------------------------------------------
+# Compaction — full context reset (Phase 5)
+# ---------------------------------------------------------------------------
+
+def execute_compact_context_transaction(
+    conversation_id: int,
+    compacted_state_json: str,
+    resume_instruction: str,
+    *,
+    actor: str = "model",
+    conn: sqlite3.Connection | None = None,
+) -> dict:
+    """Execute a compaction transaction: delete all blocks, insert state/resume blocks, write audit.
+
+    Performs all operations in one transaction. Returns a result dict with:
+    - blocks_removed: count of context_blocks removed
+    - messages_hidden: count of transcript messages soft-deleted
+    - removed_tokens: total token estimate of removed blocks
+    - state_public_id: public_id of the new compacted_state block
+    - resume_public_id: public_id of the new resume_instruction block
+    - cache_reset_required: always True
+    """
+    import hashlib as _hashlib
+    import json as _json
+    import uuid as _uuid
+
+    def _do(conn):
+        # 1. Collect all block info before deletion
+        all_blocks = conn.execute(
+            "SELECT id, public_id, source_message_id, token_estimate, content "
+            "FROM context_blocks WHERE conversation_id = ? ORDER BY sequence, id",
+            (int(conversation_id),),
+        ).fetchall()
+
+        blocks_removed = len(all_blocks)
+        removed_tokens = sum(int(b["token_estimate"] or 0) for b in all_blocks)
+        resolved_ids = [b["public_id"] for b in all_blocks]
+        content_hashes = [
+            _hashlib.sha256(str(b["content"] or "").encode("utf-8")).hexdigest()
+            for b in all_blocks
+        ]
+
+        # 2. Soft-delete all non-deleted message transcript rows
+        source_message_ids = [
+            int(b["source_message_id"])
+            for b in all_blocks
+            if b["source_message_id"] is not None
+        ]
+        messages_hidden = 0
+        if source_message_ids:
+            sm_placeholders = ",".join("?" for _ in source_message_ids)
+            cursor = conn.execute(
+                f"UPDATE messages SET deleted_at = datetime('now') "
+                f"WHERE conversation_id = ? AND id IN ({sm_placeholders}) AND deleted_at IS NULL",
+                [int(conversation_id)] + source_message_ids,
+            )
+            messages_hidden = cursor.rowcount
+
+        # 3. Hard-delete all context blocks
+        conn.execute(
+            "DELETE FROM context_blocks WHERE conversation_id = ?",
+            (int(conversation_id),),
+        )
+
+        # 4. Insert compacted_state block
+        block_id = str(_uuid.uuid4())[:8]
+        state_public_id = f"state_{block_id}"
+        insert_context_block(
+            public_id=state_public_id,
+            conversation_id=int(conversation_id),
+            sequence=1,
+            kind="compacted_state",
+            api_role="assistant",
+            content=compacted_state_json,
+            token_estimate=_estimate_text_tokens(compacted_state_json),
+            conn=conn,
+        )
+
+        # 5. Insert resume_instruction block
+        resume_public_id = f"resume_{block_id}"
+        insert_context_block(
+            public_id=resume_public_id,
+            conversation_id=int(conversation_id),
+            sequence=2,
+            kind="resume_instruction",
+            api_role="user",
+            content=resume_instruction,
+            token_estimate=_estimate_text_tokens(resume_instruction),
+            conn=conn,
+        )
+
+        # 6. Write audit record
+        insert_context_mutation(
+            conversation_id=int(conversation_id),
+            operation="compact_context",
+            requested_ids=resolved_ids,
+            resolved_ids=resolved_ids,
+            removed_tokens=removed_tokens,
+            replacement_id=state_public_id,
+            content_hashes=content_hashes,
+            actor=str(actor).strip(),
+            conn=conn,
+        )
+
+        return {
+            "blocks_removed": blocks_removed,
+            "messages_hidden": messages_hidden,
+            "removed_tokens": removed_tokens,
+            "state_public_id": state_public_id,
+            "resume_public_id": resume_public_id,
+            "cache_reset_required": True,
+        }
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+# ---------------------------------------------------------------------------
+# Backfill Migration — populate context_blocks from legacy messages
+# ---------------------------------------------------------------------------
+
+def backfill_context_blocks(conversation_id: int, *, conn: sqlite3.Connection | None = None) -> dict:
+    """Migrate legacy messages for one conversation into context_blocks.
+
+    Returns: {"blocks_created": int, "errors": list[str]}
+    The migration is idempotent — it skips conversations that already have
+    context_blocks entries.
+    """
+    import json as _json
+
+    def _do(conn):
+        existing = conn.execute(
+            "SELECT COUNT(*) as cnt FROM context_blocks WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if existing and existing["cnt"] > 0:
+            return {"blocks_created": 0, "errors": []}
+
+        messages = conn.execute(
+            """SELECT id, position, role, content, metadata, tool_calls, tool_call_id, deleted_at
+               FROM messages
+               WHERE conversation_id = ? AND deleted_at IS NULL
+               ORDER BY position ASC, id ASC""",
+            (conversation_id,),
+        ).fetchall()
+
+        blocks_created = 0
+        errors = []
+
+        for msg in messages:
+            msg_id = int(msg["id"])
+            role = str(msg["role"] or "").strip()
+            content = str(msg["content"] or "")
+            tool_calls_raw = msg["tool_calls"]
+            tool_call_id = str(msg["tool_call_id"] or "").strip() if msg["tool_call_id"] else None
+
+            # Determine kind and api_role
+            if role == "user":
+                kind = "message"
+                api_role = "user"
+            elif role == "summary":
+                kind = "summary"
+                api_role = "assistant"
+            elif role == "tool":
+                kind = "tool_result"
+                api_role = "tool"
+            elif role == "assistant":
+                if tool_calls_raw:
+                    kind = "tool_call"
+                else:
+                    kind = "message"
+                api_role = "assistant"
+            else:
+                continue  # skip unknown roles
+
+            seq = allocate_context_block_sequence(conversation_id, conn=conn)
+            public_id = _make_block_public_id(kind, msg_id, msg)
+
+            if kind == "tool_call":
+                # One block per tool call in the array
+                try:
+                    tc_list = _json.loads(tool_calls_raw) if isinstance(tool_calls_raw, str) else (tool_calls_raw or [])
+                except (_json.JSONDecodeError, TypeError):
+                    tc_list = []
+
+                if not tc_list:
+                    # Fallback: create a single tool_call block
+                    insert_context_block(
+                        public_id=public_id, conversation_id=conversation_id,
+                        sequence=seq, kind=kind, api_role=api_role,
+                        source_message_id=msg_id, content=content,
+                        tool_calls_json=tool_calls_raw,
+                        token_estimate=_estimate_text_tokens(content),
+                        conn=conn,
+                    )
+                    blocks_created += 1
+                else:
+                    for idx, tc in enumerate(tc_list):
+                        tc_pid = f"tool_call_{msg_id}_{idx}"
+                        tc_seq = seq + idx if idx == 0 else allocate_context_block_sequence(conversation_id, conn=conn)
+                        tc_provider_id = tc.get("id", "") if isinstance(tc, dict) else ""
+                        tc_name = ""
+                        if isinstance(tc, dict):
+                            fn = tc.get("function", {})
+                            if isinstance(fn, dict):
+                                tc_name = fn.get("name", "")
+                        insert_context_block(
+                            public_id=tc_pid, conversation_id=conversation_id,
+                            sequence=tc_seq, kind="tool_call", api_role="assistant",
+                            source_message_id=msg_id,
+                            provider_call_id=tc_provider_id if tc_provider_id else None,
+                            tool_name=tc_name if tc_name else None,
+                            content="",
+                            tool_calls_json=_json.dumps([tc]) if tc else None,
+                            token_estimate=_estimate_text_tokens(_json.dumps(tc)),
+                            conn=conn,
+                        )
+                        blocks_created += 1
+
+            elif kind == "tool_result":
+                # Find parent tool_call block via tool_call_id
+                parent_pid = None
+                if tool_call_id:
+                    parent_row = conn.execute(
+                        "SELECT public_id FROM context_blocks WHERE provider_call_id = ? AND conversation_id = ?",
+                        (tool_call_id, conversation_id),
+                    ).fetchone()
+                    if parent_row:
+                        parent_pid = parent_row["public_id"]
+
+                insert_context_block(
+                    public_id=public_id, conversation_id=conversation_id,
+                    sequence=seq, kind=kind, api_role=api_role,
+                    source_message_id=msg_id,
+                    parent_public_id=parent_pid,
+                    provider_call_id=tool_call_id,
+                    content=content,
+                    metadata_json=msg["metadata"],
+                    token_estimate=_estimate_text_tokens(content),
+                    conn=conn,
+                )
+                blocks_created += 1
+
+            else:
+                # Plain message or summary
+                insert_context_block(
+                    public_id=public_id, conversation_id=conversation_id,
+                    sequence=seq, kind=kind, api_role=api_role,
+                    source_message_id=msg_id,
+                    content=content,
+                    token_estimate=_estimate_text_tokens(content),
+                    conn=conn,
+                )
+                blocks_created += 1
+
+        return {"blocks_created": blocks_created, "errors": errors}
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+def backfill_all_conversations(*, conn: sqlite3.Connection | None = None) -> dict:
+    """Run backfill for every conversation without existing context_blocks.
+
+    Returns: {"conversations_processed": int, "total_blocks_created": int, "errors": list[str]}
+    """
+    all_errors = []
+    total_blocks = 0
+    processed = 0
+
+    def _do(conn):
+        nonlocal all_errors, total_blocks, processed
+        convs = conn.execute("SELECT id FROM conversations ORDER BY id").fetchall()
+        for row in convs:
+            conv_id = int(row["id"])
+            result = backfill_context_blocks(conv_id, conn=conn)
+            if result["errors"]:
+                all_errors.extend(result["errors"])
+            total_blocks += result["blocks_created"]
+            processed += 1
+
+    if conn is not None:
+        _do(conn)
+    else:
+        with get_db() as conn:
+            _do(conn)
+
+    return {
+        "conversations_processed": processed,
+        "total_blocks_created": total_blocks,
+        "errors": all_errors,
+    }
+
+
+def incremental_backfill_context_blocks(
+    conversation_id: int,
+    message_ids: list[int],
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict:
+    """Create context_blocks for specific new messages in an active conversation.
+
+    Unlike `backfill_context_blocks`, this does not skip conversations that
+    already have context_blocks entries. It only processes the requested
+    message_ids that don't already have corresponding blocks.
+
+    Returns: {\"blocks_created\": int, \"errors\": list[str]}
+    """
+    import json as _json
+
+    if not message_ids:
+        return {"blocks_created": 0, "errors": []}
+
+    def _do(conn):
+        placeholders = ",".join("?" for _ in message_ids)
+        params = [int(conversation_id)] + [int(mid) for mid in message_ids]
+        messages = conn.execute(
+            f"""SELECT id, position, role, content, metadata, tool_calls, tool_call_id, deleted_at
+                FROM messages
+                WHERE conversation_id = ? AND id IN ({placeholders}) AND deleted_at IS NULL
+                ORDER BY position ASC, id ASC""",
+            params,
+        ).fetchall()
+
+        if not messages:
+            return {"blocks_created": 0, "errors": []}
+
+        # Skip messages that already have context_blocks
+        msg_ids_with_blocks = {
+            row["source_message_id"]
+            for row in conn.execute(
+                f"SELECT source_message_id FROM context_blocks WHERE conversation_id = ? AND source_message_id IN ({placeholders})",
+                params,
+            ).fetchall()
+            if row["source_message_id"] is not None
+        }
+
+        blocks_created = 0
+        errors = []
+
+        for msg in messages:
+            msg_id = int(msg["id"])
+            if msg_id in msg_ids_with_blocks:
+                continue
+
+            role = str(msg["role"] or "").strip()
+            content = str(msg["content"] or "")
+            tool_calls_raw = msg["tool_calls"]
+            tool_call_id = str(msg["tool_call_id"] or "").strip() if msg["tool_call_id"] else None
+
+            # Determine kind and api_role
+            if role == "user":
+                kind = "message"
+                api_role = "user"
+            elif role == "summary":
+                kind = "summary"
+                api_role = "assistant"
+            elif role == "tool":
+                kind = "tool_result"
+                api_role = "tool"
+            elif role == "assistant":
+                kind = "tool_call" if tool_calls_raw else "message"
+                api_role = "assistant"
+            else:
+                continue
+
+            seq = allocate_context_block_sequence(conversation_id, conn=conn)
+            public_id = _make_block_public_id(kind, msg_id, msg)
+
+            if kind == "tool_call":
+                try:
+                    tc_list = _json.loads(tool_calls_raw) if isinstance(tool_calls_raw, str) else (tool_calls_raw or [])
+                except (_json.JSONDecodeError, TypeError):
+                    tc_list = []
+
+                if not tc_list:
+                    insert_context_block(
+                        public_id=public_id, conversation_id=conversation_id,
+                        sequence=seq, kind=kind, api_role=api_role,
+                        source_message_id=msg_id, content=content,
+                        tool_calls_json=tool_calls_raw,
+                        token_estimate=_estimate_text_tokens(content),
+                        conn=conn,
+                    )
+                    blocks_created += 1
+                else:
+                    for idx, tc in enumerate(tc_list):
+                        tc_pid = f"tool_call_{msg_id}_{idx}"
+                        tc_seq = seq + idx if idx == 0 else allocate_context_block_sequence(conversation_id, conn=conn)
+                        tc_provider_id = tc.get("id", "") if isinstance(tc, dict) else ""
+                        tc_name = ""
+                        if isinstance(tc, dict):
+                            fn = tc.get("function", {})
+                            if isinstance(fn, dict):
+                                tc_name = fn.get("name", "")
+                        insert_context_block(
+                            public_id=tc_pid, conversation_id=conversation_id,
+                            sequence=tc_seq, kind="tool_call", api_role="assistant",
+                            source_message_id=msg_id,
+                            provider_call_id=tc_provider_id if tc_provider_id else None,
+                            tool_name=tc_name if tc_name else None,
+                            content="",
+                            tool_calls_json=_json.dumps([tc]) if tc else None,
+                            token_estimate=_estimate_text_tokens(_json.dumps(tc)),
+                            conn=conn,
+                        )
+                        blocks_created += 1
+
+            elif kind == "tool_result":
+                parent_pid = None
+                if tool_call_id:
+                    parent_row = conn.execute(
+                        "SELECT public_id FROM context_blocks WHERE provider_call_id = ? AND conversation_id = ?",
+                        (tool_call_id, conversation_id),
+                    ).fetchone()
+                    if parent_row:
+                        parent_pid = parent_row["public_id"]
+
+                insert_context_block(
+                    public_id=public_id, conversation_id=conversation_id,
+                    sequence=seq, kind=kind, api_role=api_role,
+                    source_message_id=msg_id,
+                    parent_public_id=parent_pid,
+                    provider_call_id=tool_call_id,
+                    content=content,
+                    metadata_json=msg["metadata"],
+                    token_estimate=_estimate_text_tokens(content),
+                    conn=conn,
+                )
+                blocks_created += 1
+
+            else:
+                insert_context_block(
+                    public_id=public_id, conversation_id=conversation_id,
+                    sequence=seq, kind=kind, api_role=api_role,
+                    source_message_id=msg_id,
+                    content=content,
+                    token_estimate=_estimate_text_tokens(content),
+                    conn=conn,
+                )
+                blocks_created += 1
+
+        return {"blocks_created": blocks_created, "errors": errors}
+
+    if conn is not None:
+        return _do(conn)
+    with get_db() as conn:
+        return _do(conn)
+
+
+def _make_block_public_id(kind: str, msg_id: int, msg_row) -> str:
+    """Build a public ID for a legacy message during backfill."""
+    if kind in ("message", "summary"):
+        return f"msg_{msg_id}"
+    if kind == "tool_call":
+        return f"tool_call_{msg_id}"
+    if kind == "tool_result":
+        return f"tool_res_{msg_id}"
+    return f"block_{msg_id}"
+
+
+def _estimate_text_tokens(text: str) -> int:
+    """Rough token estimate (4 chars ≈ 1 token)."""
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
 
 
 def _normalize_user_profile_value(value, max_length: int = 500) -> str:
     return " ".join(str(value or "").strip().split())[:max_length]
+
 
 
 def _persona_row_to_dict(row) -> dict | None:
@@ -5753,21 +6335,6 @@ def get_reasoning_auto_collapse(settings: dict | None = None) -> bool:
     source = settings if settings is not None else get_app_settings()
     raw_value = source.get("reasoning_auto_collapse")
     return str(raw_value).strip().lower() in {"1", "true", "yes", "on"} if raw_value is not None else False
-
-
-def get_pruning_enabled(settings: dict | None = None) -> bool:
-    source = settings if settings is not None else get_app_settings()
-    return _get_bool_setting_value(source, "pruning_enabled", False)
-
-
-def get_pruning_aggressive_keep_count(settings: dict | None = None) -> int:
-    source = settings if settings is not None else get_app_settings()
-    return _get_int_setting_value(source, "pruning_aggressive_keep_count", 20, 5, 100)
-
-
-def get_pruning_failed_attempts_threshold(settings: dict | None = None) -> int:
-    source = settings if settings is not None else get_app_settings()
-    return _get_int_setting_value(source, "pruning_failed_attempts_threshold", 3, 1, 20)
 
 
 def get_next_message_position(conn: sqlite3.Connection, conversation_id: int) -> int:

@@ -114,6 +114,7 @@ const summaryFocusInput = document.getElementById("summary-focus-input");
 const summaryDetailSelect = document.getElementById("summary-detail-select");
 const summaryDetailOptionGrid = document.getElementById("summary-detail-options");
 const summarySubmitBtn = document.getElementById("summary-submit-btn");
+const compactContextBtn = document.getElementById("compact-context-btn");
 const summaryProgress = document.getElementById("summary-progress");
 const summaryProgressLabel = document.getElementById("summary-progress-label");
 const summaryProgressValue = document.getElementById("summary-progress-value");
@@ -546,6 +547,9 @@ summaryClose?.addEventListener("click", closeSummaryPanel);
 summaryOverlay?.addEventListener("click", closeSummaryPanel);
 summarySubmitBtn?.addEventListener("click", () => {
   void runConversationSummary({ triggerButton: summarySubmitBtn, closePanel: false });
+});
+compactContextBtn?.addEventListener("click", () => {
+  void compactConversationContext({ triggerButton: compactContextBtn });
 });
 
 window.addEventListener("resize", () => {

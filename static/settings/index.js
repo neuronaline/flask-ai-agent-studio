@@ -290,6 +290,9 @@
   const subAgentRetryDelaySecondsEl = document.getElementById("sub-agent-retry-delay-seconds-input");
   const subAgentMaxParallelToolsEl = document.getElementById("sub-agent-max-parallel-tools-input");
   const webCacheTtlHoursEl = document.getElementById("web-cache-ttl-hours-input");
+  const brightDataSerpLanguageEl = document.getElementById("bright-data-serp-language-select");
+  const brightDataSerpCountryEl = document.getElementById("bright-data-serp-country-input");
+  const brightDataSerpTimeoutSecondsEl = document.getElementById("bright-data-serp-timeout-seconds-input");
   const summaryModeEl = document.getElementById("summary-mode-select");
   const summaryDetailLevelEl = document.getElementById("summary-detail-level-select");
   const summaryTriggerEl = document.getElementById("summary-trigger-input");
@@ -363,6 +366,9 @@
     subAgentRetryDelaySecondsEl?.addEventListener("input", getMarkDirty());
     subAgentMaxParallelToolsEl?.addEventListener("input", getMarkDirty());
     webCacheTtlHoursEl?.addEventListener("input", getMarkDirty());
+    brightDataSerpLanguageEl?.addEventListener("change", getMarkDirty());
+    brightDataSerpCountryEl?.addEventListener("input", getMarkDirty());
+    brightDataSerpTimeoutSecondsEl?.addEventListener("input", getMarkDirty());
     summaryModeEl?.addEventListener("change", getMarkDirty());
     summaryDetailLevelEl?.addEventListener("change", getMarkDirty());
     summaryTriggerEl?.addEventListener("input", getMarkDirty());
@@ -386,11 +392,6 @@
     canvasPromptMaxTokensEl?.addEventListener("input", getMarkDirty());
     canvasPromptMaxCharsEl?.addEventListener("input", getMarkDirty());
     reasoningAutoCollapseEl?.addEventListener("change", getMarkDirty());
-
-    // Pruning controls
-    document.getElementById("pruning-enabled-toggle")?.addEventListener("change", getMarkDirty());
-    document.getElementById("pruning-aggressive-keep-count-input")?.addEventListener("input", getMarkDirty());
-    document.getElementById("pruning-failed-attempts-threshold-input")?.addEventListener("input", getMarkDirty());
 
     saveButtons.forEach((button) => {
       button.addEventListener("click", () => void getSaveAllSettings()());
@@ -482,6 +483,9 @@
   const subAgentRetryDelaySecondsEl = document.getElementById("sub-agent-retry-delay-seconds-input");
   const subAgentMaxParallelToolsEl = document.getElementById("sub-agent-max-parallel-tools-input");
   const webCacheTtlHoursEl = document.getElementById("web-cache-ttl-hours-input");
+  const brightDataSerpLanguageEl = document.getElementById("bright-data-serp-language-select");
+  const brightDataSerpCountryEl = document.getElementById("bright-data-serp-country-input");
+  const brightDataSerpTimeoutSecondsEl = document.getElementById("bright-data-serp-timeout-seconds-input");
   const openrouterPromptCacheEnabledEl = document.getElementById("openrouter-prompt-cache-enabled-toggle");
   const openrouterAnthropicCacheTtlEls = document.querySelectorAll("input[name='openrouter-anthropic-cache-ttl']");
   const openrouterAnthropicCacheTtlRowEl = document.getElementById("openrouter-anthropic-cache-ttl-row");
@@ -574,6 +578,9 @@
     if (subAgentRetryDelaySecondsEl) subAgentRetryDelaySecondsEl.value = String(appSettings.sub_agent_retry_delay_seconds ?? 5);
     if (subAgentMaxParallelToolsEl) subAgentMaxParallelToolsEl.value = String(appSettings.sub_agent_max_parallel_tools ?? appSettings.max_parallel_tools ?? 2);
     if (webCacheTtlHoursEl) webCacheTtlHoursEl.value = String(appSettings.web_cache_ttl_hours ?? 24);
+    if (brightDataSerpLanguageEl) brightDataSerpLanguageEl.value = appSettings.bright_data_serp_language || "en";
+    if (brightDataSerpCountryEl) brightDataSerpCountryEl.value = String(appSettings.bright_data_serp_country || "US");
+    if (brightDataSerpTimeoutSecondsEl) brightDataSerpTimeoutSecondsEl.value = String(appSettings.bright_data_serp_timeout_seconds ?? 30);
     if (openrouterPromptCacheEnabledEl) openrouterPromptCacheEnabledEl.checked = Boolean(appSettings.openrouter_prompt_cache_enabled ?? true);
     const _cacheEnabled = Boolean(appSettings.openrouter_prompt_cache_enabled ?? true);
     if (openrouterAnthropicCacheTtlRowEl) openrouterAnthropicCacheTtlRowEl.hidden = !_cacheEnabled;
@@ -630,14 +637,6 @@
     if (ragQueryExpansionMaxVariantsEl) ragQueryExpansionMaxVariantsEl.value = String(appSettings.rag_query_expansion_max_variants ?? 2);
     if (fetchRawMaxTextCharsEl) fetchRawMaxTextCharsEl.value = String(appSettings.fetch_raw_max_text_chars ?? 24000);
     if (fetchSummaryMaxCharsEl) fetchSummaryMaxCharsEl.value = String(appSettings.fetch_summary_max_chars ?? 8000);
-
-    // Pruning
-    const pruningEnabledEl = document.getElementById("pruning-enabled-toggle");
-    const pruningAggressiveKeepCountEl = document.getElementById("pruning-aggressive-keep-count-input");
-    const pruningFailedAttemptsThresholdEl = document.getElementById("pruning-failed-attempts-threshold-input");
-    if (pruningEnabledEl) pruningEnabledEl.checked = Boolean(appSettings.pruning_enabled ?? false);
-    if (pruningAggressiveKeepCountEl) pruningAggressiveKeepCountEl.value = String(appSettings.pruning_aggressive_keep_count ?? 20);
-    if (pruningFailedAttemptsThresholdEl) pruningFailedAttemptsThresholdEl.value = String(appSettings.pruning_failed_attempts_threshold ?? 3);
 
     // Tool / RAG — delegate to modules
     window.__settingsTools?.applySelectedTools?.(appSettings.active_tools || []);
@@ -778,6 +777,9 @@
     appSettings.prompt_summary_max_tokens = data.prompt_summary_max_tokens ?? 12000;
     appSettings.prompt_rag_max_tokens = data.prompt_rag_max_tokens ?? 18000;
     appSettings.prompt_tool_trace_max_tokens = data.prompt_tool_trace_max_tokens ?? 9000;
+    appSettings.bright_data_serp_language = data.bright_data_serp_language || "en";
+    appSettings.bright_data_serp_country = data.bright_data_serp_country || "US";
+    appSettings.bright_data_serp_timeout_seconds = data.bright_data_serp_timeout_seconds ?? 30;
     appSettings.context_compaction_threshold = data.context_compaction_threshold ?? 0.85;
     appSettings.context_compaction_keep_recent_rounds = data.context_compaction_keep_recent_rounds ?? 2;
     appSettings.reasoning_auto_collapse = Boolean(data.reasoning_auto_collapse);
@@ -812,9 +814,6 @@
     appSettings.rag_auto_inject_source_types = Array.isArray(data.rag_auto_inject_source_types)
       ? data.rag_auto_inject_source_types
       : appSettings.rag_source_types;
-    appSettings.pruning_enabled = Boolean(data.pruning_enabled ?? false);
-    appSettings.pruning_aggressive_keep_count = data.pruning_aggressive_keep_count ?? 20;
-    appSettings.pruning_failed_attempts_threshold = data.pruning_failed_attempts_threshold ?? 3;
     if (data.features && typeof data.features === "object") {
       Object.assign(featureFlags, data.features);
     }
@@ -866,6 +865,9 @@
       sub_agent_retry_delay_seconds: readNumericSetting(subAgentRetryDelaySecondsEl, 5),
       sub_agent_max_parallel_tools: readNumericSetting(subAgentMaxParallelToolsEl, 2, { allowZero: false }),
       web_cache_ttl_hours: readNumericSetting(webCacheTtlHoursEl, 24),
+      bright_data_serp_language: brightDataSerpLanguageEl?.value || "en",
+      bright_data_serp_country: String(brightDataSerpCountryEl?.value || "US").trim().toUpperCase(),
+      bright_data_serp_timeout_seconds: readNumericSetting(brightDataSerpTimeoutSecondsEl, 30, { allowZero: false, min: 1, max: 120 }),
       openrouter_prompt_cache_enabled: Boolean(openrouterPromptCacheEnabledEl?.checked),
       openrouter_anthropic_cache_ttl: (() => { const r = [...openrouterAnthropicCacheTtlEls].find(el => el.checked); return r ? r.value : "5m"; })(),
       openrouter_http_referer: String(openrouterHttpRefererEl?.value || "").trim(),
@@ -923,10 +925,6 @@
       rag_context_size: ragContextSizeEl?.value || "medium",
       rag_source_types: isRagEnabledDraft ? (window.__settingsRag?.getSelectedRagSourceTypes?.() ?? []) : [],
       rag_auto_inject_source_types: isRagEnabledDraft ? (window.__settingsRag?.getSelectedRagAutoInjectSourceTypes?.() ?? []) : [],
-      // Pruning
-      pruning_enabled: Boolean(document.getElementById("pruning-enabled-toggle")?.checked ?? false),
-      pruning_aggressive_keep_count: readNumericSetting(document.getElementById("pruning-aggressive-keep-count-input"), 20, { allowZero: false, min: 5, max: 100 }),
-      pruning_failed_attempts_threshold: readNumericSetting(document.getElementById("pruning-failed-attempts-threshold-input"), 3, { allowZero: false, min: 1, max: 20 }),
       // Scratchpad
       scratchpad_sections: DEFAULT_SCRATCHPAD_SECTION_ORDER.reduce((acc, sectionId) => {
         const sectionContent = scratchpadSections[sectionId];

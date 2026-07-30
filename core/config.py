@@ -203,7 +203,6 @@ _WEB_CACHE_TTL_HOURS_MIN = 0
 _WEB_CACHE_TTL_HOURS_MAX = 168
 _CONVERSATION_MIN_MESSAGES = 3
 _CONVERSATION_MIN_MESSAGE_CHARS = 100
-_CONTEXT_NODE_COMPRESSION_MIN_CHARS = 500
 
 MAX_PARALLEL_TOOLS_MIN = _MAX_PARALLEL_TOOLS_MIN_
 MAX_PARALLEL_TOOLS_MAX = _MAX_PARALLEL_TOOLS_MAX_
@@ -238,8 +237,6 @@ CONVERSATION_MAX_MESSAGES = max(_CONVERSATION_MIN_MESSAGES, _parse_int_env("CONV
 CONVERSATION_MAX_MESSAGE_CHARS = max(_CONVERSATION_MIN_MESSAGE_CHARS, _parse_int_env("CONVERSATION_MAX_MESSAGE_CHARS", 500))
 CONVERSATION_TRUNCATION_KEEP_SYSTEM = _parse_bool_env("CONVERSATION_TRUNCATION_KEEP_SYSTEM", True)
 
-# Context Node compression threshold (chars) — payloads below this are kept intact
-CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS = max(_CONTEXT_NODE_COMPRESSION_MIN_CHARS, _parse_int_env("CONTEXT_NODE_COMPRESSION_THRESHOLD_CHARS", 3000))
 SEARCH_TOOL_QUERY_LIMIT_MIN = _SEARCH_QUERY_LIMIT_MIN
 SEARCH_TOOL_QUERY_LIMIT_MAX = _SEARCH_QUERY_LIMIT_MAX
 DEFAULT_SEARCH_TOOL_QUERY_LIMIT = 5
@@ -488,6 +485,9 @@ DEFAULT_SETTINGS = {
     "clarification_max_questions": str(CLARIFICATION_DEFAULT_MAX_QUESTIONS),
     "search_tool_query_limit": str(DEFAULT_SEARCH_TOOL_QUERY_LIMIT),
     "web_cache_ttl_hours": str(DEFAULT_WEB_CACHE_TTL_HOURS),
+    "bright_data_serp_language": "en",
+    "bright_data_serp_country": "US",
+    "bright_data_serp_timeout_seconds": "30",
     "activity_enabled": "true",
     "activity_retention_days": "30",
     "openrouter_prompt_cache_enabled": "true" if OPENROUTER_PROMPT_CACHE_DEFAULT_ENABLED else "false",
@@ -557,10 +557,6 @@ DEFAULT_SETTINGS = {
     "conversation_truncation_enabled": "true" if CONVERSATION_TRUNCATION_ENABLED else "false",
     "conversation_max_messages": str(CONVERSATION_MAX_MESSAGES),
     "conversation_max_message_chars": str(CONVERSATION_MAX_MESSAGE_CHARS),
-    # Pruning config
-    "pruning_enabled": "false",
-    "pruning_aggressive_keep_count": "20",
-    "pruning_failed_attempts_threshold": "3",
 }
 
 

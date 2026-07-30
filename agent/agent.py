@@ -10,7 +10,7 @@ import string
 import threading
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -3160,41 +3160,8 @@ def _run_ask_clarifying_question(tool_args: dict, runtime_state: dict):
     }, "Awaiting user clarification"
 
 
-# Large operations that may trigger pre-execution cost check (Section 6.2)
-_LARGE_OPERATION_TOOL_NAMES = frozenset({
-    "fetch_url",
-    "batch_read_canvas_documents",
-    "read_canvas_document",
-    "create_canvas_document",
-    "search_canvas_document",
-    "web_search",
-    "web_fetch",
-})
-
-
 def _execute_streaming_tool_with_event_buffer(tool_name: str, tool_args: dict, runtime_state: dict):
-    """Execute a tool with optional pre-execution cost check (Section 6.2).
-
-    Per AI Memory and Context Management doc Section 6.2:
-    - Before tool execution, estimate the token cost.
-    - If current_usage + estimated_cost > 90%, reject the operation.
-    - Covers all large operations that could significantly impact token budget.
-    """
-    conversation_id = runtime_state.get("conversation_id") if isinstance(runtime_state, dict) else None
-    if conversation_id and tool_name in _LARGE_OPERATION_TOOL_NAMES:
-        try:
-            from services.context_node_service import get_context_node_service
-            service = get_context_node_service()
-            warning = service.check_execution_cost(
-                tool_name=tool_name,
-                args=tool_args,
-                conversation_id=int(conversation_id),
-            )
-            if warning is not None:
-                return {"error": warning.message, "blocked": True}, f"Execution blocked: {warning.message}", []
-        except Exception:
-            LOGGER.debug("Failed to check execution cost for tool %s", tool_name, exc_info=True)
-
+    """Execute a tool and return the result, summary, and event buffer."""
     result, summary = _execute_tool(tool_name, tool_args, runtime_state=runtime_state)
     return result, summary, []
 
@@ -3335,6 +3302,224 @@ def _run_fetch_url(tool_args: dict, runtime_state: dict):
         agent_context=agent_context,
         invocation_log_sink=invocation_log_sink,
     )
+
+
+def _run_web_search_agent(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
+    """Handler for web_search_agent tool — isolated web research sub-agent.
+
+    Per Phase 6: Spawns a child agent with search_web + fetch_url only.
+    Raw HTML/text stays in the child context; only a synthesized report
+    is returned to the parent orchestrator.
+    """
+    del runtime_state
+    query = str(tool_args.get("query") or "").strip()
+    focus = str(tool_args.get("focus") or "").strip()
+
+    if not query:
+        return {"error": "query is required."}, "web_search_agent: missing query"
+
+    from agent.isolated_agent import (
+        run_isolated_agent,
+        _build_web_agent_system_message,
+    )
+
+    system_msg = _build_web_agent_system_message(query, focus=focus)
+    task_messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": f"Research the following: {query}"},
+    ]
+
+    result = run_isolated_agent(
+        task_messages,
+        allowlist_tools=["search_web", "fetch_url"],
+        max_steps=6,
+        temperature=0.4,
+    )
+
+    report = result.get("report") or ""
+    errors = result.get("errors") or []
+    success = result.get("success", False)
+    elapsed_ms = result.get("elapsed_ms", 0)
+
+    output = {
+        "query": query,
+        "report": report,
+        "success": success,
+        "elapsed_ms": elapsed_ms,
+    }
+    if focus:
+        output["focus"] = focus
+    if errors:
+        output["errors"] = errors
+
+    summary = f"web_search_agent: {len(report)} chars in {elapsed_ms}ms" + (
+        f" ({len(errors)} errors)" if errors else ""
+    )
+    return output, summary
+
+
+def _run_summarized_fetch(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
+    """Handler for summarized_fetch tool — isolated page fetch with summarization.
+
+    Per Phase 6: Raw HTML/text stays in the child context. Only the focused
+    summary is returned to the parent orchestrator.
+    """
+    del runtime_state
+    url = str(tool_args.get("url") or "").strip()
+    focus = str(tool_args.get("focus") or "").strip()
+
+    if not url:
+        return {"error": "url is required."}, "summarized_fetch: missing url"
+
+    from agent.isolated_agent import run_isolated_agent
+
+    focus_note = f"\nFocus on: {focus}" if focus else ""
+    system_msg = (
+        "You are a page-reading agent. Your job is to read a web page "
+        "and produce a detailed, focused summary of its content.\n\n"
+        "## Instructions\n"
+        "1. Fetch the page using the fetch_url tool with output_mode='summary'.\n"
+        "2. Produce a comprehensive summary of the page content.\n"
+        "3. Include all key facts, data, and insights.\n"
+        "4. Be thorough — the parent agent cannot read the page itself."
+        f"{focus_note}"
+    )
+    task_messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": f"Read and summarize: {url}"},
+    ]
+
+    result = run_isolated_agent(
+        task_messages,
+        allowlist_tools=["fetch_url"],
+        max_steps=4,
+        temperature=0.3,
+    )
+
+    report = result.get("report") or ""
+    errors = result.get("errors") or []
+    success = result.get("success", False)
+    elapsed_ms = result.get("elapsed_ms", 0)
+
+    output = {
+        "url": url,
+        "report": report,
+        "success": success,
+        "elapsed_ms": elapsed_ms,
+    }
+    if focus:
+        output["focus"] = focus
+    if errors:
+        output["errors"] = errors
+
+    summary = f"summarized_fetch: {len(report)} chars in {elapsed_ms}ms"
+    return output, summary
+
+
+def _run_delegate_task_real(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
+    """Handler for delegate_task tool — real isolated sub-agent execution.
+
+    Per Phase 6: Replaces the stub confirmation-only handler with actual
+    isolated agent execution. The child gets file tools, search, and canvas
+    reads but NO recursive delegation.
+    """
+    goal = str(tool_args.get("goal") or "").strip()
+    scope = tool_args.get("scope") if isinstance(tool_args.get("scope"), list) else []
+    constraints = str(tool_args.get("constraints") or "").strip()
+
+    if not goal:
+        return {"error": "goal is required."}, "delegate_task: missing goal"
+
+    scope_paths = [str(p).strip() for p in scope if str(p or "").strip()]
+
+    from agent.isolated_agent import (
+        run_isolated_agent,
+        _build_isolated_system_message,
+    )
+
+    # Build a read-only canvas snapshot for the child
+    canvas_snapshot_text = ""
+    canvas_state = _get_canvas_runtime_state(runtime_state)
+    if canvas_state is not None:
+        try:
+            from services.canvas import get_canvas_runtime_snapshot
+
+            snapshot = get_canvas_runtime_snapshot(canvas_state)
+            documents = snapshot.get("documents") or []
+            if documents:
+                lines: list[str] = []
+                for doc in documents:
+                    doc_id = str(doc.get("document_id") or doc.get("id") or "")
+                    doc_path = str(doc.get("document_path") or doc.get("path") or "")
+                    doc_title = doc_path or doc_id
+                    lines.append(f"### {doc_title}")
+                    try:
+                        read_result = read_canvas_document(canvas_state, document_id=doc_id)
+                        content = str(read_result.get("content") or "") if isinstance(read_result, dict) else ""
+                        if content:
+                            max_chars = 8000
+                            if len(content) > max_chars:
+                                content = content[:max_chars] + "\n... [truncated]"
+                            lang = str(doc.get("language") or "")
+                            fence = lang if lang else ""
+                            lines.append(f"```{fence}\n{content}\n```")
+                    except Exception:
+                        lines.append("[Content unavailable]")
+                if lines:
+                    canvas_snapshot_text = "\n\n".join(lines)
+        except Exception:
+            canvas_snapshot_text = ""
+
+    system_msg = _build_isolated_system_message(
+        goal,
+        allowlist_tools=["search_web", "fetch_url", "batch_read_canvas_documents",
+                         "read_canvas_document", "search_canvas_document"],
+        constraints=constraints,
+        canvas_readonly_snapshot=canvas_snapshot_text,
+    )
+
+    scope_context = ""
+    if scope_paths:
+        scope_context = "\n\n## Scope Files\n" + "\n".join(f"- {p}" for p in scope_paths)
+
+    task_messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": f"Complete this task:{scope_context}\n\n{goal}"},
+    ]
+
+    result = run_isolated_agent(
+        task_messages,
+        allowlist_tools=[
+            "search_web", "fetch_url",
+            "batch_read_canvas_documents", "read_canvas_document",
+            "search_canvas_document", "search_knowledge_base",
+        ],
+        max_steps=10,
+        temperature=0.5,
+    )
+
+    report = result.get("report") or ""
+    errors = result.get("errors") or []
+    success = result.get("success", False)
+    elapsed_ms = result.get("elapsed_ms", 0)
+
+    output = {
+        "goal": goal,
+        "report": report,
+        "success": success,
+        "elapsed_ms": elapsed_ms,
+    }
+    if scope_paths:
+        output["scope"] = scope_paths
+    if constraints:
+        output["constraints"] = constraints
+    if errors:
+        output["errors"] = errors
+
+    summary = f"delegate_task: {len(report)} chars report in {elapsed_ms}ms" + (
+        f" ({len(errors)} errors)" if errors else ""
+    )
+    return output, summary
 
 
 def _run_read_canvas_document(tool_args: dict, runtime_state: dict):
@@ -3576,6 +3761,9 @@ _TOOL_EXECUTORS = {
     "search_web": _run_search_web,
     "search_scholar": _run_search_scholar,
     "fetch_url": _run_fetch_url,
+    "web_search_agent": _run_web_search_agent,
+    "summarized_fetch": _run_summarized_fetch,
+    "delegate_task": _run_delegate_task_real,
     "batch_read_canvas_documents": _run_batch_read_canvas_documents,
     "read_canvas_document": _run_read_canvas_document,
     "search_canvas_document": _run_search_canvas_document,
@@ -3585,41 +3773,335 @@ _TOOL_EXECUTORS = {
 }
 
 
-def _run_delegate_task(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
-    """Handler for delegate_task tool.
+def _run_purge(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
+    """Handler for purge tool — permanently remove conversation blocks.
 
-    Per doc Section 7:
-    - Spawns a sub-agent with a fresh context window.
-    - Scope files are loaded into the sub-agent's VFS.
-    - Returns only a summary — orchestrator context stays lean.
+    Per AI Memory and Context Management doc Section 5, Phase 4:
+    - Resolves public IDs within the active conversation.
+    - Expands to dependency closure (tool_call + tool_result atomic groups).
+    - Transactonally deletes blocks, hides messages, writes audit.
+    - Optionally appends a summary block.
     """
-    goal = str(tool_args.get("goal") or "").strip()
-    scope = tool_args.get("scope") if isinstance(tool_args.get("scope"), list) else []
-    constraints = str(tool_args.get("constraints") or "").strip()
+    requested_ids: list[str] = []
+    raw_ids = tool_args.get("ids")
+    if isinstance(raw_ids, list):
+        requested_ids = [str(pid).strip() for pid in raw_ids if str(pid).strip()]
 
-    if not goal:
-        return {"error": "goal is required."}, "delegate_task: missing goal"
+    summary = str(tool_args.get("summary") or "").strip() or None
 
-    # Normalise scope to file paths
-    scope_paths = [str(p).strip() for p in scope if str(p or "").strip()]
+    if not requested_ids:
+        return {"error": "ids is required and must be a non-empty array."}, "purge: missing ids"
 
-    # The actual sub-agent spawning is handled by the agent() tool.
-    # This executor returns the delegation request as confirmation;
-    # the agent loop will handle spawning via the existing agent() mechanism.
-    result = {
-        "goal": goal,
-        "scope": scope_paths,
-        "constraints": constraints,
-        "status": "delegated",
-        "note": "Sub-agent execution in progress. Results will be appended when complete.",
-    }
-    summary = f"delegate_task: '{goal[:60]}' delegated with {len(scope_paths)} scope files"
-    return result, summary
+    conversation_id, _source_message_id = _get_agent_state_mutation_context(runtime_state)
+    if conversation_id is None:
+        return {"error": "Cannot determine conversation context."}, "purge: missing conversation context"
+
+    try:
+        from core.db import resolve_purge_dependency_closure, execute_purge_transaction
+
+        # Resolve and validate
+        resolved_ids, errors = resolve_purge_dependency_closure(requested_ids, conversation_id)
+        if errors:
+            error_msg = "; ".join(errors)
+            return {"error": error_msg, "requested_ids": requested_ids}, f"purge: {error_msg}"
+
+        # Execute transaction
+        result = execute_purge_transaction(
+            conversation_id,
+            resolved_ids,
+            summary=summary,
+            actor="model",
+        )
+
+        if result.get("error"):
+            return result, f"purge: {result['error']}"
+
+        try:
+            from services.rag_service import sync_conversations_to_rag_safe
+
+            sync_conversations_to_rag_safe(conversation_id=conversation_id, force=True)
+            result["rag_cleanup_pending"] = False
+        except Exception:
+            # The mutation is already committed. Surface a retryable cleanup
+            # condition instead of pretending purged material cannot recur in
+            # conversation-derived retrieval.
+            result["rag_cleanup_pending"] = True
+
+        # Build human-readable summary
+        n_removed = len(result.get("resolved_ids", []))
+        n_requested = len(requested_ids)
+        tokens_saved = result.get("removed_tokens", 0)
+        summary_note = (
+            f" (summary saved as {result['replacement_id']})"
+            if result.get("replacement_id")
+            else ""
+        )
+
+        action_summary = (
+            f"purge: removed {n_removed} block(s) ({tokens_saved} tokens) "
+            f"from {n_requested} requested ID(s){summary_note}. "
+            f"Cache reset required for next request."
+        )
+
+        return result, action_summary
+
+    except Exception as exc:
+        LOGGER.debug("purge tool execution failed", exc_info=True)
+        return {"error": f"Purge failed: {exc}"}, f"purge: error — {exc}"
 
 
-_TOOL_EXECUTORS.update({
-    "delegate_task": _run_delegate_task,
-})
+_TOOL_EXECUTORS["purge"] = _run_purge
+
+
+def _build_compaction_prompt(blocks_text: str, resume_instruction: str) -> tuple[str, str]:
+    """Build system and user messages for the compaction operation-model call.
+
+    Returns (system_message, user_message).
+    """
+    system = (
+        "You are a context compaction assistant. Your job is to analyze a complete "
+        "conversation history and produce a dense, structured state summary as JSON. "
+        "Extract only the essential project context: what was being built, key "
+        "decisions, completed work, current tasks, blockers, and affected files.\n\n"
+        "Respond ONLY with a valid JSON object matching this schema:\n"
+        "{\n"
+        '  "project_summary": "concise summary of the project and current session scope",\n'
+        '  "established_context": ["key fact 1", "key fact 2", ...],\n'
+        '  "key_decisions": ["decision 1", ...],\n'
+        '  "completed_tasks": ["task 1", ...],\n'
+        '  "current_tasks": ["task 1", ...],\n'
+        '  "blockers": ["blocker 1", ...],\n'
+        '  "affected_files": ["path/to/file1.py", ...]\n'
+        "}\n\n"
+        "Rules:\n"
+        "- All array fields must be present (use empty arrays if nothing to report).\n"
+        "- project_summary must be non-empty.\n"
+        "- established_context and current_tasks must have at least one entry.\n"
+        "- Be specific about file paths when they are mentioned.\n"
+        "- Do NOT include the conversation messages themselves — synthesize the state.\n"
+        "- Output pure JSON — no markdown fences, no surrounding text."
+    )
+
+    user = (
+        f"Here is the complete conversation history for context compaction:\n\n"
+        f"{blocks_text}\n\n"
+        f'After compaction, the agent should resume with this instruction: "{resume_instruction}"'
+    )
+
+    return system, user
+
+
+def _run_compact_context_legacy(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
+    """Handler for compact_context tool — full context reset with CompactedState.
+
+    Per AI Memory and Context Management doc Section 5, Phase 5:
+    - Requires a non-empty resume_instruction.
+    - Acquires a per-conversation compaction lock.
+    - Runs a separate operation-model call to produce CompactedState JSON.
+    - Validates JSON against schema; retries up to 3 times on validation failure.
+    - Transactionally deletes all blocks, hides messages, inserts state+resume blocks.
+    - Emits compaction events for SSE streaming.
+    """
+    import json as _json
+    import time as _time
+
+    resume_instruction = str(tool_args.get("resume_instruction") or "").strip()
+    if not resume_instruction:
+        return {"error": "resume_instruction is required and must be non-empty."}, (
+            "compact_context: missing resume_instruction"
+        )
+
+    conversation_id, source_message_id = _get_agent_state_mutation_context(runtime_state)
+    if conversation_id is None:
+        return {"error": "Cannot determine conversation context."}, (
+            "compact_context: missing conversation context"
+        )
+
+    # Acquire compaction lock
+    from core.db import (
+        acquire_compaction_lock,
+        release_compaction_lock,
+        execute_compact_context_transaction,
+        list_context_blocks,
+    )
+    from core.context_memory import validate_compacted_state
+
+    lock_acquired = acquire_compaction_lock(conversation_id, timeout=10.0)
+    if not lock_acquired:
+        return {"error": "Another compaction is already in progress for this conversation. Please wait and retry."}, (
+            "compact_context: lock denied — concurrent compaction in progress"
+        )
+
+    try:
+        # 1. Snapshot all active context blocks
+        try:
+            block_dicts = list_context_blocks(conversation_id)
+        except Exception as exc:
+            return {"error": f"Failed to read conversation blocks: {exc}"}, (
+                f"compact_context: error reading blocks — {exc}"
+            )
+
+        if not block_dicts:
+            return {"error": "No conversation blocks to compact."}, (
+                "compact_context: no blocks found"
+            )
+
+        # 2. Build text representation of the full history
+        blocks_lines: list[str] = []
+        for bd in block_dicts:
+            pid = str(bd.get("public_id") or "")
+            kind = str(bd.get("kind") or "")
+            role = str(bd.get("api_role") or "")
+            content = str(bd.get("content") or "")
+            tool_name = str(bd.get("tool_name") or "")
+            # Truncate very long content blocks for the compaction model
+            max_content = 4000
+            if len(content) > max_content:
+                content = content[:max_content] + "... [truncated]"
+            label = f"[{pid}] ({kind}/{role}"
+            if tool_name:
+                label += f", tool={tool_name}"
+            label += ")"
+            blocks_lines.append(f"{label}\n{content}")
+        blocks_text = "\n\n".join(blocks_lines)
+
+        # 3. Call operation model to produce CompactedState JSON
+        settings = get_app_settings()
+        compaction_model = get_operation_model("compaction", settings)
+
+        max_retries = 3
+        last_error = None
+        compacted_state = None
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                system_msg, user_msg = _build_compaction_prompt(blocks_text, resume_instruction)
+                target = resolve_model_target(compaction_model, settings)
+                request_kwargs = apply_model_target_request_options(
+                    {
+                        "model": target["api_model"],
+                        "messages": [
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        "max_tokens": 4096,
+                        "temperature": 0.2,
+                    },
+                    target,
+                )
+
+                response = target["client"].chat.completions.create(**request_kwargs)
+                raw_text = _extract_chat_completion_text(response)
+
+                if not raw_text or not raw_text.strip():
+                    last_error = "Operation model returned empty response."
+                    if attempt < max_retries:
+                        _time.sleep(1.0)
+                        continue
+                    break
+
+                # Try to parse JSON
+                raw_text = raw_text.strip()
+                # Strip markdown fences if present
+                if raw_text.startswith("```"):
+                    lines = raw_text.split("\n")
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].strip() == "```":
+                        lines = lines[:-1]
+                    raw_text = "\n".join(lines)
+
+                try:
+                    parsed = _json.loads(raw_text)
+                except _json.JSONDecodeError as je:
+                    last_error = f"Operation model returned invalid JSON: {je}"
+                    if attempt < max_retries:
+                        _time.sleep(1.0)
+                        continue
+                    break
+
+                # Validate against CompactedState schema
+                validation_errors = validate_compacted_state(parsed)
+                if validation_errors:
+                    last_error = f"CompactedState validation failed: {'; '.join(validation_errors)}"
+                    if attempt < max_retries:
+                        _time.sleep(1.0)
+                        continue
+                    break
+
+                compacted_state = parsed
+                break
+
+            except Exception as exc:
+                last_error = f"Operation model call failed: {exc}"
+                if attempt < max_retries:
+                    _time.sleep(1.0)
+                    continue
+                break
+
+        if compacted_state is None:
+            return {
+                "error": (
+                    f"Failed to produce a valid CompactedState after "
+                    f"{max_retries} attempt(s). Last error: {last_error}"
+                ),
+            }, f"compact_context: validation failed — {last_error}"
+
+        # 4. Execute the compaction transaction
+        try:
+            compacted_json = _json.dumps(compacted_state, ensure_ascii=False, indent=2)
+            result = execute_compact_context_transaction(
+                conversation_id,
+                compacted_json,
+                resume_instruction,
+                actor="model",
+            )
+        except Exception as exc:
+            return {"error": f"Compaction transaction failed: {exc}"}, (
+                f"compact_context: transaction error — {exc}"
+            )
+
+        if result.get("error"):
+            return result, f"compact_context: {result['error']}"
+
+        # 5. Build summary
+        blocks_removed = result.get("blocks_removed", 0)
+        removed_tokens = result.get("removed_tokens", 0)
+        state_id = result.get("state_public_id", "unknown")
+        resume_id = result.get("resume_public_id", "unknown")
+
+        action_summary = (
+            f"compact_context: removed {blocks_removed} block(s) ({removed_tokens} tokens), "
+            f"new state at {state_id}, resume at {resume_id}. "
+            f"Cache reset required for next request."
+        )
+
+        return result, action_summary
+
+    finally:
+        release_compaction_lock(conversation_id)
+
+
+def _run_compact_context(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
+    """Run the shared explicit compaction service for a model tool call."""
+    resume_instruction = str(tool_args.get("resume_instruction") or "").strip()
+    conversation_id, _source_message_id = _get_agent_state_mutation_context(runtime_state)
+    if conversation_id is None:
+        return {"error": "Cannot determine conversation context."}, "compact_context: missing conversation context"
+
+    from services.context_compaction import compact_conversation
+
+    result = compact_conversation(conversation_id, resume_instruction, actor="model")
+    if result.get("error"):
+        return result, f"compact_context: {result['error']}"
+    return result, (
+        f"compact_context: removed {result.get('blocks_removed', 0)} block(s) "
+        f"({result.get('removed_tokens', 0)} tokens); "
+        f"new state at {result.get('state_public_id', 'unknown')}. Cache reset required."
+    )
+
+
+_TOOL_EXECUTORS["compact_context"] = _run_compact_context
 
 
 def _execute_tool(tool_name: str, tool_args: dict, runtime_state: dict | None = None):
@@ -4884,71 +5366,14 @@ def run_agent_stream(
             filtered.append(msg)
         return filtered
 
-    def apply_context_compaction(extra_messages: list[dict] | None = None, reason: str = "", force: bool = False):
-        nonlocal messages
-        extra_messages = list(extra_messages or [])
-        filtered_messages = _filter_deleted_tool_results(messages)
-        turn_messages = [*filtered_messages, *extra_messages]
-        threshold = max(1, int(configured_prompt_max_input_tokens * configured_context_compaction_threshold))
-        before_tokens = _estimate_messages_tokens(turn_messages)
-        before_message_count = len(turn_messages)
-        before_exchange_count = _count_exchange_blocks(messages)
-        if not force and before_tokens <= threshold:
-            return turn_messages, False
+    def build_turn_messages(extra_messages: list[dict] | None = None) -> list[dict]:
+        """Return the current request without silently trimming its history.
 
-        target_budget = max(1, int(configured_prompt_max_input_tokens * 0.75))
-        configured_keep_recent = max(0, int(configured_context_compaction_keep_recent_rounds))
-        if force:
-            keep_recent_candidates = list(range(max(0, configured_keep_recent - 1), -1, -1)) or [0]
-        else:
-            keep_recent_candidates = [configured_keep_recent]
-
-        compacted_messages = None
-        chosen_keep_recent = None
-        chosen_tokens = None
-        for keep_recent in keep_recent_candidates:
-            candidate_messages = _try_compact_messages(
-                messages,
-                target_budget,
-                keep_recent=keep_recent,
-            )
-            if candidate_messages is None:
-                continue
-            candidate_turn_messages = [*candidate_messages, *extra_messages]
-            candidate_tokens = _estimate_messages_tokens(candidate_turn_messages)
-            if chosen_tokens is None or candidate_tokens < chosen_tokens:
-                compacted_messages = candidate_messages
-                chosen_keep_recent = keep_recent
-                chosen_tokens = candidate_tokens
-            if candidate_tokens <= target_budget:
-                break
-
-        if compacted_messages is None:
-            return turn_messages, False
-
-        filtered_compacted = _filter_deleted_tool_results(compacted_messages)
-        messages = filtered_compacted
-        runtime_state["_accumulated_messages"] = messages
-        compacted_turn_messages = [*filtered_compacted, *extra_messages]
-        after_tokens = _estimate_messages_tokens(compacted_turn_messages)
-        after_message_count = len(compacted_turn_messages)
-        after_exchange_count = _count_exchange_blocks(messages)
-        _trace_agent_event(
-            "context_compacted",
-            trace_id=trace_id,
-            step=step,
-            reason=reason,
-            before_tokens=before_tokens,
-            after_tokens=after_tokens,
-            threshold=threshold,
-            force=force,
-            before_message_count=before_message_count,
-            after_message_count=after_message_count,
-            compacted_exchange_count=max(0, before_exchange_count - after_exchange_count),
-            merged_message_delta=max(0, before_message_count - after_message_count),
-            keep_recent=chosen_keep_recent,
-        )
-        return compacted_turn_messages, True
+        Context mutations are deliberately limited to the explicit `purge` and
+        `compact_context` tools.  A provider overflow must therefore surface an
+        actionable error instead of changing the model-visible transcript.
+        """
+        return [*_filter_deleted_tool_results(messages), *list(extra_messages or [])]
 
     def usage_event():
         prompt_tokens_total = max(0, int(usage_totals["prompt_tokens"] or 0))
@@ -5000,29 +5425,7 @@ def run_agent_stream(
         persisted_tool_cache_keys.add(cache_key)
         persisted_tool_results.append(entry)
 
-        # Also create a context node for the new memory system
-        # Per AI Memory and Context Management doc:
-        # - Tool outcomes are TRANSIENT by default
-        # - Context Nodes are only created when AI explicitly sets keep_alive: true
-        if tool_args.get("keep_alive", False):
-            try:
-                from services.context_node_service import get_context_node_service
 
-                agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
-                conversation_id = int(agent_context.get("conversation_id") or 0) or None
-                if conversation_id:
-                    service = get_context_node_service()
-                    service.add_node(
-                        tool_name=tool_name,
-                        args=tool_args,
-                        result=result,
-                        conversation_id=conversation_id,
-                        message_id=None,
-                        keep_alive=True,
-                    )
-            except Exception:
-                # Context node creation is best-effort and should not break tool execution
-                LOGGER.debug("Context node creation skipped for tool %s", tool_name, exc_info=True)
 
     def emit_reasoning(reasoning_text: str):
         nonlocal reasoning_started
@@ -5613,7 +6016,7 @@ def run_agent_stream(
             )
         if working_memory_instruction:
             extra_messages.append(working_memory_instruction)
-        turn_messages, _ = apply_context_compaction(extra_messages, reason="pre_model_turn")
+        turn_messages = build_turn_messages(extra_messages)
         # Per CACHE_AND_MESSAGE_RULES.md "Content Key" Rule:
         # ONLY DeepSeek rejects `content` alongside `tool_calls`.
         # OpenAI/Anthropic use `content` for CoT text and cache_control markers.
@@ -5637,9 +6040,8 @@ def run_agent_stream(
 
                 while compaction_attempts < MAX_COMPACTION_ATTEMPTS:
                     compaction_attempts += 1
-                    compacted_messages, compacted = apply_context_compaction(
-                        extra_messages, reason=f"reactive_model_turn_attempt_{compaction_attempts}", force=True
-                    )
+                    compacted_messages = build_turn_messages(extra_messages)
+                    compacted = False
 
                     if compacted:
                         compacted_tokens = _estimate_messages_tokens(compacted_messages)
@@ -5808,9 +6210,8 @@ def run_agent_stream(
 
                     while compaction_attempts < MAX_COMPACTION_ATTEMPTS:
                         compaction_attempts += 1
-                        compacted_messages, compacted = apply_context_compaction(
-                            extra_messages, reason=f"reactive_stream_error_attempt_{compaction_attempts}", force=True
-                        )
+                        compacted_messages = build_turn_messages(extra_messages)
+                        compacted = False
 
                         if compacted:
                             compacted_tokens = _estimate_messages_tokens(compacted_messages)
@@ -5950,6 +6351,16 @@ def run_agent_stream(
         messages.append(assistant_tool_call_message)
         if content_text.strip() and answer_started:
             pending_answer_separator = True
+        # ---- Phase 3 prep: track tool-call metadata for completion-order persistence ----
+        runtime_state["_tool_call_metadata"] = [
+            {
+                "provider_call_id": str(tc.get("id") or "").strip(),
+                "tool_name": _normalize_tool_name(str(tc.get("name") or "").strip()),
+                "call_index": i + 1,
+                "step": step,
+            }
+            for i, tc in enumerate(tool_calls or [])
+        ]
         transcript_results = []
         tool_messages = []
         tool_output_entries = []
@@ -6166,9 +6577,17 @@ def run_agent_stream(
                 with ThreadPoolExecutor(
                     max_workers=min(normalized_parallel_tool_limit, len(parallel_slots))
                 ) as executor:
-                    futures_list = [(executor.submit(_run_slot, s), s) for s in parallel_slots]
-                for future, s in futures_list:
-                    s["exec_result"] = future.result()
+                    future_to_slot = {executor.submit(_run_slot, s): s for s in parallel_slots}
+                # Collect results in completion order for Tier 2 result blocks
+                parallel_completed_slots = []
+                for future in as_completed(future_to_slot):
+                    s = future_to_slot[future]
+                    try:
+                        s["exec_result"] = future.result()
+                    except Exception as exc:
+                        s["exec_result"] = {"ok": False, "error": _format_tool_execution_error(exc, tool_name=s["tool_name"])}
+                    parallel_completed_slots.append(s)
+                runtime_state["_parallel_completion_order"] = parallel_completed_slots
             else:
                 for s in parallel_slots:
                     try:
@@ -6180,6 +6599,20 @@ def run_agent_stream(
                         s["exec_result"] = {"ok": True, "result": res, "summary": summ, "events": events}
                     except Exception as exc:
                         s["exec_result"] = {"ok": False, "error": _format_tool_execution_error(exc, tool_name=s["tool_name"])}
+
+            # ---- Reorder slots: parallel execute slots in completion order for Phase 3 ----
+            parallel_completed = runtime_state.get("_parallel_completion_order")
+            if parallel_completed and len(parallel_completed) > 1:
+                parallel_slot_ids = {id(s) for s in parallel_slots}
+                new_slots = []
+                completion_idx = 0
+                for slot in slots:
+                    if id(slot) in parallel_slot_ids:
+                        new_slots.append(parallel_completed[completion_idx])
+                        completion_idx += 1
+                    else:
+                        new_slots.append(slot)
+                slots[:] = new_slots
 
             for s in parallel_slots:
                 buffered_events = (
@@ -6410,46 +6843,9 @@ def run_agent_stream(
                     if storage_entry and cache_key not in persisted_tool_cache_keys:
                         persisted_tool_cache_keys.add(cache_key)
                         persisted_tool_results.append(storage_entry)
-                    # Create context node for new memory system
-                    # Per AI Memory doc: transient by default, promote only when keep_alive=true
-                    if tool_args.get("keep_alive", False):
-                        try:
-                            from services.context_node_service import get_context_node_service
 
-                            agent_context = runtime_state.get("agent_context") if isinstance(runtime_state.get("agent_context"), dict) else {}
-                            conversation_id = int(agent_context.get("conversation_id") or 0) or None
-                            if conversation_id:
-                                service = get_context_node_service()
-                                service.add_node(
-                                    tool_name=tool_name,
-                                    args=tool_args,
-                                    result=result,
-                                    conversation_id=conversation_id,
-                                    message_id=None,
-                                    keep_alive=True,
-                                )
-                        except Exception:
-                            LOGGER.debug("Context node creation skipped for tool %s", tool_name, exc_info=True)
 
-                    # Auto-trigger compaction per Section 6.3
-                    try:
-                        from services.context_node_service import get_context_node_service
-                        _auto_service = get_context_node_service()
-                        _auto_conversation_id = int(runtime_state.get("conversation_id", 0)) or None
-                        if _auto_conversation_id:
-                            _compaction_result = _auto_service.trigger_compaction_if_needed(_auto_conversation_id)
-                            if _compaction_result.get("triggered"):
-                                LOGGER.info(
-                                    "Section 6.3 compaction auto-triggered: "
-                                    "deleted %d tombstones, "
-                                    "tokens %d -> %d, reason: %s",
-                                    _compaction_result.get("tombstones_deleted", 0),
-                                    _compaction_result.get("tokens_before", 0),
-                                    _compaction_result.get("tokens_after", 0),
-                                    _compaction_result.get("reason", ""),
-                                )
-                    except Exception:
-                        LOGGER.debug("Section 6.3 compaction skipped", exc_info=True)
+
                     _trace_agent_event(
                         "tool_call_completed",
                         trace_id=trace_id,
@@ -6590,24 +6986,12 @@ def run_agent_stream(
                     )
 
         if tool_output_entries:
-            tool_messages, transcript_results, tool_execution_result_message, tool_results_budget_compacted = (
-                _apply_tool_output_budget(
-                    messages,
-                    tool_output_entries,
-                    prompt_max_input_tokens=configured_prompt_max_input_tokens,
-                    context_compaction_threshold=configured_context_compaction_threshold,
-                    fetch_url_token_threshold=fetch_url_token_threshold,
-                    fetch_url_clip_aggressiveness=fetch_url_clip_aggressiveness,
-                )
+            # Results are Tier 2 blocks.  Do not rewrite them to meet an
+            # implicit prompt budget; the user/model can explicitly purge or
+            # compact the ledger if the context becomes too large.
+            tool_messages, transcript_results, tool_execution_result_message = _render_tool_output_entries(
+                tool_output_entries
             )
-            if tool_results_budget_compacted:
-                _trace_agent_event(
-                    "tool_results_budget_compacted",
-                    trace_id=trace_id,
-                    step=step,
-                    tool_count=len(tool_output_entries),
-                    estimated_total_tokens=_estimate_messages_tokens([*messages, *tool_messages]),
-                )
 
         _trace_agent_event(
             "tool_transcript_appended",
@@ -6650,7 +7034,7 @@ def run_agent_stream(
             pending_final_retry_reason = None
             working_memory_instruction = _build_working_state_instruction(working_state)
             final_extra_messages = [working_memory_instruction] if working_memory_instruction is not None else []
-            final_messages, _ = apply_context_compaction(final_extra_messages, reason="pre_final_answer")
+            final_messages = build_turn_messages(final_extra_messages)
             final_messages = [*final_messages, final_instruction_builder()]
             # Per CACHE_AND_MESSAGE_RULES.md "Content Key" Rule:
             # ONLY DeepSeek rejects `content` alongside `tool_calls`.
@@ -6673,9 +7057,8 @@ def run_agent_stream(
 
                 while compaction_attempts < MAX_COMPACTION_ATTEMPTS:
                     compaction_attempts += 1
-                    compacted_messages, compacted = apply_context_compaction(
-                        final_extra_messages, reason=f"reactive_final_stream_attempt_{compaction_attempts}", force=True
-                    )
+                    compacted_messages = build_turn_messages(final_extra_messages)
+                    compacted = False
 
                     if compacted:
                         compacted_tokens = _estimate_messages_tokens(compacted_messages)
@@ -6802,9 +7185,8 @@ def run_agent_stream(
 
                 while compaction_attempts < MAX_COMPACTION_ATTEMPTS:
                     compaction_attempts += 1
-                    compacted_messages, compacted = apply_context_compaction(
-                        final_extra_messages, reason=f"reactive_final_answer_attempt_{compaction_attempts}", force=True
-                    )
+                    compacted_messages = build_turn_messages(final_extra_messages)
+                    compacted = False
 
                     if compacted:
                         compacted_tokens = _estimate_messages_tokens(compacted_messages)

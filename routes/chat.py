@@ -54,7 +54,6 @@ from core.db import (
     get_db,
 
     # ── Conversation & message operations ──
-    apply_conversation_truncation,
     build_conversation_assistant_behavior,
     build_user_profile_system_context,
     count_visible_message_tokens,
@@ -73,6 +72,7 @@ from core.db import (
     get_unsummarized_visible_messages,
     insert_message,
     insert_model_invocation,
+    incremental_backfill_context_blocks,
     parse_message_metadata,
     replace_conversation_memory_snapshot,
     restore_soft_deleted_messages,
@@ -162,6 +162,7 @@ from core.messages import (
     prepare_context_injection_for_history,
     prepend_runtime_context,
 )
+from services.context_assembly import assemble_context_plan, build_full_api_messages
 from services.image_service import analyze_uploaded_image
 from utils.image_utils import read_uploaded_image
 from lib.model_registry import (
@@ -2589,45 +2590,130 @@ def _build_budgeted_prompt_messages(
     prompt_budget = max(2_000, get_prompt_max_input_tokens(settings) - get_prompt_response_token_reserve(settings))
     prompt_now = datetime.now(timezone.utc).astimezone()
 
-    # Build context node stats for Dynamic Status Line (per AI Memory doc Section 6.1)
-    from core.db import get_context_node_stats as _get_context_node_stats, get_tombstone_count as _get_tombstone_count
-    _raw_stats = _get_context_node_stats(conversation_id) if conversation_id else {}
-    _tombstone_count = _get_tombstone_count(conversation_id) if conversation_id else 0
+    # The ledger is the canonical Tier 2 source.  Do not select a prefix,
+    # recent window, or summary window here: a normal turn must present every
+    # active block in append-only sequence order.  The established Canvas/RAG
+    # renderers are retained only as a volatile Tier 3 footer while their
+    # presentation is migrated into the assembly service.
+    if conversation_id:
+        user_profile_context = build_user_profile_system_context(max_tokens=500)
+        scratchpad_sections = get_all_scratchpad_sections(settings)
+        assistant_behavior = build_conversation_assistant_behavior(conversation_id, settings)
+        max_parallel_tools = get_max_parallel_tools(settings)
+        clarification_max_questions = get_clarification_max_questions(settings)
+        search_tool_query_limit = get_search_tool_query_limit(settings)
+        runtime_tool_names = resolve_runtime_tool_names(
+            active_tool_names,
+            canvas_documents=canvas_documents,
+        )
+        static_runtime_message = build_runtime_system_message(
+            assistant_behavior,
+            runtime_tool_names,
+            clarification_response=clarification_response,
+            all_clarification_rounds=all_clarification_rounds,
+            user_profile_context=user_profile_context,
+            persona_memory=persona_memory,
+            conversation_memory=conversation_memory,
+            scratchpad_sections=scratchpad_sections,
+            canvas_documents=canvas_documents,
+            canvas_active_document_id=canvas_active_document_id,
+            canvas_viewports=canvas_viewports,
+            canvas_prompt_max_lines=canvas_prompt_max_lines,
+            canvas_prompt_max_chars=canvas_prompt_max_chars,
+            canvas_prompt_max_tokens=canvas_prompt_max_tokens,
+            canvas_prompt_code_line_max_chars=canvas_prompt_code_line_max_chars,
+            canvas_prompt_text_line_max_chars=canvas_prompt_text_line_max_chars,
+            clarification_max_questions=clarification_max_questions,
+            search_tool_query_limit=search_tool_query_limit,
+            max_parallel_tools=max_parallel_tools,
+            include_time_context=False,
+            include_volatile_context=False,
+            include_dynamic_context=False,
+            runtime_tool_names=runtime_tool_names,
+            now=prompt_now,
+        )
+        volatile_context = build_runtime_context_injection(
+            active_tool_names=runtime_tool_names,
+            is_first_turn=is_first_turn,
+            clarification_response=clarification_response,
+            all_clarification_rounds=all_clarification_rounds,
+            double_check=double_check,
+            double_check_query=double_check_query,
+            retrieved_context=retrieved_context,
+            user_profile_context=user_profile_context,
+            persona_memory=persona_memory,
+            conversation_memory=conversation_memory,
+            scratchpad_sections=scratchpad_sections,
+            canvas_documents=canvas_documents,
+            canvas_active_document_id=canvas_active_document_id,
+            canvas_viewports=canvas_viewports,
+            canvas_prompt_max_lines=canvas_prompt_max_lines,
+            canvas_prompt_max_chars=canvas_prompt_max_chars,
+            canvas_prompt_max_tokens=canvas_prompt_max_tokens,
+            canvas_prompt_code_line_max_chars=canvas_prompt_code_line_max_chars,
+            canvas_prompt_text_line_max_chars=canvas_prompt_text_line_max_chars,
+            runtime_tool_names=runtime_tool_names,
+            summary_count=0,
+            include_time_context=True,
+            now=prompt_now,
+            previous_canvas_content_hash=previous_canvas_content_hash,
+            include_dynamic_context=True,
+        )
+        context_plan = assemble_context_plan(
+            conversation_id,
+            active_tool_names=runtime_tool_names,
+            model_input_limit=prompt_budget,
+            current_time=prompt_now,
+            tier1_message=static_runtime_message,
+            tier3_extra_context=volatile_context,
+        )
+        api_messages = build_full_api_messages(context_plan)
+        usage = context_plan.token_usage
+        usage_pct = usage.total_tokens / usage.model_input_limit * 100 if usage.model_input_limit else 0
+        stats = {
+            "prompt_budget": prompt_budget,
+            "context_selection_strategy": "tiered_ledger",
+            "estimated_total_tokens": usage.total_tokens,
+            "request_estimated_total_tokens": usage.total_tokens,
+            "context_plan_usage": {
+                "tier1_tokens": usage.tier1_tokens,
+                "tier2_tokens": usage.tier2_tokens,
+                "tier3_tokens": usage.tier3_tokens,
+                "tool_schema_tokens": usage.tool_schema_tokens,
+                "total_tokens": usage.total_tokens,
+                "model_input_limit": usage.model_input_limit,
+                "free_capacity": usage.free_capacity,
+                "usage_pct": usage_pct,
+                "tier3_footer": context_plan.tier3_footer,
+            },
+        }
+        return api_messages, api_messages, stats, None
 
-    # Include VFS stats in the status line
-    try:
-        from utils.vfs import get_vfs
-        _vfs_stats = get_vfs().get_stats()
-    except Exception:
-        _vfs_stats = {}
-
-    context_node_stats = {
-        "active_nodes": _raw_stats.get("active_nodes", 0),
-        "active_tokens": _raw_stats.get("active_tokens", 0),
-        "total_nodes": _raw_stats.get("total_nodes", 0),
-        "total_tokens": _raw_stats.get("total_tokens", 0),
-        "tombstoned_nodes": _tombstone_count,
-        "vfs_stats": _vfs_stats,
-        "model_limit": get_prompt_max_input_tokens(settings),
-    } if _raw_stats else None
-
-    # Load prune awareness message (if any) for injection into volatile context
-    _prune_awareness = None
-    try:
-        with get_db() as conn:
-            row = conn.execute(
-                "SELECT value FROM app_settings WHERE key = ?",
-                (f"prune_awareness:{conversation_id}",),
-            ).fetchone()
-            if row:
-                _prune_awareness = str(row["value"]).strip()
-                # Clean up after reading so it only injects once
-                conn.execute(
-                    "DELETE FROM app_settings WHERE key = ?",
-                    (f"prune_awareness:{conversation_id}",),
-                )
-    except Exception:
-        pass
+    # Compute ContextPlan for Tier-aware telemetry (replaces legacy context_node_stats / VFS)
+    context_plan_usage = None
+    if conversation_id:
+        try:
+            context_plan = assemble_context_plan(
+                conversation_id,
+                active_tool_names=runtime_tool_names,
+                model_input_limit=prompt_budget,
+                current_time=prompt_now,
+            )
+            context_plan_usage = {
+                "tier1_tokens": context_plan.token_usage.tier1_tokens,
+                "tier2_tokens": context_plan.token_usage.tier2_tokens,
+                "tier3_tokens": context_plan.token_usage.tier3_tokens,
+                "tool_schema_tokens": context_plan.token_usage.tool_schema_tokens,
+                "total_tokens": context_plan.token_usage.total_tokens,
+                "model_input_limit": context_plan.token_usage.model_input_limit,
+                "free_capacity": context_plan.token_usage.free_capacity,
+                "usage_pct": (
+                    context_plan.token_usage.total_tokens / context_plan.token_usage.model_input_limit * 100
+                ) if context_plan.token_usage.model_input_limit > 0 else 0,
+                "tier3_footer": context_plan.tier3_footer,
+            }
+        except Exception:
+            pass
 
     stable_runtime_message = build_runtime_system_message(
         assistant_behavior,
@@ -2657,7 +2743,6 @@ def _build_budgeted_prompt_messages(
         include_dynamic_context=False,
         runtime_tool_names=runtime_tool_names,
         now=prompt_now,
-        context_node_stats=context_node_stats,
     )
     base_runtime_messages = [stable_runtime_message]
     base_context_injection = build_runtime_context_injection(
@@ -2689,10 +2774,7 @@ def _build_budgeted_prompt_messages(
         now=prompt_now,
         previous_canvas_content_hash=previous_canvas_content_hash,
         include_dynamic_context=True,
-        context_node_stats=context_node_stats,
     )
-    if _prune_awareness:
-        base_context_injection = f"{_prune_awareness}\n\n{base_context_injection}" if base_context_injection else _prune_awareness
     if base_context_injection:
         base_runtime_messages.append({"role": "system", "content": base_context_injection})
     base_system_tokens = _estimate_prompt_tokens(base_runtime_messages)
@@ -2917,6 +2999,7 @@ def _build_budgeted_prompt_messages(
         "continuity_guard_user": (continuity_guard_details or {}).get("user"),
         "continuity_guard_anchor": (continuity_guard_details or {}).get("anchor"),
         "continuity_guard_dropped": (continuity_guard_details or {}).get("dropped") or [],
+        "context_plan_usage": context_plan_usage,
     }
     if isinstance(continuity_guard_details, dict) and continuity_guard_details.get("status") in {
         "applied",
@@ -4104,31 +4187,6 @@ def _is_failed_tool_summary(summary: str) -> bool:
 
 
 
-def _persist_pruned_messages(conv_id: int, pruned_messages: list[dict]) -> None:
-    """Persist pruned message content back to the database.
-
-    Only updates the content field for tool messages that were pruned
-    (those with pruned: true flag). Leaves all other messages untouched.
-    """
-    with get_db() as conn:
-        for msg in pruned_messages:
-            if msg.get("pruned") is not True:
-                continue
-            if msg.get("role") != "tool":
-                continue
-            message_id = msg.get("id")
-            if not message_id:
-                continue
-            try:
-                message_id = int(message_id)
-            except (TypeError, ValueError):
-                continue
-            conn.execute(
-                "UPDATE messages SET content = ? WHERE id = ? AND conversation_id = ?",
-                (str(msg.get("content", "")), message_id, conv_id),
-            )
-
-
 
 def upsert_tool_trace_entry(entries: list[dict], call_map: dict[str, int], event: dict) -> None:
     tool_name = str(event.get("tool") or "").strip()
@@ -4210,9 +4268,14 @@ def persist_tool_history_rows(
     conversation_id: int,
     tool_history_messages: list[dict],
     trailing_assistant_message_id: int | None = None,
-) -> None:
+) -> list[int]:
+    """Persist tool-call and tool-result messages from a tool_history event.
+
+    Returns the list of message IDs that were inserted, in insertion order.
+    These IDs can be used for incremental context_blocks backfill.
+    """
     if not conversation_id or not isinstance(tool_history_messages, list):
-        return
+        return []
 
     rows_to_insert = []
     for message in tool_history_messages:
@@ -4244,8 +4307,9 @@ def persist_tool_history_rows(
             )
 
     if not rows_to_insert:
-        return
+        return []
 
+    inserted_ids = []
     with get_db() as conn:
         insert_position = None
         normalized_assistant_message_id = int(trailing_assistant_message_id or 0)
@@ -4261,7 +4325,7 @@ def persist_tool_history_rows(
         for offset, row in enumerate(rows_to_insert):
             position = insert_position + offset if insert_position is not None else None
             if row["role"] == "assistant":
-                insert_message(
+                msg_id = insert_message(
                     conn,
                     conversation_id,
                     "assistant",
@@ -4270,7 +4334,7 @@ def persist_tool_history_rows(
                     position=position,
                 )
             else:
-                insert_message(
+                msg_id = insert_message(
                     conn,
                     conversation_id,
                     "tool",
@@ -4278,11 +4342,14 @@ def persist_tool_history_rows(
                     tool_call_id=row.get("tool_call_id"),
                     position=position,
                 )
+            inserted_ids.append(msg_id)
 
         conn.execute(
             "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
             (conversation_id,),
         )
+
+    return inserted_ids
 
 
 def _persist_compacted_conversation_messages(
@@ -4370,71 +4437,6 @@ def _persist_compacted_conversation_messages(
             conn.execute("ROLLBACK")
             raise
 
-
-def prune_conversation_messages(conv_id):
-    """Prune tool outputs from a conversation's message list.
-
-    Per Pruning System Plan (docs/Pruning System Plan.md).
-
-    Request JSON:
-        mode: "smart" (default), "aggressive", or "status" (dry-run).
-        keep_count: Override aggressive_keep_count (default: 5).
-
-    Returns:
-        pruned_count: Number of outputs pruned.
-        pruned_tokens: Estimated tokens saved.
-        pruned_list: Descriptions of what was pruned.
-        awareness_message: Optional system message for the next LLM call.
-        mode: Which strategy was used.
-    """
-    from services.prune_service import prune_messages, mark_rerun_protected
-
-    if not request.is_json:
-        return jsonify({"error": "Request must be JSON."}), 400
-
-    data = request.get_json(silent=True) or {}
-    mode = str(data.get("mode") or "smart").strip().lower()
-    keep_count = data.get("keep_count")
-    if keep_count is not None:
-        try:
-            keep_count = max(1, int(keep_count))
-        except (TypeError, ValueError):
-            keep_count = None
-
-    # Load conversation messages.
-    messages = get_conversation_messages(conv_id)
-    if not messages:
-        return jsonify({"error": "Conversation not found or empty."}), 404
-
-    # Run pruning.
-    result = prune_messages(
-        messages,
-        mode=mode,
-        aggressive_keep_count=keep_count,
-        conversation_id=conv_id,
-    )
-
-    if mode == "status":
-        return jsonify(result)
-
-    # Persist pruned messages back to the database if not a dry-run.
-    if result["pruned_count"] > 0:
-        _persist_pruned_messages(conv_id, result["messages"])
-
-        # Store awareness_message in app_settings so the next agent turn can inject it
-        awareness_message = result.get("awareness_message")
-        if awareness_message:
-            try:
-                with get_db() as conn:
-                    conn.execute(
-                        "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now')) "
-                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')",
-                        (f"prune_awareness:{conv_id}", awareness_message),
-                    )
-            except Exception:
-                pass
-
-    return jsonify(result)
 
 
 def fix_text():
@@ -4942,13 +4944,6 @@ def chat():
                     (model, conv_id),
                 )
 
-        # Apply Conversation Truncation Policy after user message is persisted
-        if conv_id:
-            try:
-                apply_conversation_truncation(conv_id, settings)
-            except Exception:
-                LOGGER.debug("Conversation truncation failed for conv_id=%s", conv_id, exc_info=True)
-
         attachments = extract_message_attachments(latest_user_message.get("metadata"))
         if persisted_user_message_id is not None:
             for attachment in attachments:
@@ -4987,28 +4982,21 @@ def chat():
     elif conv_id:
         canonical_messages = get_conversation_messages(conv_id)
 
+    # Insert the just-accepted user turn into the Tier 2 ledger before prompt
+    # assembly.  Waiting until the end of the stream would make the first
+    # model call omit the user's current request from the canonical history.
+    if conv_id and persisted_user_message_id is not None:
+        try:
+            incremental_backfill_context_blocks(conv_id, [persisted_user_message_id])
+        except Exception:
+            LOGGER.exception("Unable to persist current user message in context ledger conv_id=%s", conv_id)
+            return jsonify({"error": "Could not prepare the conversation context. Please retry."}), 500
+
+    # Tier 2 is append-only.  Automatic preflight summaries used to rewrite
+    # transcript history before a request; explicit compact_context is now the
+    # only supported whole-history replacement operation.
     preflight_summary_outcome = None
     preflight_summary_required = False
-    if conv_id and persisted_user_message_id is not None:
-        chat_summary_mode = get_chat_summary_mode(settings)
-        preflight_visible_token_count = count_visible_message_tokens(
-            canonical_messages,
-            include_context_injections=False,
-        )
-        preflight_summary_required = (
-            chat_summary_mode != "never"
-            and preflight_visible_token_count >= get_prompt_preflight_summary_token_count(settings)
-        )
-        preflight_summary_outcome = _maybe_run_preflight_summary(
-            conv_id,
-            model,
-            settings,
-            fetch_url_token_threshold,
-            fetch_url_clip_aggressiveness,
-            exclude_message_ids={persisted_user_message_id},
-        )
-        if preflight_summary_outcome and preflight_summary_outcome.get("applied"):
-            canonical_messages = preflight_summary_outcome.get("messages") or get_conversation_messages(conv_id)
 
     rag_exclude_source_keys = (
         {
@@ -5113,10 +5101,7 @@ def chat():
             previous_canvas_content_hash=previous_canvas_content_hash,
         )
     )
-    persisted_context_injection = prepare_context_injection_for_history(current_context_injection or "")
     persisted_meta_update: dict = {}
-    if persisted_context_injection:
-        persisted_meta_update["context_injection"] = persisted_context_injection
     current_canvas_hash = _compute_active_canvas_content_hash(
         initial_canvas_documents, initial_canvas_active_document_id
     )
@@ -5206,13 +5191,6 @@ def chat():
                 pending_clarification=pending_clarification,
             )
             last_persisted_response_length = len(full_response)
-            # Apply Conversation Truncation Policy after assistant message persists
-            if conv_id:
-                try:
-                    apply_conversation_truncation(conv_id, settings)
-                except Exception:
-                    LOGGER.debug("Conversation truncation failed for conv_id=%s", conv_id, exc_info=True)
-
         def persist_model_invocations(assistant_message_id: int | None) -> None:
             nonlocal model_invocations_persisted
             if model_invocations_persisted or not conv_id or not captured_model_invocations:
@@ -5363,6 +5341,35 @@ def chat():
                 + "\n"
             )
 
+        # Emit context status telemetry (Tier-aware, replaces legacy context_node_stats)
+        if prompt_budget_stats.get("context_plan_usage"):
+            cpu = prompt_budget_stats["context_plan_usage"]
+            usage_pct = cpu.get("usage_pct", 0)
+            if usage_pct >= 95:
+                system_status = "Critical"
+            elif usage_pct >= 80:
+                system_status = "Warning"
+            else:
+                system_status = "Optimal"
+            yield (
+                json.dumps(
+                    {
+                        "type": "context_status",
+                        "tier1_tokens": cpu.get("tier1_tokens", 0),
+                        "tier2_tokens": cpu.get("tier2_tokens", 0),
+                        "tier3_tokens": cpu.get("tier3_tokens", 0),
+                        "tool_schema_tokens": cpu.get("tool_schema_tokens", 0),
+                        "total_tokens": cpu.get("total_tokens", 0),
+                        "model_input_limit": cpu.get("model_input_limit", 128000),
+                        "free_capacity": cpu.get("free_capacity", 0),
+                        "usage_pct": round(usage_pct, 1),
+                        "system_status": system_status,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
         if document_events:
             for document_event in document_events:
                 yield json.dumps(document_event, ensure_ascii=False) + "\n"
@@ -5412,11 +5419,16 @@ def chat():
                         full_response = _strip_buffered_tool_preamble(full_response, history_messages)
                         last_persisted_response_length = min(last_persisted_response_length, len(full_response))
                         if conv_id:
-                            persist_tool_history_rows(
+                            inserted_ids = persist_tool_history_rows(
                                 conv_id,
                                 history_messages,
                                 trailing_assistant_message_id=persisted_assistant_message_id,
                             )
+                            if inserted_ids:
+                                try:
+                                    incremental_backfill_context_blocks(conv_id, inserted_ids)
+                                except Exception:
+                                    LOGGER.debug("Context block backfill skipped for conv_id=%s", conv_id, exc_info=True)
                         yield (
                             json.dumps(
                                 {
@@ -5532,11 +5544,6 @@ def chat():
                     pending_clarification=pending_clarification,
                 )
                 persist_model_invocations(cancelled_assistant_message_id)
-                if conv_id:
-                    try:
-                        apply_conversation_truncation(conv_id, settings)
-                    except Exception:
-                        LOGGER.debug("Conversation truncation failed for conv_id=%s", conv_id, exc_info=True)
             yield (
                 json.dumps(
                     {
@@ -5590,11 +5597,6 @@ def chat():
                         pending_clarification=pending_clarification,
                     )
                     persist_model_invocations(cancelled_assistant_message_id)
-                    if conv_id:
-                        try:
-                            apply_conversation_truncation(conv_id, settings)
-                        except Exception:
-                            LOGGER.debug("Conversation truncation failed for conv_id=%s", conv_id, exc_info=True)
                 yield (
                     json.dumps(
                         {
@@ -5689,11 +5691,6 @@ def chat():
                         pending_clarification=pending_clarification,
                     )
                     persist_model_invocations(aborted_assistant_message_id)
-                    if conv_id:
-                        try:
-                            apply_conversation_truncation(conv_id, settings)
-                        except Exception:
-                            LOGGER.debug("Conversation truncation failed for conv_id=%s", conv_id, exc_info=True)
             try:
                 agent_stream.close()
             except Exception:
@@ -5701,11 +5698,16 @@ def chat():
 
         with app_obj.app_context():
             if conv_id and persisted_tool_history:
-                persist_tool_history_rows(
+                _inserted = persist_tool_history_rows(
                     conv_id,
                     persisted_tool_history,
                     trailing_assistant_message_id=persisted_assistant_message_id,
                 )
+                if _inserted:
+                    try:
+                        incremental_backfill_context_blocks(conv_id, _inserted)
+                    except Exception:
+                        LOGGER.debug("Context block backfill skipped for conv_id=%s", conv_id, exc_info=True)
 
             persisted_assistant_message_id = _persist_streaming_assistant_message(
                 conv_id,
@@ -5723,11 +5725,12 @@ def chat():
             )
             persist_model_invocations(persisted_assistant_message_id)
 
-            if conv_id:
+            # ---- Phase 3: backfill context_blocks for the assistant message ----
+            if conv_id and persisted_assistant_message_id:
                 try:
-                    apply_conversation_truncation(conv_id, settings)
+                    incremental_backfill_context_blocks(conv_id, [persisted_assistant_message_id])
                 except Exception:
-                    LOGGER.debug("Conversation truncation failed for conv_id=%s", conv_id, exc_info=True)
+                    LOGGER.debug("Context block backfill skipped for assistant msg conv_id=%s", conv_id, exc_info=True)
 
             if persisted_user_message_id is not None or persisted_assistant_message_id is not None:
                 yield (
@@ -5756,128 +5759,6 @@ def chat():
                     )
                     + "\n"
                 )
-
-                preflight_summary_applied = bool(
-                    preflight_summary_outcome and preflight_summary_outcome.get("applied")
-                )
-
-                if defer_post_response_tasks and not preflight_summary_applied:
-                    POST_RESPONSE_EXECUTOR.submit(
-                        _run_chat_post_response_tasks,
-                        app_obj,
-                        conv_id,
-                        model,
-                        dict(settings),
-                        fetch_url_token_threshold,
-                        fetch_url_clip_aggressiveness,
-                        current_turn_ids,
-                    )
-                elif not preflight_summary_applied:
-                    summary_future = SUMMARY_EXECUTOR.submit(
-                        maybe_create_conversation_summary,
-                        conv_id,
-                        model,
-                        settings,
-                        fetch_url_token_threshold,
-                        fetch_url_clip_aggressiveness,
-                        current_turn_ids,
-                    )
-
-            if summary_future is not None:
-                try:
-                    summary_outcome = summary_future.result()
-                except Exception:
-                    summary_outcome = {
-                        "applied": False,
-                        "reason": "internal_error",
-                        "error": "summary_future_failed",
-                        "failure_stage": "internal_error",
-                        "failure_detail": "The background summary task failed before it returned a result.",
-                    }
-
-                if summary_outcome.get("applied"):
-                    if get_runtime_setting("RAG_ENABLED"):
-                        _schedule_rag_conversation_sync(conversation_id=conv_id)
-                    yield (
-                        json.dumps(
-                            {
-                                "type": "conversation_summary_applied",
-                                "summary_message_id": summary_outcome.get("summary_message_id"),
-                                "covered_message_count": summary_outcome.get("covered_message_count", 0),
-                                "covered_tool_message_count": summary_outcome.get("covered_tool_message_count", 0),
-                                "mode": summary_outcome.get("mode") or get_chat_summary_mode(settings),
-                                "trigger_token_count": summary_outcome.get("trigger_token_count"),
-                                "visible_token_count": summary_outcome.get("visible_token_count"),
-                                "summary_model": summary_outcome.get("summary_model") or _resolve_summary_model(),
-                                "checked_at": summary_outcome.get("checked_at"),
-                                "candidate_message_count": summary_outcome.get("candidate_message_count"),
-                                "excluded_message_count": summary_outcome.get("excluded_message_count"),
-                                "prompt_message_count": summary_outcome.get("prompt_message_count"),
-                                "empty_message_count": summary_outcome.get("empty_message_count"),
-                                "merged_assistant_message_count": summary_outcome.get(
-                                    "merged_assistant_message_count"
-                                ),
-                                "skipped_error_message_count": summary_outcome.get("skipped_error_message_count"),
-                                "returned_text_length": summary_outcome.get("returned_text_length"),
-                                "user_assistant_token_count": summary_outcome.get("user_assistant_token_count"),
-                                "tool_token_count": summary_outcome.get("tool_token_count"),
-                                "tool_message_count": summary_outcome.get("tool_message_count"),
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
-                    yield (
-                        json.dumps(
-                            {
-                                "type": "history_sync",
-                                "messages": _prioritize_summary_messages(
-                                    summary_outcome.get("messages") or get_conversation_messages(conv_id)
-                                ),
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
-                else:
-                    yield (
-                        json.dumps(
-                            {
-                                "type": "conversation_summary_status",
-                                "applied": False,
-                                "reason": summary_outcome.get("reason")
-                                or ("locked" if summary_outcome.get("locked") else "skipped"),
-                                "error": summary_outcome.get("error"),
-                                "mode": summary_outcome.get("mode") or get_chat_summary_mode(settings),
-                                "trigger_token_count": summary_outcome.get("trigger_token_count"),
-                                "visible_token_count": summary_outcome.get("visible_token_count"),
-                                "summary_model": summary_outcome.get("summary_model") or _resolve_summary_model(),
-                                "checked_at": summary_outcome.get("checked_at"),
-                                "failure_stage": summary_outcome.get("failure_stage"),
-                                "failure_detail": summary_outcome.get("failure_detail"),
-                                "token_gap": summary_outcome.get("token_gap"),
-                                "candidate_message_count": summary_outcome.get("candidate_message_count"),
-                                "excluded_message_count": summary_outcome.get("excluded_message_count"),
-                                "prompt_message_count": summary_outcome.get("prompt_message_count"),
-                                "empty_message_count": summary_outcome.get("empty_message_count"),
-                                "merged_assistant_message_count": summary_outcome.get(
-                                    "merged_assistant_message_count"
-                                ),
-                                "skipped_error_message_count": summary_outcome.get("skipped_error_message_count"),
-                                "returned_text_length": summary_outcome.get("returned_text_length"),
-                                "summary_error_count": summary_outcome.get("summary_error_count"),
-                                "used_max_steps": summary_outcome.get("used_max_steps"),
-                                "user_assistant_token_count": summary_outcome.get("user_assistant_token_count"),
-                                "tool_token_count": summary_outcome.get("tool_token_count"),
-                                "tool_message_count": summary_outcome.get("tool_message_count"),
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
-                    if get_runtime_setting("RAG_ENABLED") and conv_id:
-                        _schedule_rag_conversation_sync(conversation_id=conv_id)
-
 
     response_headers = {
         "Cache-Control": "no-cache",
@@ -6235,7 +6116,9 @@ def undo_summary(conv_id, summary_id):
 
 
 def register_chat_routes(app) -> None:
-    app.route("/api/conversations/<int:conv_id>/prune", methods=["POST"])(prune_conversation_messages)
+    # These endpoints are still used by the message composer and the existing
+    # summary panel.  Context compaction is additive; it must not silently
+    # turn those established UI actions into 404s.
     app.route("/api/fix-text", methods=["POST"])(fix_text)
     app.route("/chat", methods=["POST"])(chat)
     app.route("/api/chat-runs/<string:run_id>/cancel", methods=["POST"])(cancel_chat_run)

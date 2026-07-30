@@ -89,9 +89,6 @@ from core.db import (
     get_prompt_response_token_reserve,
     get_prompt_summary_max_tokens,
     get_prompt_tool_trace_max_tokens,
-    get_pruning_aggressive_keep_count,
-    get_pruning_enabled,
-    get_pruning_failed_attempts_threshold,
     get_rag_auto_inject_enabled,
     get_rag_auto_inject_source_types,
     get_rag_chunk_overlap,
@@ -182,6 +179,8 @@ TOOL_PERMISSION_LABELS = {
     "read_canvas_document": "Read canvas document",
     "delete_canvas_document": "Delete canvas document",
     "expand_truncated_tool_result": "Expand truncated tool result",
+    "purge": "Purge selected context blocks",
+    "compact_context": "Compact the conversation context",
 }
 
 TOOL_PERMISSION_DESCRIPTIONS = {
@@ -201,6 +200,8 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "read_canvas_document": "Read one canvas document or a focused line range.",
     "delete_canvas_document": "Permanently remove a canvas document from the conversation.",
     "expand_truncated_tool_result": "Retrieve the full uncropped content of a previously executed tool call that was truncated in the conversation history.",
+    "purge": "Permanently remove selected visible context blocks and any required tool-call dependencies.",
+    "compact_context": "Replace the active conversation ledger with a validated compact state and resume instruction.",
 }
 
 def validate_tool_catalog_sync() -> tuple[list[str], list[str], list[str]]:
@@ -457,8 +458,15 @@ def _build_canvas_section(raw: dict) -> dict:
 
 def _build_web_section(raw: dict) -> dict:
     """Build web/openrouter-related fields for settings payload."""
+    try:
+        bright_data_timeout = int(raw.get("bright_data_serp_timeout_seconds", "30") or 30)
+    except (TypeError, ValueError):
+        bright_data_timeout = 30
     return {
         "web_cache_ttl_hours": get_web_cache_ttl_hours(raw),
+        "bright_data_serp_language": str(raw.get("bright_data_serp_language", "en") or "en").lower(),
+        "bright_data_serp_country": str(raw.get("bright_data_serp_country", "US") or "US").upper(),
+        "bright_data_serp_timeout_seconds": max(1, min(120, bright_data_timeout)),
         "openrouter_prompt_cache_enabled": get_openrouter_prompt_cache_enabled(raw),
         "openrouter_anthropic_cache_ttl": get_openrouter_anthropic_cache_ttl(raw),
         "openrouter_http_referer": get_openrouter_http_referer(raw),
@@ -504,10 +512,6 @@ def _build_conversation_section(raw: dict) -> dict:
         "conversation_truncation_enabled": get_conversation_truncation_enabled(raw),
         "conversation_max_messages": get_conversation_max_messages(raw),
         "conversation_max_message_chars": get_conversation_max_message_chars(raw),
-        # Pruning config
-        "pruning_enabled": get_pruning_enabled(raw),
-        "pruning_aggressive_keep_count": get_pruning_aggressive_keep_count(raw),
-        "pruning_failed_attempts_threshold": get_pruning_failed_attempts_threshold(raw),
     }
 
 
@@ -1599,6 +1603,30 @@ def register_page_routes(app) -> None:
         activity_retention_days_raw = data.get("activity_retention_days")
         openrouter_prompt_cache_enabled_raw = data.get("openrouter_prompt_cache_enabled")
         openrouter_anthropic_cache_ttl_raw = data.get("openrouter_anthropic_cache_ttl")
+        bright_data_serp_language_raw = data.get("bright_data_serp_language")
+        bright_data_serp_country_raw = data.get("bright_data_serp_country")
+        bright_data_serp_timeout_seconds_raw = data.get("bright_data_serp_timeout_seconds")
+
+        if bright_data_serp_language_raw is not None:
+            language = str(bright_data_serp_language_raw).strip().lower()
+            if language not in {"en", "tr"}:
+                return jsonify({"error": "bright_data_serp_language must be 'en' or 'tr'."}), 400
+            settings["bright_data_serp_language"] = language
+
+        if bright_data_serp_country_raw is not None:
+            country = str(bright_data_serp_country_raw).strip().upper()
+            if len(country) != 2 or not country.isalpha():
+                return jsonify({"error": "bright_data_serp_country must be a two-letter country code."}), 400
+            settings["bright_data_serp_country"] = country
+
+        if bright_data_serp_timeout_seconds_raw is not None:
+            try:
+                timeout = int(bright_data_serp_timeout_seconds_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "bright_data_serp_timeout_seconds must be an integer."}), 400
+            if not (1 <= timeout <= 120):
+                return jsonify({"error": "bright_data_serp_timeout_seconds must be between 1 and 120."}), 400
+            settings["bright_data_serp_timeout_seconds"] = str(timeout)
 
         if web_cache_ttl_hours_raw is not None:
             try:
@@ -1733,38 +1761,6 @@ def register_page_routes(app) -> None:
 
         return None, None
 
-    def _apply_pruning_settings(
-        data: dict,
-        settings: dict,
-    ) -> tuple[None, None] | tuple[dict, int]:
-        """Apply pruning configuration settings. Returns (None, None) on success, (error_response, status_code) on error."""
-        pruning_enabled_raw = data.get("pruning_enabled")
-        pruning_aggressive_keep_count_raw = data.get("pruning_aggressive_keep_count")
-        pruning_failed_attempts_threshold_raw = data.get("pruning_failed_attempts_threshold")
-
-        if pruning_enabled_raw is not None:
-            settings["pruning_enabled"] = _normalize_bool_setting_value(pruning_enabled_raw)
-
-        if pruning_aggressive_keep_count_raw is not None:
-            try:
-                pruning_aggressive_keep_count = int(pruning_aggressive_keep_count_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "pruning_aggressive_keep_count must be an integer."}), 400
-            if not (5 <= pruning_aggressive_keep_count <= 100):
-                return jsonify({"error": "pruning_aggressive_keep_count must be between 5 and 100."}), 400
-            settings["pruning_aggressive_keep_count"] = str(pruning_aggressive_keep_count)
-
-        if pruning_failed_attempts_threshold_raw is not None:
-            try:
-                pruning_failed_attempts_threshold = int(pruning_failed_attempts_threshold_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "pruning_failed_attempts_threshold must be an integer."}), 400
-            if not (1 <= pruning_failed_attempts_threshold <= 20):
-                return jsonify({"error": "pruning_failed_attempts_threshold must be between 1 and 20."}), 400
-            settings["pruning_failed_attempts_threshold"] = str(pruning_failed_attempts_threshold)
-
-        return None, None
-
     # === Slim orchestrator ===
 
     # All setting keys recognized by the PATCH endpoint.
@@ -1824,9 +1820,6 @@ def register_page_routes(app) -> None:
         "prompt_response_token_reserve",
         "prompt_summary_max_tokens",
         "prompt_tool_trace_max_tokens",
-        "pruning_aggressive_keep_count",
-        "pruning_enabled",
-        "pruning_failed_attempts_threshold",
         "rag_auto_inject",
         "rag_auto_inject_source_types",
         "rag_chunk_overlap",
@@ -1860,6 +1853,9 @@ def register_page_routes(app) -> None:
         "title",
         "visible_model_order",
         "web_cache_ttl_hours",
+        "bright_data_serp_language",
+        "bright_data_serp_country",
+        "bright_data_serp_timeout_seconds",
         "youtube_transcripts_enabled",
     })
 
@@ -1923,10 +1919,6 @@ def register_page_routes(app) -> None:
             return err
 
         err = _apply_sub_agent_settings(data, settings)
-        if err != (None, None):
-            return err
-
-        err = _apply_pruning_settings(data, settings)
         if err != (None, None):
             return err
 

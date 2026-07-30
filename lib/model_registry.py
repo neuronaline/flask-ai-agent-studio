@@ -43,6 +43,7 @@ MODEL_OPERATION_KEYS = (
     "fix_text",
     "generate_title",
     "upload_metadata",
+    "compaction",
 )
 DEFAULT_OPERATION_MODEL_PREFERENCES = {key: "" for key in MODEL_OPERATION_KEYS}
 DEFAULT_OPERATION_MODEL_FALLBACK_PREFERENCES = {key: [] for key in MODEL_OPERATION_KEYS}

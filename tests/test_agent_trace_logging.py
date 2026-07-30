@@ -106,8 +106,11 @@ def test_trace_agent_stream_payload_logs_event_type_and_full_payload(monkeypatch
     assert payload["raw"]["payload"]["text"] == "Merhaba"
 
 
-def test_env_example_documents_trace_logging_flags() -> None:
+def test_env_example_is_limited_to_bootstrap_secrets() -> None:
     env_example = ENV_EXAMPLE_PATH.read_text(encoding="utf-8")
 
-    assert "AGENT_TRACE_LOG_ENABLED" in env_example
-    assert "AGENT_TRACE_LOG_INCLUDE_RAW" in env_example
+    assert "FLASK_SECRET_KEY" in env_example
+    assert "DEEPSEEK_API_KEY" in env_example
+    assert "OPENROUTER_API_KEY" in env_example
+    assert "AGENT_TRACE_LOG_ENABLED" not in env_example
+    assert "AGENT_TRACE_LOG_INCLUDE_RAW" not in env_example
