@@ -162,6 +162,27 @@ class TestRunIsolatedAgent:
             assert result["errors"], "Should have timeout error"
             assert any("timed out" in e.lower() for e in result["errors"])
 
+    def test_run_isolated_agent_watchdog_timeout_after_cooperative_stop(self):
+        """A stream can stop on cancellation without yielding a later event."""
+        def _stream(*args, **kwargs):
+            cancel_event = kwargs["agent_context"]["cancel_event"]
+            cancel_event.wait()
+            if False:  # pragma: no cover - preserves generator form
+                yield {}
+
+        with patch("agent.agent.run_agent_stream") as mock_run:
+            mock_run.side_effect = _stream
+
+            result = run_isolated_agent(
+                task_messages=[{"role": "user", "content": "Test"}],
+                allowlist_tools=[],
+                max_steps=2,
+                timeout_seconds=0.01,
+            )
+
+        assert result["success"] is False
+        assert any("timed out" in error.lower() for error in result["errors"])
+
     def test_run_isolated_agent_truncates_long_report(self):
         long_text = "A" * 40_000
 

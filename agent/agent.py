@@ -3779,9 +3779,16 @@ def _run_purge(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
     Per AI Memory and Context Management doc Section 5, Phase 4:
     - Resolves public IDs within the active conversation.
     - Expands to dependency closure (tool_call + tool_result atomic groups).
-    - Transactonally deletes blocks, hides messages, writes audit.
+    - Transactionally deletes blocks, hides messages, writes audit.
     - Optionally appends a summary block.
+
+    Safety gate: requires explicit `confirm: true` to execute. Without
+    confirmation, returns a dry-run preview showing exactly which blocks
+    would be removed and their dependency closure.
     """
+    # Require the JSON boolean true.  Truthy malformed values such as the
+    # string "false" must never authorize a destructive operation.
+    confirm = tool_args.get("confirm") is True
     requested_ids: list[str] = []
     raw_ids = tool_args.get("ids")
     if isinstance(raw_ids, list):
@@ -3799,11 +3806,24 @@ def _run_purge(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
     try:
         from core.db import resolve_purge_dependency_closure, execute_purge_transaction
 
-        # Resolve and validate
+        # Resolve and validate (always — needed for both dry-run and execution)
         resolved_ids, errors = resolve_purge_dependency_closure(requested_ids, conversation_id)
         if errors:
             error_msg = "; ".join(errors)
             return {"error": error_msg, "requested_ids": requested_ids}, f"purge: {error_msg}"
+
+        # Dry-run: return preview without executing
+        if not confirm:
+            return {
+                "dry_run": True,
+                "message": (
+                    f"This will permanently remove {len(resolved_ids)} block(s) "
+                    f"(closure of {len(requested_ids)} requested ID(s)). "
+                    "Call again with confirm: true to execute."
+                ),
+                "requested_ids": requested_ids,
+                "resolved_ids": resolved_ids,
+            }, f"purge: dry-run — {len(resolved_ids)} block(s) would be removed"
 
         # Execute transaction
         result = execute_purge_transaction(
@@ -3822,12 +3842,8 @@ def _run_purge(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
             sync_conversations_to_rag_safe(conversation_id=conversation_id, force=True)
             result["rag_cleanup_pending"] = False
         except Exception:
-            # The mutation is already committed. Surface a retryable cleanup
-            # condition instead of pretending purged material cannot recur in
-            # conversation-derived retrieval.
             result["rag_cleanup_pending"] = True
 
-        # Build human-readable summary
         n_removed = len(result.get("resolved_ids", []))
         n_requested = len(requested_ids)
         tokens_saved = result.get("removed_tokens", 0)
@@ -4083,11 +4099,29 @@ def _run_compact_context_legacy(tool_args: dict, runtime_state: dict) -> tuple[d
 
 
 def _run_compact_context(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
-    """Run the shared explicit compaction service for a model tool call."""
+    """Run the shared explicit compaction service for a model tool call.
+
+    Safety gate: requires explicit `confirm: true` to execute. Without
+    confirmation, returns a descriptive message instructing the model
+    to call again with confirmation.
+    """
+    # Require the JSON boolean true.  Truthy malformed values such as the
+    # string "false" must never authorize a destructive operation.
+    confirm = tool_args.get("confirm") is True
     resume_instruction = str(tool_args.get("resume_instruction") or "").strip()
     conversation_id, _source_message_id = _get_agent_state_mutation_context(runtime_state)
     if conversation_id is None:
         return {"error": "Cannot determine conversation context."}, "compact_context: missing conversation context"
+
+    if not confirm:
+        return {
+            "dry_run": True,
+            "message": (
+                "This will permanently replace the conversation history with a compacted summary. "
+                "The old blocks will be removed and a new compacted state block will be created. "
+                "Call again with confirm: true to execute."
+            ),
+        }, "compact_context: dry-run — call again with confirm: true to execute"
 
     from services.context_compaction import compact_conversation
 
@@ -5903,41 +5937,23 @@ def run_agent_stream(
                 tool_calls,
                 tool_call_error,
             )
-            estimated_breakdown, estimated_input_tokens, tool_schema_tokens, token_summary = finalize_call_usage()
+            # Flush buffered content before post-iterator usage capture
             if buffered_content_deltas and not buffer_answer and not tool_calls and not tool_call_error:
                 for pending_delta in buffered_content_deltas:
                     for event in emit_turn_answer(pending_delta):
                         yield event
 
-            # Capture usage from the stream iterator after iteration ends
+            # Capture usage from the stream iterator after iteration ends.
+            # This replaces the partial stream-delta provider_usage with the
+            # authoritative response.usage when the provider did not stream
+            # usage inline.
             if not provider_usage.get("received"):
                 stream_usage = _extract_usage_metrics(getattr(response, "usage", None))
                 if stream_usage.get("usage_fields_present"):
                     provider_usage = add_usage(getattr(response, "usage", None))
-                    usage_totals["prompt_tokens"] += provider_usage["prompt_tokens"]
-                    usage_totals["prompt_cache_hit_tokens"] += provider_usage["prompt_cache_hit_tokens"]
-                    usage_totals["prompt_cache_miss_tokens"] += provider_usage["prompt_cache_miss_tokens"]
-                    usage_totals["prompt_cache_write_tokens"] += provider_usage["prompt_cache_write_tokens"]
-                    usage_totals["completion_tokens"] += provider_usage["completion_tokens"]
-                    usage_totals["total_tokens"] += provider_usage["total_tokens"]
 
-                    # Update the existing model_calls record with actual streaming usage
-                    if usage_totals["model_calls"]:
-                        last_call = usage_totals["model_calls"][-1]
-                        last_call.update(
-                            {
-                                "prompt_tokens": provider_usage["prompt_tokens"],
-                                "prompt_cache_hit_tokens": provider_usage["prompt_cache_hit_tokens"],
-                                "prompt_cache_miss_tokens": provider_usage["prompt_cache_miss_tokens"],
-                                "prompt_cache_write_tokens": provider_usage["prompt_cache_write_tokens"],
-                                "completion_tokens": provider_usage["completion_tokens"],
-                                "total_tokens": provider_usage["total_tokens"],
-                                "missing_provider_usage": not provider_usage["received"],
-                                "cache_metrics_estimated": False,
-                            }
-                        )
-                    # Recalculate token_summary with updated provider_usage
-                    estimated_breakdown, estimated_input_tokens, tool_schema_tokens, token_summary = finalize_call_usage()
+            # Finalize usage exactly once with the final provider_usage state
+            estimated_breakdown, estimated_input_tokens, tool_schema_tokens, token_summary = finalize_call_usage()
 
             _trace_agent_event(
                 "model_turn_completed",
@@ -6382,7 +6398,7 @@ def run_agent_stream(
                 "has_step_update": False,
             }
 
-            if tool_name not in enabled_tool_names:
+            if tool_name not in normalized_enabled_tool_names:
                 slot["kind"] = "error"
                 slot["error"] = f"Tool disabled: {tool_name}"
                 slots.append(slot)

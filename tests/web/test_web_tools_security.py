@@ -37,21 +37,30 @@ def test_validate_resolved_ip_address_accepts_public_ip():
 
 
 
-def test_guarded_dns_resolution_restores_socket_after_error(monkeypatch):
-    original = socket.getaddrinfo
-
-    def sentinel_getaddrinfo(*args, **kwargs):
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
-
-    monkeypatch.setattr(socket, "getaddrinfo", sentinel_getaddrinfo)
-
-    with pytest.raises(RuntimeError, match="boom"):
+def test_guarded_dns_resolution_emits_deprecation_warning():
+    import warnings
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
         with web_tools._guarded_dns_resolution(enabled=True):
-            assert socket.getaddrinfo is not sentinel_getaddrinfo
-            raise RuntimeError("boom")
+            pass
+    deprecations = [x for x in w if issubclass(x.category, DeprecationWarning)]
+    assert len(deprecations) >= 1
+    assert "_guarded_dns_resolution is deprecated" in str(deprecations[0].message)
 
-    assert socket.getaddrinfo is sentinel_getaddrinfo
-    monkeypatch.setattr(socket, "getaddrinfo", original)
+
+def test_validate_hostname_dns_rejects_private_ip(monkeypatch):
+    def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 0))]
+    monkeypatch.setattr(web_tools.socket, "getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(socket.gaierror, match="non-public"):
+        web_tools._validate_hostname_dns("internal.example.com")
+
+
+def test_validate_hostname_dns_accepts_public_ip(monkeypatch):
+    def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+    monkeypatch.setattr(web_tools.socket, "getaddrinfo", fake_getaddrinfo)
+    web_tools._validate_hostname_dns("example.com")  # should not raise
 
 
 

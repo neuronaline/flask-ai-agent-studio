@@ -335,25 +335,46 @@ def _validate_resolved_ip_address(address: str) -> None:
 
 @contextlib.contextmanager
 def _guarded_dns_resolution(enabled: bool = True):
-    """Prevent PageFetch from resolving public hostnames to local addresses."""
-    if not enabled:
-        yield
+    """Deprecated: was a process-global monkeypatch with thread-safety issues.
+
+    Replaced by _validate_hostname_dns() (pre-fetch) and final_url re-validation
+    in fetch_url_tool(). Kept as a no-op for backward compatibility of any
+    internal callers; emits a deprecation warning when used.
+    """
+    import warnings
+    warnings.warn(
+        "_guarded_dns_resolution is deprecated and has no effect. "
+        "DNS validation is now handled per-call via _validate_hostname_dns().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    yield
+
+
+def _validate_hostname_dns(hostname: str) -> None:
+    """Resolve hostname and verify all returned IP addresses are global.
+
+    Raises socket.gaierror if any resolved address is non-global (private,
+    loopback, link-local, etc.). This is a per-call, thread-safe alternative
+    to the previous process-global socket monkeypatch.
+    """
+    if not hostname or not hostname.strip():
         return
-    original_getaddrinfo = socket.getaddrinfo
-
-    def guarded_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-        results = original_getaddrinfo(host, port, family, type, proto, flags)
-        for entry in results:
-            address = entry[4][0] if len(entry) > 4 else None
-            if address:
-                _validate_resolved_ip_address(address)
-        return results
-
-    socket.getaddrinfo = guarded_getaddrinfo
+    hostname = hostname.strip()
+    # Skip pure IP addresses — _is_safe_url already handles those
     try:
-        yield
-    finally:
-        socket.getaddrinfo = original_getaddrinfo
+        ipaddress.ip_address(hostname)
+        return
+    except ValueError:
+        pass
+    try:
+        results = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        raise
+    for entry in results:
+        address = entry[4][0] if len(entry) > 4 else None
+        if address:
+            _validate_resolved_ip_address(address)
 
 
 def _clean_extracted_text(text: str) -> str:
@@ -478,8 +499,11 @@ def fetch_url_tool(
         return cached
 
     try:
-        with _guarded_dns_resolution(enabled=True):
-            fetched = _run_pagefetch(url)
+        # Pre-fetch DNS validation: thread-safe per-call check
+        parsed = urlparse(url)
+        if parsed.hostname:
+            _validate_hostname_dns(parsed.hostname)
+        fetched = _run_pagefetch(url)
     except Exception as exc:
         LOGGER.error("PageFetch failed for %s: %s", url, exc)
         return {"url": url, "error": str(exc), "content": ""}
@@ -499,6 +523,19 @@ def fetch_url_tool(
 
     content_type = str(getattr(fetched, "content_type", "") or "")
     final_url = str(getattr(fetched, "final_url", "") or url)
+
+    # Validate final_url after redirects to prevent DNS rebinding bypass
+    if final_url != url:
+        final_safe, final_reason = _is_safe_url(final_url)
+        if not final_safe:
+            return {"url": url, "error": f"Redirect target rejected: {final_reason}", "content": ""}
+        final_parsed = urlparse(final_url)
+        if final_parsed.hostname:
+            try:
+                _validate_hostname_dns(final_parsed.hostname)
+            except (socket.gaierror, OSError) as dns_err:
+                return {"url": url, "error": f"Redirect target DNS rejected: {dns_err}", "content": ""}
+
     clipped_content = _truncate_content(content, normalized_max_chars)
     result = {
         "url": final_url,

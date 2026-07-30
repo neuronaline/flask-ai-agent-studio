@@ -862,13 +862,14 @@ TOOL_SPECS = [
     {
         "name": "delegate_task",
         "description": (
-            "Spawn a fresh sub-agent to handle a self-contained sub-task independently. "
-            "The sub-agent gets a clean context window and its own tool access. "
-            "Returns a summary of actions taken and key findings. "
-            "Use this for: deep analysis of files not yet in context, iterative debug-edit-test loops, "
-            "or running a large test suite. "
-            "Do NOT use for single tool calls, quick lookups, or tasks requiring cross-file reasoning "
-            "with files already in your context."
+            "Spawn a fresh sub-agent to handle a self-contained research or analysis task independently. "
+            "The sub-agent gets a clean context window and limited tool access (web search, "
+            "page fetch, canvas document reading, knowledge base search). "
+            "Returns a summary of findings and actions taken. "
+            "Use this for: web research, synthesizing information across multiple sources, "
+            "analyzing canvas documents, or querying the knowledge base. "
+            "Do NOT use for single tool calls, quick lookups, or file system operations "
+            "(the sub-agent cannot read or write files on disk)."
         ),
         "parameters": {
             "type": "object",
@@ -880,28 +881,28 @@ TOOL_SPECS = [
                 "scope": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of file paths the sub-agent should focus on.",
+                    "description": "Optional list of reference paths or document names the sub-agent should focus on (informational only — appended to the task prompt).",
                 },
                 "constraints": {
                     "type": "string",
-                    "description": "Optional constraints (e.g. 'Maintain backward compatibility. Do not modify test files.').",
+                    "description": "Optional constraints (e.g. 'Only use sources from 2024 or later.').",
                 },
             },
             "required": ["goal"],
         },
         "prompt": {
-            "purpose": "Delegates a self-contained sub-task to a fresh sub-agent to keep the main context lean.",
+            "purpose": "Delegates a self-contained research or analysis task to a fresh sub-agent to keep the main context lean.",
             "inputs": {
                 "goal": "task description",
-                "scope": "optional list of file paths",
+                "scope": "optional list of reference paths or document names",
                 "constraints": "optional constraints",
             },
             "guidance": (
-                "Delegate when: (1) the task involves deep analysis of 3+ files not yet in context, "
-                "(2) the task is self-contained with clear input/output, "
-                "(3) the task requires iterative refinement (debug-edit-test). "
-                "Do NOT delegate when: files are already in context, "
-                "or the task is a single tool call or quick lookup. "
+                "Delegate when: (1) the task involves web research across multiple sources, "
+                "(2) the task analyzes canvas documents that are already loaded in the workspace, "
+                "(3) the task requires querying the knowledge base for stored information. "
+                "Do NOT delegate when: the task requires reading or writing files on disk, "
+                "running tests or commands, or editing source code — the sub-agent has no file system access. "
                 "The sub-agent returns only a summary — do not re-verify its work unless the summary "
                 "indicates uncertainty."
             ),
@@ -939,6 +940,15 @@ TOOL_SPECS = [
                         "information is not lost."
                     ),
                 },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Set to true to execute the permanent deletion. "
+                        "If omitted or false, the call runs as a dry-run and returns "
+                        "the dependency closure without deleting anything. "
+                        "Always run without confirm first to preview what will be removed."
+                    ),
+                },
             },
             "required": ["ids"],
             "additionalProperties": False,
@@ -948,14 +958,17 @@ TOOL_SPECS = [
             "inputs": {
                 "ids": "list of public IDs to purge (e.g. msg_104, tool_call_105_1, tool_res_106)",
                 "summary": "optional retained-facts summary to preserve critical context",
+                "confirm": "set to true to execute; call without it first for a dry-run preview",
             },
             "guidance": (
                 "Use purge to remove completed tasks, irrelevant tool results, "
-                "or erroneous exchanges. Always check the dependency closure in "
-                "the result — removing a tool call also removes its results, and "
-                "vice versa. Provide a summary when the purged blocks contain "
-                "facts worth keeping. Do not purge blocks that are still needed "
-                "for the current task."
+                "or erroneous exchanges. IMPORTANT: This is a two-step operation. "
+                "First call without confirm to see the dry-run preview of what "
+                "would be removed (including the dependency closure). Then call "
+                "again with confirm: true to execute. Always check the dependency "
+                "closure — removing a tool call also removes its results. "
+                "Provide a summary when the purged blocks contain facts worth keeping. "
+                "Do not purge blocks that are still needed for the current task."
             ),
         },
     },
@@ -982,6 +995,14 @@ TOOL_SPECS = [
                         "was being worked on, what the next step should be."
                     ),
                 },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Set to true to execute the irreversible compaction. "
+                        "If omitted or false, returns a dry-run message. "
+                        "Always call without confirm first to acknowledge the operation."
+                    ),
+                },
             },
             "required": ["resume_instruction"],
             "additionalProperties": False,
@@ -990,10 +1011,14 @@ TOOL_SPECS = [
             "purpose": "Resets context to a compact state summary to dramatically reduce context size.",
             "inputs": {
                 "resume_instruction": "what the agent should continue working on after compaction",
+                "confirm": "set to true to execute; call without it first for a confirmation message",
             },
             "guidance": (
                 "Use compact_context when the conversation is very long and "
                 "purging individual blocks would not free enough space. "
+                "IMPORTANT: This is a two-step operation. First call without "
+                "confirm to acknowledge the irreversible nature of this reset. "
+                "Then call again with confirm: true to execute. "
                 "Provide a clear, specific resume_instruction so the agent "
                 "knows exactly what to continue after compaction. "
                 "This operation replaces ALL conversation history — use it "

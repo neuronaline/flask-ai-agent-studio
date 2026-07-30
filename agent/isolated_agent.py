@@ -154,9 +154,24 @@ def run_isolated_agent(
         except Exception:
             model = DEFAULT_CHAT_MODEL
 
-    # Timeout tracking
+    # Timeout tracking: use a watchdog timer that sets the cancel event
+    # independently, so a blocked model call or tool execution doesn't
+    # prevent timeout enforcement.
     started_at = time.monotonic()
     timed_out = False
+
+    if cancel_event is None:
+        cancel_event = threading.Event()
+
+    timeout_expired = threading.Event()
+    timeout_timer: threading.Timer | None = None
+    if timeout_seconds > 0:
+        def _on_timeout():
+            timeout_expired.set()
+            cancel_event.set()
+        timeout_timer = threading.Timer(timeout_seconds, _on_timeout)
+        timeout_timer.daemon = True
+        timeout_timer.start()
 
     report_parts: list[str] = []
     errors: list[str] = []
@@ -178,8 +193,9 @@ def run_isolated_agent(
                 "cancel_event": cancel_event,
             },
         ):
-            # Check timeout
-            if (time.monotonic() - started_at) > timeout_seconds:
+            # Fast-path timeout check (tighter than cancel event propagation)
+            elapsed = time.monotonic() - started_at
+            if timeout_seconds > 0 and elapsed > timeout_seconds:
                 timed_out = True
                 break
 
@@ -203,6 +219,13 @@ def run_isolated_agent(
         else:
             errors.append(f"Sub-agent failed: {exc_str}")
 
+    finally:
+        if timeout_timer is not None:
+            timeout_timer.cancel()
+
+    # A cooperative stream may observe cancel_event and end without yielding
+    # another event.  Preserve the watchdog outcome in that case.
+    timed_out = timed_out or timeout_expired.is_set()
     if timed_out:
         errors.append(f"Sub-agent timed out after {timeout_seconds:.0f}s.")
 
