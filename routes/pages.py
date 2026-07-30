@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
 
-from flask import jsonify, render_template, request
+from flask import current_app, jsonify, render_template, request
 
 from core.config import (
     CHAT_SUMMARY_ALLOWED_MODES,
@@ -36,7 +37,9 @@ from core.config import (
     WEB_CACHE_TTL_HOURS_MAX,
     WEB_CACHE_TTL_HOURS_MIN,
     coerce_image_helper_max_images,
+    apply_persisted_runtime_settings,
     get_feature_flags,
+    get_runtime_setting,
 )
 from core.db import (
     build_effective_user_preferences,
@@ -1967,4 +1970,12 @@ def register_page_routes(app) -> None:
             return err
 
         save_app_settings(settings)
+
+        # Runtime-backed settings used to be refreshed only when the process
+        # started.  Refresh them immediately after a successful save so the
+        # next request observes the new values without a server restart.
+        apply_persisted_runtime_settings(current_app.config["DATABASE_PATH"])
+        current_app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(
+            days=get_runtime_setting("LOGIN_REMEMBER_SESSION_DAYS")
+        )
         return jsonify(build_settings_payload())

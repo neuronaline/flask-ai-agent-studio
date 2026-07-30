@@ -33,50 +33,6 @@
   };
 })();
 
-// ── Merged from canvas.js ────────────────────────────────────────────────────
-(function () {
-  "use strict";
-
-  // ─── DOM refs ────────────────────────────────────────────────────────────────
-  const canvasPromptLinesEl = document.getElementById("canvas-prompt-lines-input");
-  const canvasPromptTokensEl = document.getElementById("canvas-prompt-tokens-input");
-  const canvasPromptCharsEl = document.getElementById("canvas-prompt-chars-input");
-  const canvasCodeLineCharsEl = document.getElementById("canvas-code-line-chars-input");
-  const canvasTextLineCharsEl = document.getElementById("canvas-text-line-chars-input");
-  const canvasExpandLinesEl = document.getElementById("canvas-expand-lines-input");
-  const canvasScrollLinesEl = document.getElementById("canvas-scroll-lines-input");
-
-  // ─── Canvas sync ───────────────────────────────────────────────────────────────
-  function syncCanvasSettingsToForm(appSettings) {
-    if (canvasPromptLinesEl) canvasPromptLinesEl.value = String(appSettings.canvas_prompt_max_lines || 250);
-    if (canvasPromptTokensEl) canvasPromptTokensEl.value = String(appSettings.canvas_prompt_max_tokens || 4000);
-    if (canvasPromptCharsEl) canvasPromptCharsEl.value = String(appSettings.canvas_prompt_max_chars || 20000);
-    if (canvasCodeLineCharsEl) canvasCodeLineCharsEl.value = String(appSettings.canvas_prompt_code_line_max_chars || 180);
-    if (canvasTextLineCharsEl) canvasTextLineCharsEl.value = String(appSettings.canvas_prompt_text_line_max_chars || 100);
-    if (canvasExpandLinesEl) canvasExpandLinesEl.value = String(appSettings.canvas_expand_max_lines || 1600);
-    if (canvasScrollLinesEl) canvasScrollLinesEl.value = String(appSettings.canvas_scroll_window_lines || 200);
-  }
-
-  // ─── Canvas payload helpers ────────────────────────────────────────────────────
-  function readCanvasSettingsPayload() {
-    return {
-      canvas_prompt_max_lines: window.__settingsCore.readNumericSetting(canvasPromptLinesEl, 250, { allowZero: false }),
-      canvas_prompt_max_tokens: window.__settingsCore.readNumericSetting(canvasPromptTokensEl, 4000, { allowZero: false }),
-      canvas_prompt_max_chars: window.__settingsCore.readNumericSetting(canvasPromptCharsEl, 20000, { allowZero: false }),
-      canvas_prompt_code_line_max_chars: window.__settingsCore.readNumericSetting(canvasCodeLineCharsEl, 180, { allowZero: false }),
-      canvas_prompt_text_line_max_chars: window.__settingsCore.readNumericSetting(canvasTextLineCharsEl, 100, { allowZero: false }),
-      canvas_expand_max_lines: window.__settingsCore.readNumericSetting(canvasExpandLinesEl, 1600, { allowZero: false }),
-      canvas_scroll_window_lines: window.__settingsCore.readNumericSetting(canvasScrollLinesEl, 200, { allowZero: false }),
-    };
-  }
-
-  // ─── Export ──────────────────────────────────────────────────────────────────
-  window.__settingsCanvas = {
-    syncCanvasSettingsToForm,
-    readCanvasSettingsPayload,
-  };
-})();
-
 // ── Merged from fetch.js ─────────────────────────────────────────────────────
 (function () {
   "use strict";
@@ -256,12 +212,6 @@
   const imageProcessingMethodEl = document.getElementById("image-processing-method-select");
   const imageHelperModelEl = document.getElementById("image-helper-model-select");
   const imageHelperMaxImagesEl = document.getElementById("image-helper-max-images-input");
-  const openrouterHttpRefererEl = document.getElementById("openrouter-http-referer-input");
-  const openrouterAppTitleEl = document.getElementById("openrouter-app-title-input");
-  const loginSessionTimeoutMinutesEl = document.getElementById("login-session-timeout-minutes-input");
-  const loginMaxFailedAttemptsEl = document.getElementById("login-max-failed-attempts-input");
-  const loginLockoutSecondsEl = document.getElementById("login-lockout-seconds-input");
-  const loginRememberSessionDaysEl = document.getElementById("login-remember-session-days-input");
   const conversationMemoryEnabledEl = document.getElementById("conversation-memory-enabled-toggle");
   const conversationTruncationEnabledEl = document.getElementById("conversation-truncation-enabled-toggle");
   const conversationMaxMessagesEl = document.getElementById("conversation-max-messages-input");
@@ -303,12 +253,6 @@
   const promptPreflightSummaryTokenCountEl = document.getElementById("prompt-preflight-summary-token-count-input");
   const summarySourceTargetTokensEl = document.getElementById("summary-source-target-tokens-input");
   const summaryRetryMinSourceTokensEl = document.getElementById("summary-retry-min-source-tokens-input");
-  const promptMaxInputTokensEl = document.getElementById("prompt-max-input-tokens-input");
-  const promptResponseTokenReserveEl = document.getElementById("prompt-response-token-reserve-input");
-  const promptRecentHistoryMaxTokensEl = document.getElementById("prompt-recent-history-max-tokens-input");
-  const promptSummaryMaxTokensEl = document.getElementById("prompt-summary-max-tokens-input");
-  const promptRagMaxTokensEl = document.getElementById("prompt-rag-max-tokens-input");
-  const promptToolTraceMaxTokensEl = document.getElementById("prompt-tool-trace-max-tokens-input");
   const ragSensitivityEl = document.getElementById("rag-sensitivity-select");
   const ragContextSizeEl = document.getElementById("rag-context-size-select");
   const ragAutoInjectEnabledEl = document.getElementById("rag-auto-inject-enabled-toggle");
@@ -332,12 +276,6 @@
   // ─── Event listeners ─────────────────────────────────────────────────────────
   function attachEventListeners() {
     imageProcessingMethodEl?.addEventListener("change", getMarkDirty());
-    openrouterHttpRefererEl?.addEventListener("input", getMarkDirty());
-    openrouterAppTitleEl?.addEventListener("input", getMarkDirty());
-    loginSessionTimeoutMinutesEl?.addEventListener("input", getMarkDirty());
-    loginMaxFailedAttemptsEl?.addEventListener("input", getMarkDirty());
-    loginLockoutSecondsEl?.addEventListener("input", getMarkDirty());
-    loginRememberSessionDaysEl?.addEventListener("input", getMarkDirty());
     conversationMemoryEnabledEl?.addEventListener("change", getMarkDirty());
     conversationTruncationEnabledEl?.addEventListener("change", getMarkDirty());
     conversationMaxMessagesEl?.addEventListener("input", getMarkDirty());
@@ -379,12 +317,6 @@
     promptPreflightSummaryTokenCountEl?.addEventListener("input", getMarkDirty());
     summarySourceTargetTokensEl?.addEventListener("input", getMarkDirty());
     summaryRetryMinSourceTokensEl?.addEventListener("input", getMarkDirty());
-    promptMaxInputTokensEl?.addEventListener("input", getMarkDirty());
-    promptResponseTokenReserveEl?.addEventListener("input", getMarkDirty());
-    promptRecentHistoryMaxTokensEl?.addEventListener("input", getMarkDirty());
-    promptSummaryMaxTokensEl?.addEventListener("input", getMarkDirty());
-    promptRagMaxTokensEl?.addEventListener("input", getMarkDirty());
-    promptToolTraceMaxTokensEl?.addEventListener("input", getMarkDirty());
     ragSensitivityEl?.addEventListener("change", getMarkDirty());
     ragContextSizeEl?.addEventListener("change", getMarkDirty());
     ragAutoInjectEnabledEl?.addEventListener("change", getMarkDirty());
@@ -500,12 +432,6 @@
   const promptPreflightSummaryTokenCountEl = document.getElementById("prompt-preflight-summary-token-count-input");
   const summarySourceTargetTokensEl = document.getElementById("summary-source-target-tokens-input");
   const summaryRetryMinSourceTokensEl = document.getElementById("summary-retry-min-source-tokens-input");
-  const promptMaxInputTokensEl = document.getElementById("prompt-max-input-tokens-input");
-  const promptResponseTokenReserveEl = document.getElementById("prompt-response-token-reserve-input");
-  const promptRecentHistoryMaxTokensEl = document.getElementById("prompt-recent-history-max-tokens-input");
-  const promptSummaryMaxTokensEl = document.getElementById("prompt-summary-max-tokens-input");
-  const promptRagMaxTokensEl = document.getElementById("prompt-rag-max-tokens-input");
-  const promptToolTraceMaxTokensEl = document.getElementById("prompt-tool-trace-max-tokens-input");
   const imageProcessingMethodEl = document.getElementById("image-processing-method-select");
   const imageHelperModelEl = document.getElementById("image-helper-model-select");
   const imageHelperMaxImagesEl = document.getElementById("image-helper-max-images-input");
@@ -521,17 +447,11 @@
   const ragSearchMinSimilarityEl = document.getElementById("rag-search-min-similarity-input");
   const ragQueryExpansionEnabledEl = document.getElementById("rag-query-expansion-enabled-toggle");
   const ragQueryExpansionMaxVariantsEl = document.getElementById("rag-query-expansion-max-variants-input");
-  const openrouterHttpRefererEl = document.getElementById("openrouter-http-referer-input");
-  const openrouterAppTitleEl = document.getElementById("openrouter-app-title-input");
   const conversationMemoryEnabledEl = document.getElementById("conversation-memory-enabled-toggle");
   const conversationTruncationEnabledEl = document.getElementById("conversation-truncation-enabled-toggle");
   const conversationMaxMessagesEl = document.getElementById("conversation-max-messages-input");
   const conversationMaxMessageCharsEl = document.getElementById("conversation-max-message-chars-input");
   const ocrEnabledEl = document.getElementById("ocr-enabled-toggle");
-  const loginSessionTimeoutMinutesEl = document.getElementById("login-session-timeout-minutes-input");
-  const loginMaxFailedAttemptsEl = document.getElementById("login-max-failed-attempts-input");
-  const loginLockoutSecondsEl = document.getElementById("login-lockout-seconds-input");
-  const loginRememberSessionDaysEl = document.getElementById("login-remember-session-days-input");
   const youtubeTranscriptsEnabledEl = document.getElementById("youtube-transcripts-enabled-toggle");
   const fetchRawMaxTextCharsEl = document.getElementById("fetch-raw-max-text-chars-input");
   const fetchSummaryMaxCharsEl = document.getElementById("fetch-summary-max-chars-input");
@@ -590,12 +510,6 @@
     if (openrouterAnthropicCacheTtlRowEl) openrouterAnthropicCacheTtlRowEl.hidden = !_cacheEnabled;
     const _activeTtl = appSettings.openrouter_anthropic_cache_ttl || "5m";
     openrouterAnthropicCacheTtlEls.forEach(el => { el.checked = el.value === _activeTtl; });
-    if (openrouterHttpRefererEl) openrouterHttpRefererEl.value = String(appSettings.openrouter_http_referer || "");
-    if (openrouterAppTitleEl) openrouterAppTitleEl.value = String(appSettings.openrouter_app_title || "");
-    if (loginSessionTimeoutMinutesEl) loginSessionTimeoutMinutesEl.value = String(appSettings.login_session_timeout_minutes ?? 30);
-    if (loginMaxFailedAttemptsEl) loginMaxFailedAttemptsEl.value = String(appSettings.login_max_failed_attempts ?? 3);
-    if (loginLockoutSecondsEl) loginLockoutSecondsEl.value = String(appSettings.login_lockout_seconds ?? 300);
-    if (loginRememberSessionDaysEl) loginRememberSessionDaysEl.value = String(appSettings.login_remember_session_days ?? 3650);
     if (clarificationMaxQuestionsEl) clarificationMaxQuestionsEl.value = String(appSettings.clarification_max_questions || 5);
     if (summaryModeEl) summaryModeEl.value = appSettings.chat_summary_mode || "auto";
     if (summaryDetailLevelEl) summaryDetailLevelEl.value = appSettings.chat_summary_detail_level || "balanced";
@@ -605,17 +519,9 @@
     if (promptPreflightSummaryTokenCountEl) promptPreflightSummaryTokenCountEl.value = String(appSettings.prompt_preflight_summary_token_count ?? 90000);
     if (summarySourceTargetTokensEl) summarySourceTargetTokensEl.value = String(appSettings.summary_source_target_tokens ?? 6000);
     if (summaryRetryMinSourceTokensEl) summaryRetryMinSourceTokensEl.value = String(appSettings.summary_retry_min_source_tokens ?? 1500);
-    if (promptMaxInputTokensEl) promptMaxInputTokensEl.value = String(appSettings.prompt_max_input_tokens ?? 80000);
-    if (promptResponseTokenReserveEl) promptResponseTokenReserveEl.value = String(appSettings.prompt_response_token_reserve ?? 8000);
-    if (promptRecentHistoryMaxTokensEl) promptRecentHistoryMaxTokensEl.value = String(appSettings.prompt_recent_history_max_tokens ?? 32000);
-    if (promptSummaryMaxTokensEl) promptSummaryMaxTokensEl.value = String(appSettings.prompt_summary_max_tokens ?? 12000);
-    if (promptRagMaxTokensEl) promptRagMaxTokensEl.value = String(appSettings.prompt_rag_max_tokens ?? 18000);
-    if (promptToolTraceMaxTokensEl) promptToolTraceMaxTokensEl.value = String(appSettings.prompt_tool_trace_max_tokens ?? 9000);
 
-    // Context / canvas / fetch settings are synced below by dedicated module functions.
-    // Module read functions (read*Payload) are still used at save time for correct user-modified values.
+    // Context and fetch settings are synced by their dedicated module functions.
     window.__settingsContext?.syncContextSettingsToForm?.(appSettings);
-    window.__settingsCanvas?.syncCanvasSettingsToForm?.(appSettings);
     window.__settingsFetch?.syncFetchSettingsToForm?.(appSettings);
 
     if (conversationMemoryEnabledEl) conversationMemoryEnabledEl.checked = Boolean(appSettings.conversation_memory_enabled);
@@ -890,12 +796,6 @@
       bright_data_serp_timeout_seconds: readNumericSetting(brightDataSerpTimeoutSecondsEl, 30, { allowZero: false, min: 1, max: 120 }),
       openrouter_prompt_cache_enabled: Boolean(openrouterPromptCacheEnabledEl?.checked),
       openrouter_anthropic_cache_ttl: (() => { const r = [...openrouterAnthropicCacheTtlEls].find(el => el.checked); return r ? r.value : "5m"; })(),
-      openrouter_http_referer: String(openrouterHttpRefererEl?.value || "").trim(),
-      openrouter_app_title: String(openrouterAppTitleEl?.value || "").trim(),
-      login_session_timeout_minutes: readNumericSetting(loginSessionTimeoutMinutesEl, 30, { allowZero: false }),
-      login_max_failed_attempts: readNumericSetting(loginMaxFailedAttemptsEl, 3, { allowZero: false }),
-      login_lockout_seconds: readNumericSetting(loginLockoutSecondsEl, 300, { allowZero: false }),
-      login_remember_session_days: readNumericSetting(loginRememberSessionDaysEl, 3650, { allowZero: false }),
       clarification_max_questions: readNumericSetting(clarificationMaxQuestionsEl, 5, { allowZero: false }),
       chat_summary_mode: summaryModeEl?.value || "auto",
       chat_summary_detail_level: summaryDetailLevelEl?.value || "balanced",
@@ -905,15 +805,8 @@
       prompt_preflight_summary_token_count: readNumericSetting(promptPreflightSummaryTokenCountEl, 90000, { allowZero: false, min: 2000, max: 200000 }),
       summary_source_target_tokens: readNumericSetting(summarySourceTargetTokensEl, 6000, { allowZero: false, min: 1000, max: 40000 }),
       summary_retry_min_source_tokens: readNumericSetting(summaryRetryMinSourceTokensEl, 1500, { allowZero: false, min: 500, max: 40000 }),
-      prompt_max_input_tokens: readNumericSetting(promptMaxInputTokensEl, 80000, { allowZero: false, min: 8000, max: 120000 }),
-      prompt_response_token_reserve: readNumericSetting(promptResponseTokenReserveEl, 8000, { allowZero: false, min: 1000, max: 32000 }),
-      prompt_recent_history_max_tokens: readNumericSetting(promptRecentHistoryMaxTokensEl, 32000, { allowZero: false, min: 1000, max: 120000 }),
-      prompt_summary_max_tokens: readNumericSetting(promptSummaryMaxTokensEl, 12000, { allowZero: false, min: 500, max: 120000 }),
-      prompt_rag_max_tokens: readNumericSetting(promptRagMaxTokensEl, 18000, { min: 0, max: 120000 }),
-      prompt_tool_trace_max_tokens: readNumericSetting(promptToolTraceMaxTokensEl, 9000, { min: 0, max: 120000 }),
-      // Context / canvas / fetch
+      // Context and fetch
       ...(window.__settingsContext?.readContextSettingsPayload?.() ?? {}),
-      ...(window.__settingsCanvas?.readCanvasSettingsPayload?.() ?? {}),
       ...(window.__settingsFetch?.readFetchSettingsPayload?.() ?? {}),
       conversation_memory_enabled: Boolean(conversationMemoryEnabledEl?.checked),
       conversation_truncation_enabled: Boolean(conversationTruncationEnabledEl?.checked ?? true),
@@ -1037,6 +930,14 @@
   // Bootstrap — runs after all modules are defined
   // ═══════════════════════════════════════════════════════════════════════════════
   function bootstrap() {
+    // Retrieval governs the knowledge base, not conversation memory. Keep the
+    // card beside source management while preserving the existing field IDs.
+    const ragInjectionCard = document.getElementById("rag-injection-card");
+    const knowledgeRetrievalSettings = document.getElementById("knowledge-retrieval-settings");
+    if (ragInjectionCard && knowledgeRetrievalSettings) {
+      knowledgeRetrievalSettings.append(ragInjectionCard);
+    }
+
     // Initialize tab navigation
     window.__settingsTabs?.initializeTabs?.();
 

@@ -694,8 +694,8 @@
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.02);
   color: var(--text-secondary);
-  border-radius: 10px;
-  padding: 9px 12px 9px 14px;
+  border-radius: 12px;
+  padding: 11px 14px;
   text-align: left;
   font: inherit;
   font-size: 0.84rem;
@@ -712,7 +712,7 @@
 
 .settings-tab-btn.active {
   border-color: rgba(79, 110, 247, 0.5);
-  background: rgba(79, 110, 247, 0.12);
+  background: linear-gradient(135deg, rgba(79, 110, 247, 0.24), rgba(107, 81, 212, 0.16));
   color: #fff;
 }
 
@@ -796,6 +796,13 @@ body[data-page="settings"] .rag-settings-grid {
   grid-template-columns: minmax(0, 1fr);
 }
 
+@media (min-width: 961px) {
+  body[data-page="settings"] .settings-page-grid--two,
+  body[data-page="settings"] .settings-subsection-grid--two {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 body[data-page="settings"] .settings-page-content,
 body[data-page="settings"] .settings-tab-panels,
 body[data-page="settings"] .settings-tab-panel,
@@ -805,9 +812,9 @@ body[data-page="settings"] .settings-page-stack {
 }
 
 body[data-page="settings"] .settings-page-shell {
-  gap: 16px;
-  padding: 14px 0 20px;
-  width: min(1320px, calc(100% - 40px));
+  gap: 22px;
+  padding: 24px 0 40px;
+  width: min(1360px, calc(100% - 48px));
 }
 
 body[data-page="settings"] .settings-page-sidebar__intro,
@@ -827,7 +834,7 @@ body[data-page="settings"] .settings-page-section-card {
 body[data-page="settings"] .settings-page-sidebar__intro,
 body[data-page="settings"] .settings-page-toolbar,
 body[data-page="settings"] .settings-page-section-card {
-  padding: 18px;
+  padding: 22px;
   gap: 14px;
 }
 
@@ -851,7 +858,7 @@ body[data-page="settings"] .settings-toggle-panel,
 body[data-page="settings"] .settings-conditional-group,
 body[data-page="settings"] .tool-permission-section,
 body[data-page="settings"] .rag-setting-group {
-  padding: 14px;
+  padding: 16px;
   border-radius: 12px;
 }
 
@@ -860,7 +867,7 @@ body[data-page="settings"] .settings-subsection {
 }
 
 body[data-page="settings"] .settings-subsection--compact {
-  padding: 14px;
+  padding: 16px;
   gap: 10px;
 }
 
@@ -1978,4 +1985,3 @@ body[data-page="settings"] .settings-stat-card {
 .custom-model-row--editing .model-management-row__meta strong {
   color: var(--accent);
 }
-

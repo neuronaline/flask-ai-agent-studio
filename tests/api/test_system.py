@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import io
+from datetime import timedelta
+
+from core.config import get_runtime_setting
 
 
 def test_settings_get_and_patch_roundtrip(client):
@@ -18,6 +21,21 @@ def test_settings_get_and_patch_roundtrip(client):
     updated = patch_response.get_json()
     assert updated["activity_enabled"] is False
     assert updated["activity_retention_days"] == 45
+
+
+def test_settings_patch_applies_runtime_values_without_restart(app, client):
+    response = client.patch(
+        "/api/settings",
+        json={
+            "login_remember_session_days": 14,
+            "rag_search_top_k": 9,
+        },
+    )
+
+    assert response.status_code == 200
+    assert get_runtime_setting("LOGIN_REMEMBER_SESSION_DAYS") == 14
+    assert get_runtime_setting("RAG_SEARCH_DEFAULT_TOP_K") == 9
+    assert app.config["PERMANENT_SESSION_LIFETIME"] == timedelta(days=14)
 
 
 def test_rag_endpoints_support_manual_document_ingest(client):

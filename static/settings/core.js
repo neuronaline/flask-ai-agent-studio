@@ -39,28 +39,9 @@
     { id: "creative_partner", label: "Creative partner", text: "Sound like a creative but disciplined collaborator: exploratory, idea-rich, and willing to suggest novel directions while staying grounded in the user's goal." },
   ];
 
-  const RESTART_REQUIRED_SETTING_KEYS = [
-    "openrouter_http_referer",
-    "openrouter_app_title",
-    "login_session_timeout_minutes",
-    "login_max_failed_attempts",
-    "login_lockout_seconds",
-    "login_remember_session_days",
-    "rag_enabled",
-    "ocr_enabled",
-    "conversation_memory_enabled",
-    "youtube_transcripts_enabled",
-    "chat_summary_model",
-    "rag_chunk_size",
-    "rag_chunk_overlap",
-    "rag_max_chunks_per_source",
-    "rag_search_top_k",
-    "rag_search_min_similarity",
-    "rag_query_expansion_enabled",
-    "rag_query_expansion_max_variants",
-    "fetch_raw_max_text_chars",
-    "fetch_summary_max_chars",
-  ];
+  // Settings saved through the API are applied to the active process before
+  // its response is returned, so none currently require a server restart.
+  const RESTART_REQUIRED_SETTING_KEYS = [];
 
   const DEFAULT_SCRATCHPAD_SECTION_ORDER = ["lessons", "profile", "notes", "problems", "tasks", "preferences", "domain"];
 
