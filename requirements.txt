@@ -34,7 +34,10 @@ pdfplumber>=0.11                # PDF text extraction (document ingestion)
 # Web Search & Fetch
 # ---------------------------------------------------------------------------
 # Search uses Bright Data SERP. URL extraction uses PageFetch exclusively.
+# Scholar search uses BeautifulSoup for HTML parsing.
 pagefetch @ git+https://github.com/neuronaline/pagefetch.git@master
+beautifulsoup4>=4.12
+lxml>=5.0
 # ---------------------------------------------------------------------------
 # RAG / Vector Search (knowledge base + semantic memory)
 # ChromaDB-based retrieval-augmented generation.

@@ -30,6 +30,7 @@ from core.db import (
 )
 from utils.logging_config import get_logger
 from utils import proxy_settings
+from services.scholar_scraper import search_scholar as search_scholar_tool
 
 LOGGER = get_logger(__name__)
 BRIGHT_DATA_ENDPOINT = "https://api.brightdata.com/request"
@@ -137,24 +138,6 @@ def _build_google_url(
     return "https://www.google.com/search?" + urlencode(params, quote_via=quote)
 
 
-def _build_scholar_url(
-    query: str,
-    *,
-    lang: str,
-    year_from: int | None,
-    year_to: int | None,
-    sort_by: str,
-) -> str:
-    params: dict[str, str] = {"q": query, "hl": lang}
-    if year_from is not None:
-        params["as_ylo"] = str(year_from)
-    if year_to is not None:
-        params["as_yhi"] = str(year_to)
-    if sort_by == "date":
-        params["scisbd"] = "1"
-    return "https://scholar.google.com/scholar?" + urlencode(params, quote_via=quote)
-
-
 def _organic_results(body: dict[str, Any]) -> list[dict[str, Any]]:
     rows = body.get("organic")
     if not isinstance(rows, list):
@@ -225,77 +208,6 @@ def search_web_tool(queries: list) -> list:
             _append_unique(results, normalized, seen_urls, url_key="url")
         except Exception as exc:
             LOGGER.error("Bright Data web search failed for query='%.60s': %s", query, exc)
-            results.append({"error": str(exc), "query": query})
-    return results
-
-
-def _scholar_authors(row: dict[str, Any]) -> str:
-    authors = _first_value(row, "authors", "author")
-    if isinstance(authors, list):
-        return ", ".join(str(author) for author in authors)
-    if authors:
-        return str(authors)
-    publication_info = row.get("publication_info")
-    if isinstance(publication_info, dict):
-        return str(_first_value(publication_info, "authors", "summary"))
-    return ""
-
-
-def search_scholar_tool(
-    queries: list,
-    lang: str = "en",
-    year_from: int | None = None,
-    year_to: int | None = None,
-    sort_by: str = "relevance",
-) -> list:
-    """Search Google Scholar through Bright Data SERP."""
-    language = lang if lang in {"en", "tr"} else "en"
-    results: list[dict[str, Any]] = []
-    seen_urls: set[str] = set()
-
-    for query in _iter_limited_search_queries(queries):
-        digest_source = (
-            f"{query}|{language}|{year_from or ''}|{year_to or ''}|{sort_by}"
-        )
-        cache_key = (
-            "scholar:bright-data:"
-            f"{hashlib.md5(digest_source.lower().encode()).hexdigest()}"
-        )
-        cached = cache_get(cache_key)
-        if cached is not None:
-            _append_unique(results, cached, seen_urls, url_key="url")
-            continue
-        try:
-            target_url = _build_scholar_url(
-                query,
-                lang=language,
-                year_from=year_from,
-                year_to=year_to,
-                sort_by=sort_by,
-            )
-            rows = _organic_results(_bright_data_serp_request(target_url))
-            normalized = [
-                {
-                    "title": str(_first_value(row, "title")),
-                    "url": str(_first_value(row, "link", "url")),
-                    "snippet": str(_first_value(row, "description", "snippet")),
-                    "authors": _scholar_authors(row),
-                    "year": _first_value(row, "year", "publication_year", default=None),
-                    "venue": str(_first_value(row, "venue", "publication")),
-                    "citations": _first_value(
-                        row,
-                        "citations",
-                        "citation_count",
-                        default=0,
-                    ),
-                }
-                for row in rows[:SEARCH_MAX_RESULTS]
-            ]
-            normalized = [row for row in normalized if row["url"]]
-            cache_set(cache_key, normalized)
-            _append_unique(results, normalized, seen_urls, url_key="url")
-        except Exception as exc:
-            LOGGER.error("Bright Data Scholar search failed for query='%.60s': %s", query, exc)
             results.append({"error": str(exc), "query": query})
     return results
 

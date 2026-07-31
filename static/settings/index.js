@@ -245,6 +245,7 @@
   const brightDataSerpLanguageEl = document.getElementById("bright-data-serp-language-select");
   const brightDataSerpCountryEl = document.getElementById("bright-data-serp-country-input");
   const brightDataSerpTimeoutSecondsEl = document.getElementById("bright-data-serp-timeout-seconds-input");
+  const scholarProxyEnabledEl = document.getElementById("scholar-proxy-enabled-toggle");
   const summaryModeEl = document.getElementById("summary-mode-select");
   const summaryDetailLevelEl = document.getElementById("summary-detail-level-select");
   const summaryTriggerEl = document.getElementById("summary-trigger-input");
@@ -309,6 +310,7 @@
     brightDataSerpLanguageEl?.addEventListener("change", getMarkDirty());
     brightDataSerpCountryEl?.addEventListener("input", getMarkDirty());
     brightDataSerpTimeoutSecondsEl?.addEventListener("input", getMarkDirty());
+    scholarProxyEnabledEl?.addEventListener("change", getMarkDirty());
     summaryModeEl?.addEventListener("change", getMarkDirty());
     summaryDetailLevelEl?.addEventListener("change", getMarkDirty());
     summaryTriggerEl?.addEventListener("input", getMarkDirty());
@@ -420,6 +422,7 @@
   const brightDataSerpLanguageEl = document.getElementById("bright-data-serp-language-select");
   const brightDataSerpCountryEl = document.getElementById("bright-data-serp-country-input");
   const brightDataSerpTimeoutSecondsEl = document.getElementById("bright-data-serp-timeout-seconds-input");
+  const scholarProxyEnabledEl = document.getElementById("scholar-proxy-enabled-toggle");
   const openrouterPromptCacheEnabledEl = document.getElementById("openrouter-prompt-cache-enabled-toggle");
   const openrouterAnthropicCacheTtlEls = document.querySelectorAll("input[name='openrouter-anthropic-cache-ttl']");
   const openrouterAnthropicCacheTtlRowEl = document.getElementById("openrouter-anthropic-cache-ttl-row");
@@ -505,6 +508,7 @@
     if (brightDataSerpLanguageEl) brightDataSerpLanguageEl.value = appSettings.bright_data_serp_language || "en";
     if (brightDataSerpCountryEl) brightDataSerpCountryEl.value = String(appSettings.bright_data_serp_country || "US");
     if (brightDataSerpTimeoutSecondsEl) brightDataSerpTimeoutSecondsEl.value = String(appSettings.bright_data_serp_timeout_seconds ?? 30);
+    if (scholarProxyEnabledEl) scholarProxyEnabledEl.checked = Boolean(appSettings.scholar_proxy_enabled);
     if (openrouterPromptCacheEnabledEl) openrouterPromptCacheEnabledEl.checked = Boolean(appSettings.openrouter_prompt_cache_enabled ?? true);
     const _cacheEnabled = Boolean(appSettings.openrouter_prompt_cache_enabled ?? true);
     if (openrouterAnthropicCacheTtlRowEl) openrouterAnthropicCacheTtlRowEl.hidden = !_cacheEnabled;
@@ -706,6 +710,7 @@
     appSettings.bright_data_serp_language = data.bright_data_serp_language || "en";
     appSettings.bright_data_serp_country = data.bright_data_serp_country || "US";
     appSettings.bright_data_serp_timeout_seconds = data.bright_data_serp_timeout_seconds ?? 30;
+    appSettings.scholar_proxy_enabled = Boolean(data.scholar_proxy_enabled);
     appSettings.context_compaction_threshold = data.context_compaction_threshold ?? 0.85;
     appSettings.context_compaction_keep_recent_rounds = data.context_compaction_keep_recent_rounds ?? 2;
     appSettings.reasoning_auto_collapse = Boolean(data.reasoning_auto_collapse);
@@ -794,6 +799,7 @@
       bright_data_serp_language: brightDataSerpLanguageEl?.value || "en",
       bright_data_serp_country: String(brightDataSerpCountryEl?.value || "US").trim().toUpperCase(),
       bright_data_serp_timeout_seconds: readNumericSetting(brightDataSerpTimeoutSecondsEl, 30, { allowZero: false, min: 1, max: 120 }),
+      scholar_proxy_enabled: Boolean(scholarProxyEnabledEl?.checked),
       openrouter_prompt_cache_enabled: Boolean(openrouterPromptCacheEnabledEl?.checked),
       openrouter_anthropic_cache_ttl: (() => { const r = [...openrouterAnthropicCacheTtlEls].find(el => el.checked); return r ? r.value : "5m"; })(),
       clarification_max_questions: readNumericSetting(clarificationMaxQuestionsEl, 5, { allowZero: false }),

@@ -153,6 +153,7 @@ from lib.model_registry import (
 )
 from lib.tool_registry import TOOL_SPEC_BY_NAME, get_tool_runtime_metadata
 from routes.auth import is_login_pin_enabled
+from utils import proxy_settings
 
 SETTINGS_VISIBLE_OPERATION_MODEL_KEYS = tuple(
     key for key in MODEL_OPERATION_KEYS if key not in {"generate_title"}
@@ -274,6 +275,9 @@ def _get_tool_permission_section_key(name: str) -> str:
         "search_knowledge_base",
         "list_conversation_images",
         "analyze_image",
+        "expand_truncated_tool_result",
+        "purge",
+        "compact_context",
     }:
         return "assistant"
     if name in {
@@ -297,6 +301,8 @@ def _get_tool_permission_section_key(name: str) -> str:
 def build_tool_permission_options() -> list[dict[str, str]]:
     options: list[dict[str, str]] = []
     for name in TOOL_SPEC_BY_NAME:
+        if get_tool_runtime_metadata(name).get("ui_hidden"):
+            continue
         options.append(
             {
                 "name": name,
@@ -481,6 +487,7 @@ def _build_web_section(raw: dict) -> dict:
         bright_data_timeout = int(raw.get("bright_data_serp_timeout_seconds", "30") or 30)
     except (TypeError, ValueError):
         bright_data_timeout = 30
+
     return {
         "web_cache_ttl_hours": get_web_cache_ttl_hours(raw),
         "bright_data_serp_language": str(raw.get("bright_data_serp_language", "en") or "en").lower(),
@@ -490,6 +497,7 @@ def _build_web_section(raw: dict) -> dict:
         "openrouter_anthropic_cache_ttl": get_openrouter_anthropic_cache_ttl(raw),
         "openrouter_http_referer": get_openrouter_http_referer(raw),
         "openrouter_app_title": get_openrouter_app_title(raw),
+        "scholar_proxy_enabled": "scholar" in proxy_settings.normalize_proxy_enabled_operations(raw.get("proxy_enabled_operations")),
     }
 
 
@@ -1712,6 +1720,18 @@ def register_page_routes(app) -> None:
             if normalized_ttl not in {"5m", "1h"}:
                 return jsonify({"error": "openrouter_anthropic_cache_ttl must be '5m' or '1h'."}), 400
             settings["openrouter_anthropic_cache_ttl"] = normalized_ttl
+
+        scholar_proxy_raw = data.get("scholar_proxy_enabled")
+        if scholar_proxy_raw is not None:
+            proxy_ops = proxy_settings.normalize_proxy_enabled_operations(
+                settings.get("proxy_enabled_operations")
+            )
+            if _normalize_bool_setting_value(scholar_proxy_raw):
+                if proxy_settings.PROXY_OPERATION_SCHOLAR not in proxy_ops:
+                    proxy_ops.append(proxy_settings.PROXY_OPERATION_SCHOLAR)
+            else:
+                proxy_ops = [op for op in proxy_ops if op != proxy_settings.PROXY_OPERATION_SCHOLAR]
+            settings["proxy_enabled_operations"] = json.dumps(proxy_ops, ensure_ascii=False)
 
         return None, None
 

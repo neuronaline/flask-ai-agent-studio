@@ -431,10 +431,9 @@ TOOL_SPECS = [
     {
         "name": "search_scholar",
         "description": (
-            "Search academic papers via Google Scholar through Bright Data SERP. Returns title, URL, snippet/abstract, authors, "
+            "Search academic papers on Google Scholar via direct HTML scraping. Returns title, URL, snippet/abstract, authors, "
             "publication year, venue, and citation count for each result. "
-            "Use this for academic research, literature reviews, finding papers, or verifying scholarly sources. "
-            "Bright Data handles the SERP collection server-side."
+            "Use this for academic research, literature reviews, finding papers, or verifying scholarly sources."
         ),
         "parameters": {
             "type": "object",

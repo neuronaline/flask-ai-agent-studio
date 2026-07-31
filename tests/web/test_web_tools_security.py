@@ -196,8 +196,10 @@ def test_google_news_target_applies_vertical_and_time_filter():
     assert "tbs=qdr%3Aw" in target
 
 
-def test_scholar_target_applies_year_and_sort_filters():
-    target = web_tools._build_scholar_url(
+def test_scholar_search_url_applies_year_and_sort_filters():
+    from services.scholar_scraper import _build_search_url
+
+    target = _build_search_url(
         "language models",
         lang="en",
         year_from=2024,
