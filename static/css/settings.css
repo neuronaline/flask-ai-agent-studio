@@ -570,8 +570,8 @@
 
 .settings-page-shell {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 32px;
   width: min(1440px, calc(100% - 48px));
   margin: 0 auto;
   padding: 20px 0 32px;
@@ -686,7 +686,7 @@
 .settings-tabs {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .settings-tab-btn {
@@ -695,10 +695,10 @@
   background: rgba(255, 255, 255, 0.02);
   color: var(--text-secondary);
   border-radius: 12px;
-  padding: 11px 14px;
+  padding: 13px 16px;
   text-align: left;
   font: inherit;
-  font-size: 0.84rem;
+  font-size: 0.86rem;
   font-weight: 600;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s, color 0.15s;
@@ -744,13 +744,13 @@
 .settings-tab-panels {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 28px;
 }
 
 .settings-tab-panel {
   display: none;
   flex-direction: column;
-  gap: 20px;
+  gap: 28px;
 }
 
 .settings-tab-panel.active {
@@ -759,7 +759,7 @@
 
 .settings-page-grid {
   display: grid;
-  gap: 16px;
+  gap: 24px;
 }
 
 .settings-page-grid--two {
@@ -796,7 +796,7 @@ body[data-page="settings"] .rag-settings-grid {
   grid-template-columns: minmax(0, 1fr);
 }
 
-@media (min-width: 961px) {
+@media (min-width: 1100px) {
   body[data-page="settings"] .settings-page-grid--two,
   body[data-page="settings"] .settings-subsection-grid--two {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -808,20 +808,20 @@ body[data-page="settings"] .settings-tab-panels,
 body[data-page="settings"] .settings-tab-panel,
 body[data-page="settings"] .settings-page-grid,
 body[data-page="settings"] .settings-page-stack {
-  gap: 16px;
+  gap: 24px;
 }
 
 body[data-page="settings"] .settings-page-shell {
-  gap: 22px;
-  padding: 24px 0 40px;
-  width: min(1360px, calc(100% - 48px));
+  gap: 32px;
+  padding: 28px 0 48px;
+  width: min(1560px, calc(100% - 48px));
 }
 
 body[data-page="settings"] .settings-page-sidebar__intro,
 body[data-page="settings"] .settings-page-toolbar,
 body[data-page="settings"] .settings-page-section-card,
 body[data-page="settings"] .settings-stat-card {
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.14);
+  box-shadow: 0 4px 28px rgba(0, 0, 0, 0.16);
   backdrop-filter: none;
 }
 
@@ -834,12 +834,12 @@ body[data-page="settings"] .settings-page-section-card {
 body[data-page="settings"] .settings-page-sidebar__intro,
 body[data-page="settings"] .settings-page-toolbar,
 body[data-page="settings"] .settings-page-section-card {
-  padding: 22px;
-  gap: 14px;
+  padding: 28px;
+  gap: 20px;
 }
 
 body[data-page="settings"] .settings-page-section-card__header {
-  gap: 10px;
+  gap: 14px;
   padding-bottom: 0;
 }
 
@@ -850,7 +850,7 @@ body[data-page="settings"] .settings-page-toolbar p {
 }
 
 body[data-page="settings"] .settings-subsection-grid {
-  gap: 14px;
+  gap: 20px;
 }
 
 body[data-page="settings"] .settings-subsection,
@@ -858,23 +858,23 @@ body[data-page="settings"] .settings-toggle-panel,
 body[data-page="settings"] .settings-conditional-group,
 body[data-page="settings"] .tool-permission-section,
 body[data-page="settings"] .rag-setting-group {
-  padding: 16px;
-  border-radius: 12px;
+  padding: 20px;
+  border-radius: 14px;
 }
 
 body[data-page="settings"] .settings-subsection {
-  gap: 10px;
+  gap: 14px;
 }
 
 body[data-page="settings"] .settings-subsection--compact {
-  padding: 16px;
-  gap: 10px;
+  padding: 18px;
+  gap: 12px;
 }
 
 body[data-page="settings"] .settings-callout,
 body[data-page="settings"] .settings-collapsible__summary,
 body[data-page="settings"] .settings-collapsible__content {
-  padding: 10px;
+  padding: 12px;
 }
 
 body[data-page="settings"] .settings-collapsible {
@@ -889,22 +889,22 @@ body[data-page="settings"] .settings-stat-card {
 .settings-page-stack {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 24px;
 }
 
 .settings-page-section-card {
   border-radius: 22px;
-  padding: 22px;
+  padding: 28px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 24px;
 }
 
 .settings-page-section-card__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 18px;
+  gap: 24px;
   padding-bottom: 4px;
 }
 
@@ -966,7 +966,7 @@ body[data-page="settings"] .settings-stat-card {
 
 .settings-subsection-grid {
   display: grid;
-  gap: 16px;
+  gap: 20px;
 }
 
 .settings-subsection-grid--two {
@@ -981,8 +981,8 @@ body[data-page="settings"] .settings-stat-card {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px;
+  gap: 18px;
+  padding: 20px;
   border: 1px solid rgba(255, 255, 255, 0.075);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.028);
@@ -1985,3 +1985,14 @@ body[data-page="settings"] .settings-stat-card {
 .custom-model-row--editing .model-management-row__meta strong {
   color: var(--accent);
 }
+
+
+/* ── Card visual hierarchy ─────────────────────────────────────────── */
+.settings-page-section-card--accent-left {
+  border-left: 3px solid rgba(79, 110, 247, 0.35);
+}
+
+.settings-page-section-card--accent-left-alt {
+  border-left: 3px solid rgba(147, 112, 219, 0.3);
+}
+
