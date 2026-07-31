@@ -202,40 +202,11 @@ def build_tier3_footer(
     This is emitted as a distinct final user message for provider cache safety.
     It is NEVER persisted in messages.metadata.context_injection.
     """
-    total_used = tier1_tokens + tier2_tokens + tool_schema_tokens + tier3_estimate_tokens(
-        current_time=current_time,
-        canvas_context=canvas_context,
-        rag_context=rag_context,
-        scratchpad_sections=scratchpad_sections,
-        conversation_memory_text=conversation_memory_text,
-        persona_memory_text=persona_memory_text,
-        active_tool_names=active_tool_names,
-        extra_context=extra_context,
-    )
-    free = max(0, model_input_limit - total_used)
-    usage_pct = (total_used / model_input_limit * 100) if model_input_limit > 0 else 0
-
-    # Status line
-    if usage_pct >= 95:
-        status = "Critical"
-    elif warn_at_80_percent and usage_pct >= 80:
-        status = "Warning"
-    else:
-        status = "Optimal"
-
-    parts: list[str] = []
-    parts.append(f"Status: Context: {total_used:,} / {model_input_limit:,} ({usage_pct:.1f}%) | System Status: {status}")
-
-    # Time context (rounded for cache friendliness)
+    # Build the content sections first (excluding the status line) so the token
+    # accounting reflects the real footer text instead of a self-referential
+    # estimate of the status line that reports that very estimate.
     now = current_time or datetime.now(timezone.utc)
-    parts.append(f"Current time: {now.strftime('%Y-%m-%d %H:%M UTC')}")
-
-    # Context management guidance
-    if usage_pct >= 80:
-        parts.append(
-            "Context usage is high. Consider using `purge` to remove completed or irrelevant "
-            "conversation blocks, or `compact_context` to reset with a dense state summary."
-        )
+    parts: list[str] = [f"Current time: {now.strftime('%Y-%m-%d %H:%M UTC')}"]
 
     # Active tools (compact)
     if active_tool_names:
@@ -269,6 +240,36 @@ def build_tier3_footer(
     # to a stored transcript message or adding another system message.
     if extra_context and extra_context.strip():
         parts.append(extra_context.strip())
+
+    # Measure the content sections actually built above.
+    def _total_used() -> int:
+        return tier1_tokens + tier2_tokens + tool_schema_tokens + estimate_text_tokens("\n\n".join(parts))
+
+    total_used = _total_used()
+    usage_pct = (total_used / model_input_limit * 100) if model_input_limit > 0 else 0
+
+    # Context management guidance (fixed text; re-measure so the total stays exact)
+    if usage_pct >= 80:
+        parts.insert(
+            1,
+            "Context usage is high. Consider using `purge` to remove completed or irrelevant "
+            "conversation blocks, or `compact_context` to reset with a dense state summary.",
+        )
+        total_used = _total_used()
+        usage_pct = (total_used / model_input_limit * 100) if model_input_limit > 0 else 0
+
+    # Status line — prepended last so it reflects the measured total above
+    if usage_pct >= 95:
+        status = "Critical"
+    elif warn_at_80_percent and usage_pct >= 80:
+        status = "Warning"
+    else:
+        status = "Optimal"
+
+    parts.insert(
+        0,
+        f"Status: Context: {total_used:,} / {model_input_limit:,} ({usage_pct:.1f}%) | System Status: {status}",
+    )
 
     return "\n\n".join(parts)
 

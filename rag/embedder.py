@@ -113,9 +113,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         return []
     prepared = [str(text or "").strip() for text in texts]
     if any(t == "" for t in prepared):
-        raise ValueError("embed_texts: all input texts must be non-empty after stripping. Filter empty texts before calling.")
-    if not prepared:
-        return []
+        raise ValueError("embed_texts: no input text may be empty after stripping. Filter empty texts before calling.")
 
     engine = get_embedder()
 

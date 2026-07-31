@@ -136,7 +136,7 @@ def search_canvas_document(
     elif match_type == "glob":
         try:
             import fnmatch
-            pattern = lambda line: fnmatch.fnmatch(line, raw_query) if not case_sensitive else fnmatch.fnmatch(line.lower(), raw_query.lower())
+            pattern = lambda line: fnmatch.fnmatch(line.lower(), raw_query.lower()) if not case_sensitive else fnmatch.fnmatch(line, raw_query)
         except Exception as exc:
             raise ValueError(f"Invalid glob pattern: {exc}") from exc
     elif match_type == "find":

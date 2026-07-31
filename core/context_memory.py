@@ -198,13 +198,16 @@ class ContextBlock:
                     pass
             return msg
         if self.api_role == "tool":
-            msg = {
+            if not self.provider_call_id:
+                raise ValueError(
+                    f"Tool-role block {self.public_id!r} has no provider_call_id; "
+                    "cannot build a provider-compatible tool message."
+                )
+            return {
                 "role": "tool",
                 "content": f"{label} {self.content}".rstrip(),
+                "tool_call_id": self.provider_call_id,
             }
-            if self.provider_call_id:
-                msg["tool_call_id"] = self.provider_call_id
-            return msg
         # Fallback — render as user message with label
         return {"role": "user", "content": f"{label} {self.content}".rstrip()}
 
@@ -293,35 +296,38 @@ def validate_compacted_state(data: dict[str, Any]) -> list[str]:
         if field not in data:
             errors.append(f"Missing required field: {field}")
 
-    if errors:
-        return errors
+    # Validate values of present fields too, so all errors are collected in one pass.
 
     # project_summary
-    ps = data.get("project_summary")
-    if not isinstance(ps, str) or not ps.strip():
-        errors.append("project_summary must be a non-empty string.")
+    if "project_summary" in data:
+        ps = data.get("project_summary")
+        if not isinstance(ps, str) or not ps.strip():
+            errors.append("project_summary must be a non-empty string.")
 
     # established_context
-    ec = data.get("established_context")
-    if not isinstance(ec, list) or len(ec) < 1:
-        errors.append("established_context must be a non-empty array.")
-    elif not all(isinstance(item, str) and item.strip() for item in ec):
-        errors.append("Every established_context entry must be a non-empty string.")
+    if "established_context" in data:
+        ec = data.get("established_context")
+        if not isinstance(ec, list) or len(ec) < 1:
+            errors.append("established_context must be a non-empty array.")
+        elif not all(isinstance(item, str) and item.strip() for item in ec):
+            errors.append("Every established_context entry must be a non-empty string.")
 
     # current_tasks
-    ct = data.get("current_tasks")
-    if not isinstance(ct, list) or len(ct) < 1:
-        errors.append("current_tasks must be a non-empty array.")
-    elif not all(isinstance(item, str) and item.strip() for item in ct):
-        errors.append("Every current_tasks entry must be a non-empty string.")
+    if "current_tasks" in data:
+        ct = data.get("current_tasks")
+        if not isinstance(ct, list) or len(ct) < 1:
+            errors.append("current_tasks must be a non-empty array.")
+        elif not all(isinstance(item, str) and item.strip() for item in ct):
+            errors.append("Every current_tasks entry must be a non-empty string.")
 
     # Array fields — must be arrays of strings if present
     for field in ("key_decisions", "completed_tasks", "blockers", "affected_files"):
-        value = data.get(field)
-        if not isinstance(value, list):
-            errors.append(f"{field} must be an array.")
-        elif not all(isinstance(item, str) for item in value):
-            errors.append(f"Every {field} entry must be a string.")
+        if field in data:
+            value = data.get(field)
+            if not isinstance(value, list):
+                errors.append(f"{field} must be an array.")
+            elif not all(isinstance(item, str) for item in value):
+                errors.append(f"Every {field} entry must be a string.")
 
     # No additional properties
     allowed = set(COMPACTED_STATE_SCHEMA["required"])

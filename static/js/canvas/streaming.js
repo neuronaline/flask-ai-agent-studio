@@ -417,22 +417,15 @@ function ensureStreamingCanvasPreview(toolName, previewKey = "", snapshot = {}) 
   // still matches. Rebuild is only needed when the preview is first created or
   // when the active tool changes (extremely rare mid-stream).
   const needsRebuild = !existing || existing.tool !== normalizedToolName;
-  let shouldRebuild = needsRebuild;
   let preview = existing;
   if (needsRebuild) {
-    const rebuiltPreview = buildStreamingCanvasPreviewDocument(normalizedToolName, normalizedPreviewKey, snapshot);
-    shouldRebuild = !existing
-      || existing.tool !== normalizedToolName
-      || (rebuiltPreview && rebuiltPreview.id && rebuiltPreview.id !== existing.id);
-    if (shouldRebuild) {
-      preview = rebuiltPreview;
-      if (preview) {
-        canvasState.streamingPreviews.set(normalizedPreviewKey, preview);
-      }
+    preview = buildStreamingCanvasPreviewDocument(normalizedToolName, normalizedPreviewKey, snapshot);
+    if (preview) {
+      canvasState.streamingPreviews.set(normalizedPreviewKey, preview);
     }
   }
 
-  const isNewPreview = !existing || shouldRebuild;
+  const isNewPreview = needsRebuild;
   if (!preview) {
     return null;
   }

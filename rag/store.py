@@ -326,21 +326,16 @@ def get_source_chunks(source_ref: str, category: str | None = None) -> list[dict
     rows: list[dict] = []
     seen_ids: set[str] = set()
     for collection, where in _iter_query_collections(category):
-        conditions = [
-            {"source_key": cleaned},
-            {"source_name": cleaned},
-        ]
-        for condition in conditions:
-            merged_where = dict(condition)
-            if where:
-                merged_where.update(where)
-            for row in _get_collection_rows(collection, merged_where):
-                row_id = str(row.get("id") or "").strip()
-                if row_id and row_id in seen_ids:
-                    continue
-                if row_id:
-                    seen_ids.add(row_id)
-                rows.append(row)
+        merged_where = {"source_key": cleaned}
+        if where:
+            merged_where.update(where)
+        for row in _get_collection_rows(collection, merged_where):
+            row_id = str(row.get("id") or "").strip()
+            if row_id and row_id in seen_ids:
+                continue
+            if row_id:
+                seen_ids.add(row_id)
+            rows.append(row)
     rows.sort(key=lambda item: int((item.get("metadata") or {}).get("chunk_index") or 0))
     return rows
 
@@ -352,23 +347,18 @@ def delete_source(source_ref: str) -> int:
     deleted = 0
     deleted_ids: set[str] = set()
     for collection, where in _iter_query_collections(None):
-        conditions = [
-            {"source_key": cleaned},
-            {"source_name": cleaned},
-        ]
-        for condition in conditions:
-            merged_where = dict(condition)
-            if where:
-                merged_where.update(where)
-            existing = collection.get(where=merged_where, include=[])
-            ids = existing.get("ids") or []
-            if not ids:
-                continue
-            ids_to_delete = [item_id for item_id in ids if str(item_id or "").strip() not in deleted_ids]
-            if not ids_to_delete:
-                continue
-            collection.delete(ids=ids_to_delete)
-            for item_id in ids_to_delete:
-                deleted_ids.add(str(item_id or "").strip())
-            deleted += len(ids_to_delete)
+        merged_where = {"source_key": cleaned}
+        if where:
+            merged_where.update(where)
+        existing = collection.get(where=merged_where, include=[])
+        ids = existing.get("ids") or []
+        if not ids:
+            continue
+        ids_to_delete = [item_id for item_id in ids if str(item_id or "").strip() not in deleted_ids]
+        if not ids_to_delete:
+            continue
+        collection.delete(ids=ids_to_delete)
+        for item_id in ids_to_delete:
+            deleted_ids.add(str(item_id or "").strip())
+        deleted += len(ids_to_delete)
     return deleted

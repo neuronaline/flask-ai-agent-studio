@@ -275,13 +275,8 @@ def build_pdf_download(document: dict) -> bytes:
         preview_doc.build(_build_story(None), onFirstPage=page_chrome, onLaterPages=page_chrome)
         page_count = _count_pdf_pages(preview_output.getvalue()) or 1
 
-    for _ in range(5):
-        output.seek(0)
-        output.truncate(0)
-        doc.build(_build_story(page_count), onFirstPage=page_chrome, onLaterPages=page_chrome)
-        rendered_page_count = _count_pdf_pages(output.getvalue()) or page_count or 1
-        if rendered_page_count == page_count:
-            break
-        page_count = rendered_page_count
+    # Build exactly once with the measured page count. Re-measuring and rebuilding
+    # can oscillate when the title-card meta text changes the rendered page count.
+    doc.build(_build_story(page_count), onFirstPage=page_chrome, onLaterPages=page_chrome)
 
     return output.getvalue()

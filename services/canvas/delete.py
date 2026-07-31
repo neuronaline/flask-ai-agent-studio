@@ -31,6 +31,7 @@ def delete_canvas_document(
         raise ValueError("No canvas document is available yet.")
 
     if documents and len(documents) > 0:
+        previous_active_document_id = get_canvas_runtime_active_document_id(runtime_state)
         deleted_ids = []
         deleted_titles = []
         for doc_spec in documents:
@@ -47,7 +48,15 @@ def delete_canvas_document(
             except (ValueError, CanvasError):
                 LOGGER.warning("Failed to delete child/related canvas document during cleanup: document_id=%s, document_path=%s", doc_id, doc_path)
                 continue
-        runtime_state["active_document_id"] = None
+        if canvas_docs:
+            runtime_state["active_document_id"] = (
+                canvas_docs[-1]["id"]
+                if str(previous_active_document_id or "")
+                in {str(deleted_document_id or "") for deleted_document_id in deleted_ids}
+                else previous_active_document_id
+            )
+        else:
+            runtime_state["active_document_id"] = None
         _refresh_canvas_runtime_state(runtime_state)
         return {
             "status": "ok",

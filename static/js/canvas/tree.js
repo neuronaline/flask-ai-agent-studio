@@ -24,6 +24,18 @@ function buildCanvasTreeNodes(documents) {
     cursor.files.push({ name: parts[parts.length - 1], document });
   });
 
+  // A file entry can share its name with a sibling folder (e.g. a root-level file
+  // "src" next to a "src/" directory). Mark those entries so the renderer can
+  // visually distinguish the file from the folder.
+  const markFolderCollisions = (node) => {
+    const folderNames = new Set(node.folders.keys());
+    node.files.forEach((entry) => {
+      entry.hasFolderCollision = folderNames.has(entry.name);
+    });
+    node.folders.forEach((folder) => markFolderCollisions(folder));
+  };
+  markFolderCollisions(root);
+
   return root;
 }
 
@@ -227,14 +239,17 @@ function handleCanvasTreeItemKeydown(event) {
   }
 }
 
-function renderCanvasTreeFile(document, depth, activeDocument) {
+function renderCanvasTreeFile(document, depth, activeDocument, hasFolderCollision = false) {
   const button = globalThis.document.createElement("button");
   const isActive = Boolean(activeDocument && activeDocument.id === document.id);
   const roleBadge = document.role ? `<span class="canvas-tree-file__role">${escHtml(document.role)}</span>` : "";
   const pathLabel = document.path ? `<span class="canvas-tree-file__path">${escHtml(document.path)}</span>` : "";
+  const collisionBadge = hasFolderCollision
+    ? '<span class="canvas-tree-file__collision" title="A folder with the same name exists at this level">(file)</span>'
+    : "";
 
   button.type = "button";
-  button.className = `canvas-tree-file${isActive ? " active" : ""}`;
+  button.className = `canvas-tree-file${isActive ? " active" : ""}${hasFolderCollision ? " canvas-tree-file--collision" : ""}`;
   button.style.setProperty("--canvas-tree-depth", String(depth));
   button.disabled = canvasState.isCanvasEditing && !isActive;
   button.dataset.canvasTreeItem = "true";
@@ -244,7 +259,7 @@ function renderCanvasTreeFile(document, depth, activeDocument) {
   button.setAttribute("aria-level", String(depth + 1));
   button.setAttribute("aria-selected", isActive ? "true" : "false");
   button.tabIndex = -1;
-  button.innerHTML = `<span class="canvas-tree-file__name">${escHtml(getCanvasFileName(document))}</span>${roleBadge}${pathLabel}`;
+  button.innerHTML = `<span class="canvas-tree-file__name">${escHtml(getCanvasFileName(document))}</span>${collisionBadge}${roleBadge}${pathLabel}`;
   button.title = getCanvasDocumentLabel(document);
   button.addEventListener("click", () => {
     canvasState.activeCanvasDocumentId = document.id;
@@ -332,7 +347,7 @@ function renderCanvasTree(documents, activeDocument) {
         .forEach((childFolder) => body.appendChild(renderFolder(childFolder, depth + 1)));
       folder.files
         .sort((left, right) => left.name.localeCompare(right.name))
-        .forEach((entry) => body.appendChild(renderCanvasTreeFile(entry.document, depth + 1, activeDocument)));
+        .forEach((entry) => body.appendChild(renderCanvasTreeFile(entry.document, depth + 1, activeDocument, entry.hasFolderCollision)));
       section.appendChild(body);
     }
 
@@ -344,7 +359,7 @@ function renderCanvasTree(documents, activeDocument) {
     .forEach((folder) => fragment.appendChild(renderFolder(folder, 0)));
   tree.files
     .sort((left, right) => left.name.localeCompare(right.name))
-    .forEach((entry) => fragment.appendChild(renderCanvasTreeFile(entry.document, 0, activeDocument)));
+    .forEach((entry) => fragment.appendChild(renderCanvasTreeFile(entry.document, 0, activeDocument, entry.hasFolderCollision)));
 
   canvasTreeEl.innerHTML = "";
   canvasTreeEl.appendChild(fragment);

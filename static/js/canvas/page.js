@@ -148,12 +148,14 @@ function bindCanvasPageNavigation(document) {
 
   const pageSection = getCanvasPageSection(document, getCanvasCurrentPage(document) || 1);
   if (pageSection) {
-    canvasDocumentEl.querySelector('[data-canvas-page-action="prev"]')?.addEventListener("click", () => {
-      scrollCanvasToPage(document, getCanvasCurrentPage(document) - 1, "auto");
-    });
-    canvasDocumentEl.querySelector('[data-canvas-page-action="next"]')?.addEventListener("click", () => {
-      scrollCanvasToPage(document, getCanvasCurrentPage(document) + 1, "auto");
-    });
+    const prevBtn = canvasDocumentEl.querySelector('[data-canvas-page-action="prev"]');
+    const nextBtn = canvasDocumentEl.querySelector('[data-canvas-page-action="next"]');
+    if (prevBtn) {
+      prevBtn.onclick = () => scrollCanvasToPage(document, getCanvasCurrentPage(document) - 1, "auto");
+    }
+    if (nextBtn) {
+      nextBtn.onclick = () => scrollCanvasToPage(document, getCanvasCurrentPage(document) + 1, "auto");
+    }
     updateCanvasPageNavigationUi(document);
     return;
   }
@@ -170,12 +172,14 @@ function bindCanvasPageNavigation(document) {
     heading.classList.add("canvas-page-heading");
   });
 
-  canvasDocumentEl.querySelector('[data-canvas-page-action="prev"]')?.addEventListener("click", () => {
-    scrollCanvasToPage(document, getCanvasCurrentPage(document) - 1);
-  });
-  canvasDocumentEl.querySelector('[data-canvas-page-action="next"]')?.addEventListener("click", () => {
-    scrollCanvasToPage(document, getCanvasCurrentPage(document) + 1);
-  });
+  const prevBtn = canvasDocumentEl.querySelector('[data-canvas-page-action="prev"]');
+  const nextBtn = canvasDocumentEl.querySelector('[data-canvas-page-action="next"]');
+  if (prevBtn) {
+    prevBtn.onclick = () => scrollCanvasToPage(document, getCanvasCurrentPage(document) - 1);
+  }
+  if (nextBtn) {
+    nextBtn.onclick = () => scrollCanvasToPage(document, getCanvasCurrentPage(document) + 1);
+  }
 
   updateCanvasPageNavigationUi(document);
   canvasDocumentEl.onscroll = () => scheduleCanvasPageSync(document);

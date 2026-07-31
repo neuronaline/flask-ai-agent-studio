@@ -67,7 +67,7 @@ def _collect_canvas_document_path_matches(
         if not lookup_basename:
             continue
         path_basename = path_key.rsplit("/", 1)[-1] if path_key else None
-        title_basename = title_key.rsplit("/", 1)[-1] if path_key else None
+        title_basename = title_key.rsplit("/", 1)[-1] if title_key else None
         if path_basename == lookup_basename:
             add_match("basename", index, document)
             continue

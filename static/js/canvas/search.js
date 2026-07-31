@@ -93,7 +93,7 @@ function documentMatchesCanvasFilters(document, searchTerm, roleValue, pathValue
       return false;
     }
   } else if (normalizedPath) {
-    const candidatePath = getCanvasDocumentLabel(document);
+    const candidatePath = String(document.path || "").trim();
     if (!(candidatePath === normalizedPath || candidatePath.startsWith(`${normalizedPath}/`))) {
       return false;
     }

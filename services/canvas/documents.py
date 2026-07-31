@@ -140,6 +140,7 @@ def create_canvas_document(
     chunk_index: int | None = None,
     chunk_count: int | None = None,
     visual_page_image_ids: list[str] | None = None,
+    source_message_id: int | None = None,
 ) -> dict:
     documents = runtime_state.get("documents") if isinstance(runtime_state, dict) else None
     if isinstance(documents, list) and len(documents) >= CANVAS_MAX_DOCUMENTS:
@@ -174,6 +175,7 @@ def create_canvas_document(
             "chunk_index": chunk_index,
             "chunk_count": chunk_count,
             "visual_page_image_ids": visual_page_image_ids,
+            "source_message_id": source_message_id,
         }
     )
     return _store_canvas_document(runtime_state, normalized)

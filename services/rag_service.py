@@ -1271,7 +1271,19 @@ def ingest_rag_chunks(
             merged_metadata.update(normalized_metadata)
             chunk.metadata = merged_metadata
     rag_delete_source(source_key)
-    inserted = rag_upsert_chunks(chunks)
+    try:
+        inserted = rag_upsert_chunks(chunks)
+    except Exception:
+        upsert_rag_document_record(
+            source_key,
+            source_name,
+            source_type,
+            category,
+            0,
+            metadata=normalized_metadata,
+            expires_at=expires_at,
+        )
+        raise
     upsert_rag_document_record(
         source_key,
         source_name,
@@ -1420,23 +1432,47 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
     ensure_supported_rag_sources()
     synced = []
     sync_plan: list[dict] = []
-    for candidate in _get_conversation_sync_candidates(conversation_id):
+    candidates = _get_conversation_sync_candidates(conversation_id)
+    if not candidates:
+        return synced
+    # Load full conversation records up front so sync detection can compare
+    # content signatures (not just updated_at) against what RAG already stores.
+    records_by_id = {
+        int(conversation["conversation_id"]): conversation
+        for conversation in get_conversation_records_for_rag(conversation_id=conversation_id)
+    }
+    for candidate in candidates:
+        conversation = records_by_id.get(int(candidate["conversation_id"]))
+        if conversation is None:
+            continue
         conversation_key = conversation_rag_source_key(RAG_SOURCE_CONVERSATION, candidate["conversation_id"])
         archived_conversation_key = conversation_archived_rag_source_key(candidate["conversation_id"])
         tool_key = conversation_rag_source_key(RAG_SOURCE_TOOL_RESULT, candidate["conversation_id"])
         sync_marker = candidate.get("updated_at")
+        conversation_signature = _build_rag_sync_signature(
+            {"title": conversation["title"], "messages": conversation.get("messages") or []}
+        )
+        archived_signature = _build_rag_sync_signature(
+            {"title": conversation["title"], "archived_messages": conversation.get("archived_messages") or []}
+        )
+        tool_signature = _build_rag_sync_signature(
+            {"title": conversation["title"], "tool_results": conversation.get("tool_results") or []}
+        )
         sync_conversation = _conversation_source_needs_sync(
             conversation_key,
+            sync_signature=conversation_signature,
             sync_marker=sync_marker,
             force=force,
         )
         sync_archived_conversation = _conversation_source_needs_sync(
             archived_conversation_key,
+            sync_signature=archived_signature,
             sync_marker=sync_marker,
             force=force,
         )
         sync_tool_results = _conversation_source_needs_sync(
             tool_key,
+            sync_signature=tool_signature,
             sync_marker=sync_marker,
             force=force,
         )
@@ -1454,7 +1490,9 @@ def sync_conversations_to_rag(conversation_id: int | None = None, force: bool = 
         return synced
 
     planned_ids = [int(item["conversation_id"]) for item in sync_plan]
-    conversations = get_conversation_records_for_rag(conversation_ids=planned_ids)
+    conversations = [
+        records_by_id[conversation_id] for conversation_id in planned_ids if conversation_id in records_by_id
+    ]
     planned_by_id = {int(item["conversation_id"]): item for item in sync_plan}
     for conversation in conversations:
         planned = planned_by_id.get(int(conversation["conversation_id"]))

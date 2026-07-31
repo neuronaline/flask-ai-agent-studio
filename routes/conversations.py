@@ -1117,6 +1117,7 @@ def create_canvas(conv_id):
             summary=summary,
             project_id=project_id,
             workspace_id=workspace_id,
+            source_message_id=source_assistant_message_id,
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400

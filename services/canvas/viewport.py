@@ -94,7 +94,7 @@ def set_canvas_viewport(
     total_lines = int(document.get("line_count") or 0)
     if start_line < 1 or end_line < start_line:
         raise ValueError("set_canvas_viewport requires a valid 1-based inclusive range.")
-    if total_lines and end_line > total_lines:
+    if total_lines > 0 and end_line > total_lines:
         raise ValueError("set_canvas_viewport range exceeds the current canvas document.")
     viewport_key = str(document.get("path") or document.get("id") or "").strip()
     if not viewport_key:

@@ -439,8 +439,8 @@ async function withCanvasMutation(mutationType, operation, options = {}) {
         // onSuccess handled everything (status, renders) - don't overwrite
         return payload;
       }
-      // If onSuccess returns a string, use it as the success message
-      if (typeof onSuccessResult === "string") {
+      // If onSuccess returns a non-empty string, use it as the success message
+      if (typeof onSuccessResult === "string" && onSuccessResult) {
         defaultSuccessMessage = onSuccessResult;
       }
     }

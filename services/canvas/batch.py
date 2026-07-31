@@ -37,6 +37,8 @@ from services.canvas.runtime import (
     _refresh_canvas_runtime_state,
 )
 
+from services.canvas.snapshots import build_canvas_document_result_snapshot
+
 
 # ─── JSON Coercion ──────────────────────────────────────────────────────────────
 
@@ -585,56 +587,3 @@ def batch_canvas_edits(
     result["document_path"] = committed_document.get("path")
     result["title"] = committed_document.get("title")
     return result
-
-
-def build_canvas_document_result_snapshot(document: dict | None) -> dict | None:
-    from services.canvas.normalize import normalize_canvas_document, CANVAS_CONTENT_MODE_TEXT, CANVAS_DOCUMENT_MODE_EDITABLE, CANVAS_MAX_RELATIONSHIP_ITEMS_PER_CATEGORY
-
-    normalized = normalize_canvas_document(document)
-    if not normalized:
-        return None
-
-    snapshot = {
-        "id": normalized["id"],
-        "title": normalized["title"],
-        "format": normalized["format"],
-        "line_count": normalized["line_count"],
-        "content_mode": normalized.get("content_mode") or CANVAS_CONTENT_MODE_TEXT,
-        "canvas_mode": normalized.get("canvas_mode") or CANVAS_DOCUMENT_MODE_EDITABLE,
-    }
-    if int(normalized.get("page_count") or 0) > 0:
-        snapshot["page_count"] = int(normalized["page_count"])
-    if normalized.get("language"):
-        snapshot["language"] = normalized["language"]
-    for key in (
-        "path",
-        "role",
-        "summary",
-        "project_id",
-        "workspace_id",
-        "source_file_id",
-        "source_mime_type",
-        "source_url",
-        "source_title",
-        "source_kind",
-        "import_group_id",
-    ):
-        if normalized.get(key):
-            snapshot[key] = normalized[key]
-    for key in ("chunk_index", "chunk_count"):
-        if int(normalized.get(key) or 0) > 0:
-            snapshot[key] = int(normalized[key])
-    for key in ("imports", "exports", "symbols", "dependencies"):
-        values = normalized.get(key) if isinstance(normalized.get(key), list) else []
-        if values:
-            snapshot[key] = values
-    visual_page_image_ids = (
-        normalized.get("visual_page_image_ids") if isinstance(normalized.get("visual_page_image_ids"), list) else []
-    )
-    if visual_page_image_ids:
-        snapshot["visual_page_image_ids"] = visual_page_image_ids
-    if normalized.get("ignored") is True:
-        snapshot["ignored"] = True
-    if normalized.get("ignored_reason"):
-        snapshot["ignored_reason"] = normalized["ignored_reason"]
-    return snapshot
