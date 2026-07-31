@@ -1,5 +1,7 @@
 // Knowledge Base management — loaded on /settings page only
 (function () {
+  "use strict";
+
   // ─── DOM refs ────────────────────────────────────────────────────────────────
   const kbSyncBtn = document.getElementById("kb-sync-btn");
   const kbStatusEl = document.getElementById("kb-status");
@@ -25,6 +27,12 @@
     element.style.height = `${element.scrollHeight}px`;
   };
 
+  const isRagEnabled = () => Boolean(featureFlags.rag_enabled);
+
+  function getDocumentMetadata(doc) {
+    return doc && typeof doc.metadata === "object" ? doc.metadata : {};
+  }
+
   function setKbStatus(message, tone = "muted") {
     if (!kbStatusEl) return;
     kbStatusEl.textContent = message;
@@ -38,14 +46,14 @@
   }
 
   function syncKbUploadActionState() {
-    const ragEnabled = Boolean(featureFlags.rag_enabled);
+    const ragEnabled = isRagEnabled();
     const hasFile = Boolean(kbUploadFileEl?.files?.length);
     if (kbSuggestBtn) kbSuggestBtn.disabled = !ragEnabled || !hasFile;
     if (kbUploadBtn) kbUploadBtn.disabled = !ragEnabled || !hasFile;
   }
 
   function summarizeKbDocument(doc) {
-    const metadata = doc && typeof doc.metadata === "object" ? doc.metadata : {};
+    const metadata = getDocumentMetadata(doc);
     const parts = [(window.__settingsCore?.RAG_SOURCE_TYPE_LABELS || {})[doc.source_type] || doc.source_type || "Document"];
     if (doc.category) parts.push(doc.category);
     parts.push(`${doc.chunk_count || 0} chunks`);
@@ -72,7 +80,7 @@
       sub.className = "kb-doc-subtitle";
       sub.textContent = summarizeKbDocument(doc);
       meta.append(title, sub);
-      const metadata = doc && typeof doc.metadata === "object" ? doc.metadata : {};
+      const metadata = getDocumentMetadata(doc);
       const description = String(metadata.description || "").trim();
       if (description) {
         const descriptionEl = document.createElement("div");
@@ -108,7 +116,7 @@
   }
 
   async function loadKnowledgeBaseDocuments() {
-    if (!Boolean(featureFlags.rag_enabled)) {
+    if (!isRagEnabled()) {
       renderKnowledgeBaseDocuments([]);
       setKbStatus("RAG disabled in .env", "warning");
       return;
@@ -147,7 +155,7 @@
   }
 
   async function uploadKnowledgeBaseDocument() {
-    if (!Boolean(featureFlags.rag_enabled)) { setKbUploadStatus("RAG disabled in .env", "warning"); return; }
+    if (!isRagEnabled()) { setKbUploadStatus("RAG disabled in .env", "warning"); return; }
     const file = kbUploadFileEl?.files?.[0];
     if (!file) { setKbUploadStatus("Choose a document to upload.", "warning"); return; }
     const formData = new FormData();
@@ -177,7 +185,7 @@
   }
 
   async function generateKnowledgeBaseMetadata() {
-    if (!Boolean(featureFlags.rag_enabled)) { setKbUploadStatus("RAG disabled in .env", "warning"); return; }
+    if (!isRagEnabled()) { setKbUploadStatus("RAG disabled in .env", "warning"); return; }
     const file = kbUploadFileEl?.files?.[0];
     if (!file) { setKbUploadStatus("Choose a document first.", "warning"); return; }
     const formData = new FormData();
@@ -202,7 +210,7 @@
   }
 
   async function syncKnowledgeBaseConversations() {
-    if (!Boolean(featureFlags.rag_enabled)) { setKbStatus("RAG disabled in .env", "warning"); return; }
+    if (!isRagEnabled()) { setKbStatus("RAG disabled in .env", "warning"); return; }
     if (kbSyncBtn) kbSyncBtn.disabled = true;
     setKbStatus("Syncing conversations into RAG...");
     try {

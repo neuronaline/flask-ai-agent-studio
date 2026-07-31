@@ -644,7 +644,6 @@ def register_page_routes(app) -> None:
             "settings.html",
             settings=settings,
             tool_sections=build_tool_permission_sections(),
-            sub_agent_tool_sections=build_tool_permission_sections(),
             auth_enabled=is_login_pin_enabled(),
             page_lang=_resolve_page_lang(),
             settings_js_version=_static_asset_version(app, "settings/index.js"),

@@ -5,15 +5,11 @@
   // ─── DOM refs ────────────────────────────────────────────────────────────────
   const ragSensitivityEl = document.getElementById("rag-sensitivity-select");
   const ragSensitivityHintEl = document.getElementById("rag-sensitivity-hint");
-  const ragContextSizeEl = document.getElementById("rag-context-size-select");
   const ragAutoInjectEnabledEl = document.getElementById("rag-auto-inject-enabled-toggle");
-  const ragEnabledEl = document.getElementById("rag-enabled-toggle");
   const ragSourceSummaryEl = document.getElementById("rag-source-summary");
   const ragAutoInjectSourceSummaryEl = document.getElementById("rag-auto-inject-source-summary");
-  const ragDisabledNoteEl = document.getElementById("rag-disabled-note");
-  const ragAutoInjectSourceTypeEls = Array.from(document.querySelectorAll("input[name='rag-auto-inject-source-type']"));
-
   const ragSourceTypeEls = Array.from(document.querySelectorAll("input[name='rag-source-type']"));
+  const ragAutoInjectSourceTypeEls = Array.from(document.querySelectorAll("input[name='rag-auto-inject-source-type']"));
 
   const featureFlags = window.__featureFlags || {};
 
@@ -121,21 +117,6 @@
     });
 
     updateRagAutoInjectSourceSummary();
-    syncOverviewStats();
-  }
-
-  // ─── Overview stats (cross-module) ────────────────────────────────────────────
-  function syncOverviewStats() {
-    const statRagEl = document.getElementById("settings-stat-rag");
-    if (!statRagEl) return;
-
-    if (!featureFlags.rag_enabled) {
-      statRagEl.textContent = "Disabled";
-    } else {
-      const sourceCount = getSelectedRagSourceTypes().length;
-      const autoInjectCount = getSelectedRagAutoInjectSourceTypes().length;
-      statRagEl.textContent = `${sourceCount} search / ${autoInjectCount} inject`;
-    }
   }
 
   // ─── Export ──────────────────────────────────────────────────────────────────
@@ -147,8 +128,6 @@
     updateRagSensitivityHint,
     updateRagSourceSummary,
     updateRagAutoInjectSourceSummary,
-    formatRagSourceLabels,
     syncRagAutoInjectSourceAvailability,
-    syncOverviewStats,
   };
 })();

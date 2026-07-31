@@ -339,14 +339,14 @@
     const rows = [...getDraftOperationFallbackRows(operationKey), createOperationFallbackRow(modelId)];
     draftOperationFallbackRows = { ...draftOperationFallbackRows, [operationKey]: rows };
     renderModelManagementPanels();
-    if (typeof window.markDirty === "function") markDirty();
+    window.markDirty?.();
   }
 
   function removeOperationFallbackRow(operationKey, rowId) {
     const rows = getDraftOperationFallbackRows(operationKey).filter((row) => row.id !== rowId);
     draftOperationFallbackRows = { ...draftOperationFallbackRows, [operationKey]: rows };
     renderModelManagementPanels();
-    if (typeof window.markDirty === "function") markDirty();
+    window.markDirty?.();
   }
 
   function moveOperationFallbackRow(operationKey, rowIndex, direction) {
@@ -357,7 +357,7 @@
     rows.splice(nextIndex, 0, row);
     draftOperationFallbackRows = { ...draftOperationFallbackRows, [operationKey]: rows };
     renderModelManagementPanels();
-    if (typeof window.markDirty === "function") markDirty();
+    window.markDirty?.();
   }
 
   function setOperationFallbackRowModel(operationKey, rowId, modelId) {
@@ -365,7 +365,7 @@
       row.id === rowId ? { ...row, modelId: String(modelId || "").trim() } : row
     ));
     draftOperationFallbackRows = { ...draftOperationFallbackRows, [operationKey]: rows };
-    if (typeof window.markDirty === "function") markDirty();
+    window.markDirty?.();
   }
 
   function renderOperationFallbackList(operationKey) {
@@ -439,20 +439,6 @@
       knownIds.add(model.id);
     }
     if (!nextRows.length) {
-      // If no candidates but we have saved visible_model_order, use it to rebuild
-      if (initialVisible.size > 0 && candidates.length === 0) {
-        // Try to rebuild from visible_model_order if candidates is empty
-        const fallbackRows = [];
-        for (const id of initialVisible) {
-          if (candidateMap.has(id)) {
-            fallbackRows.push({ id, visible: true });
-          }
-        }
-        if (fallbackRows.length > 0) {
-          draftChatModelRows = fallbackRows;
-          return;
-        }
-      }
       draftChatModelRows = [];
       return;
     }
@@ -523,7 +509,7 @@
         if (wasEditing) cancelEditingCustomModel({ silent: true });
         syncDraftChatModelRows();
         renderModelManagementPanels();
-        if (typeof window.markDirty === "function") markDirty();
+        window.markDirty?.();
         setCustomModelStatus("Custom model removed. Save to apply.", "warning");
       });
       actions.append(editBtn, removeBtn);
@@ -577,7 +563,7 @@
     rows.splice(nextIndex, 0, row);
     draftChatModelRows = rows;
     renderModelManagementPanels();
-    if (typeof window.markDirty === "function") markDirty();
+    window.markDirty?.();
   }
 
   function renderChatModelVisibilityList() {
@@ -609,7 +595,7 @@
           setCustomModelStatus("At least one chat model must stay visible.", "warning");
           return;
         }
-        if (typeof window.markDirty === "function") markDirty();
+        window.markDirty?.();
       });
       const body = document.createElement("span");
       body.className = "model-management-row__toggle-body";
@@ -738,7 +724,7 @@
     }
     cancelEditingCustomModel({ silent: true });
     renderModelManagementPanels({ preferVisibleId: preferredModelReference });
-    if (typeof window.markDirty === "function") markDirty();
+    window.markDirty?.();
     setCustomModelStatus(existingIndex >= 0 ? "Custom model updated. Save to apply." : "Custom model added. Save to apply.", "success");
   }
 
@@ -761,6 +747,7 @@
     getOperationModelFallbackPreferencesDraft,
     getDraftVisibleModelOrder,
     initializeOperationFallbackDraftRows,
+    populateOperationModelSelect,
     normalizeOpenRouterApiModel,
     splitOpenRouterModelId,
     parseOpenRouterModelVariantSuffix,

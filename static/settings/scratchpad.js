@@ -1,10 +1,11 @@
 // Scratchpad management — loaded on /settings page only
 (function () {
+  "use strict";
+
   // ─── DOM refs ────────────────────────────────────────────────────────────────
   const scratchpadListEl = document.getElementById("scratchpad-list");
   const scratchpadAddBtn = document.getElementById("scratchpad-add-btn");
   const scratchpadCountEl = document.getElementById("scratchpad-count");
-  const scratchpadReadonlyNoteEl = document.getElementById("scratchpad-readonly-note");
 
   if (!scratchpadListEl) return; // panel not in DOM
 
@@ -102,20 +103,8 @@
     return sections;
   }
 
-  function readScratchpadNotesFromList() {
-    return flattenScratchpadSections(readScratchpadSectionsFromList());
-  }
-
-  function getScratchpadNotesFromSettings() {
-    return flattenScratchpadSections(getScratchpadSectionsFromSettings());
-  }
-
-  function getVisibleScratchpadSections() {
-    return scratchpadListEl ? readScratchpadSectionsFromList() : getScratchpadSectionsFromSettings();
-  }
-
   function getVisibleScratchpadNotes() {
-    return flattenScratchpadSections(getVisibleScratchpadSections());
+    return flattenScratchpadSections(readScratchpadSectionsFromList());
   }
 
   function updateScratchpadCount() {
@@ -154,7 +143,7 @@
     input.placeholder = "One durable note";
     input.value = note;
     input.addEventListener("input", () => {
-      if (typeof window.markDirty === "function") markDirty();
+      window.markDirty?.();
       updateScratchpadSectionCount(sectionId);
       updateScratchpadCount();
     });
@@ -170,32 +159,25 @@
       }
       updateScratchpadSectionCount(sectionId);
       updateScratchpadCount();
-      if (typeof window.markDirty === "function") markDirty();
+      window.markDirty?.();
     });
     row.append(input, removeBtn);
     return row;
   }
 
-  function createScratchpadReadonlyRow(note = "") {
-    const row = document.createElement("div");
-    row.className = "scratchpad-note-static";
-    row.textContent = note;
-    return row;
-  }
-
-  function renderScratchpadSectionList(sectionListEl, sectionId, notes, { editable = true } = {}) {
+  function renderScratchpadSectionList(sectionListEl, sectionId, notes) {
     if (!sectionListEl) return;
     sectionListEl.replaceChildren();
     if (!Array.isArray(notes) || !notes.length) {
-      setScratchpadEmptyState(sectionListEl, editable ? "No notes in this section yet. Add one when it becomes useful." : "No notes stored in this section.");
+      setScratchpadEmptyState(sectionListEl, "No notes in this section yet. Add one when it becomes useful.");
       return;
     }
     notes.forEach((note) => {
-      sectionListEl.append(editable ? createScratchpadNoteRow(sectionId, note) : createScratchpadReadonlyRow(note));
+      sectionListEl.append(createScratchpadNoteRow(sectionId, note));
     });
   }
 
-  function createScratchpadSectionCard(section, notes, { editable = true } = {}) {
+  function createScratchpadSectionCard(section, notes) {
     const card = document.createElement("section");
     card.className = "scratchpad-section";
     card.dataset.section = section.id;
@@ -218,29 +200,27 @@
     const sectionListEl = document.createElement("div");
     sectionListEl.className = "scratchpad-list scratchpad-list--section";
     sectionListEl.dataset.scratchpadSectionList = section.id;
-    renderScratchpadSectionList(sectionListEl, section.id, notes, { editable });
+    renderScratchpadSectionList(sectionListEl, section.id, notes);
     const toolbar = document.createElement("div");
     toolbar.className = "scratchpad-toolbar scratchpad-toolbar--section";
-    if (editable) {
-      const addBtn = document.createElement("button");
-      addBtn.type = "button";
-      addBtn.className = "btn-ghost scratchpad-section-add-btn";
-      addBtn.dataset.section = section.id;
-      addBtn.textContent = `Add to ${section.title}`;
-      addBtn.addEventListener("click", () => addScratchpadNote(section.id));
-      toolbar.append(addBtn);
-    }
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "btn-ghost scratchpad-section-add-btn";
+    addBtn.dataset.section = section.id;
+    addBtn.textContent = `Add to ${section.title}`;
+    addBtn.addEventListener("click", () => addScratchpadNote(section.id));
+    toolbar.append(addBtn);
     card.append(header, sectionListEl, toolbar);
     return card;
   }
 
-  function renderScratchpad(editable = true) {
+  function renderScratchpad() {
     if (!scratchpadListEl) return;
     const sectionNotes = getScratchpadSectionsFromSettings();
     scratchpadListEl.replaceChildren();
     getScratchpadSectionPayloads().forEach((section) => {
       const notes = Array.isArray(sectionNotes[section.id]) ? sectionNotes[section.id] : [];
-      scratchpadListEl.append(createScratchpadSectionCard(section, notes, { editable }));
+      scratchpadListEl.append(createScratchpadSectionCard(section, notes));
     });
     updateScratchpadCount();
   }
@@ -257,18 +237,15 @@
     row.querySelector(".scratchpad-note-input")?.focus();
     updateScratchpadSectionCount(sectionId);
     updateScratchpadCount();
-    if (typeof window.markDirty === "function") markDirty();
+    window.markDirty?.();
   }
 
-  // ─── Event listeners
+  // ─── Event listeners ─────────────────────────────────────────────────────────
   scratchpadAddBtn?.addEventListener("click", () => addScratchpadNote());
 
   // ─── Export for use by settings.js core ──────────────────────────────────────
   window.__scratchpadModule = {
     renderScratchpad,
-    addScratchpadNote,
     readScratchpadSectionsFromList,
-    getVisibleScratchpadNotes,
-    updateScratchpadCount,
   };
 })();

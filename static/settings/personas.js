@@ -116,7 +116,7 @@
 
   function markPersonaDirty() {
     hasUnsavedPersonaChanges = true;
-    if (typeof window.markDirty === "function") markDirty();
+    window.markDirty?.();
   }
 
   function clearPersonaDirty() {
@@ -124,16 +124,10 @@
   }
 
   // ─── Memory CRUD ─────────────────────────────────────────────────────────────
-  function normalizePersonaMemoryEntryId(value) {
-    if (value === null || value === undefined || value === "") return null;
-    const parsed = Number.parseInt(String(value), 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-  }
-
   function normalizePersonaMemoryEntries(entries) {
     return (Array.isArray(entries) ? entries : [])
       .map((entry) => {
-        const entryId = normalizePersonaMemoryEntryId(entry?.id);
+        const entryId = normalizePersonaId(entry?.id);
         const key = String(entry?.key || "").trim();
         const value = String(entry?.value || "").trim();
         const createdAt = String(entry?.created_at || "").trim();
@@ -158,7 +152,7 @@
   }
 
   function findPersonaMemoryEntryById(entryId, personaId = activePersonaId) {
-    const normalizedEntryId = normalizePersonaMemoryEntryId(entryId);
+    const normalizedEntryId = normalizePersonaId(entryId);
     if (!normalizedEntryId) return null;
     return getPersonaMemoryEntries(personaId).find((entry) => entry.id === normalizedEntryId) || null;
   }
@@ -580,7 +574,7 @@
   personaNameEl?.addEventListener("input", markPersonaDirty);
   generalInstructionsEl?.addEventListener("input", () => { autoResize(generalInstructionsEl); markPersonaDirty(); });
   aiPersonalityEl?.addEventListener("input", () => { autoResize(aiPersonalityEl); markPersonaDirty(); });
-  defaultPersonaEl?.addEventListener("change", () => { if (typeof window.markDirty === "function") markDirty(); });
+  defaultPersonaEl?.addEventListener("change", () => { window.markDirty?.(); });
   generalInstructionsTemplateApplyBtn?.addEventListener("click", () => applyBehaviorTemplate(generalInstructionsTemplateSelectEl, generalInstructionsEl, window.__settingsCore?.GENERAL_INSTRUCTION_TEMPLATES || []));
   aiPersonalityTemplateApplyBtn?.addEventListener("click", () => applyBehaviorTemplate(aiPersonalityTemplateSelectEl, aiPersonalityEl, window.__settingsCore?.AI_PERSONALITY_TEMPLATES || []));
   openPersonasTabBtn?.addEventListener("click", () => window.__settingsTabs?.activateTab?.("personas"));
@@ -600,16 +594,13 @@
 
   // Export for use by other modules / settings.js core
   window.__personaModule = {
+    normalizePersonaId,
     renderDefaultPersonaSelect,
-    renderPersonaList,
     getPersonas,
     findPersonaById,
     getActivePersonaId,
     selectPersonaForEditing,
-    applyPersonaResponseData,
-    collectPersonaFormPayload,
     saveActivePersona,
-    deleteActivePersona,
     hasUnsavedPersonaChanges: () => hasUnsavedPersonaChanges,
     clearPersonaDirty,
   };
