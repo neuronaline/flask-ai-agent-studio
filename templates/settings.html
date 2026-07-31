@@ -125,7 +125,7 @@
                     <span class="settings-section-kicker">Images</span>
                     <h3>Image understanding</h3>
                   </div>
-                  <p>Choose how uploaded images are processed: send directly to vision models, or extract text via local OCR.</p>
+                  <p>Choose how uploaded images are processed, and optionally configure a separate vision model for text-only chats.</p>
                 </div>
                 <div class="settings-subsection-grid settings-subsection-grid--two">
                   <section class="settings-subsection">
@@ -135,23 +135,12 @@
                       <option value="local_ocr">Local OCR (text extraction only)</option>
                     </select>
                   </section>
-                </div>
-              </div>
-
-              <div class="settings-page-section-card settings-page-section-card--assistant-basics">
-                <div class="settings-page-section-card__header">
-                  <div>
-                    <span class="settings-section-kicker">Images</span>
-                    <h3>Vision helper</h3>
-                  </div>
-                  <p>When using a text-only chat model, the assistant can ask a separate vision model to inspect images. Configure the helper model and how many images it may analyze per request.</p>
-                </div>
-                <div class="settings-subsection-grid settings-subsection-grid--two">
                   <section class="settings-subsection">
                     <label class="settings-label" for="image-helper-model-select">Vision helper model</label>
                     <select id="image-helper-model-select">
                       <option value="">None (disabled)</option>
                     </select>
+                    <p class="settings-subsection__copy">Lets text-only chat models ask a separate vision model to inspect images.</p>
                   </section>
                   <section class="settings-subsection">
                     <label class="settings-label" for="image-helper-max-images-input">Max images per request (1–8)</label>

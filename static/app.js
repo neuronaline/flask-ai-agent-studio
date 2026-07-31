@@ -787,7 +787,7 @@ inputEl.addEventListener("keydown", (event) => {
   }
 
   if (event.key === "Enter" && !event.shiftKey) {
-    if ("ontouchstart" in window || navigator.maxTouchPoints > 0) return;
+    if (event.isComposing) return;
     event.preventDefault();
     if (!chatState.isStreaming && !chatState.isFixing) {
       sendMessage();

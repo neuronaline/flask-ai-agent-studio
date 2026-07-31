@@ -110,3 +110,22 @@ def test_existing_composer_and_summary_routes_remain_registered(client):
     assert "/api/conversations/<int:conv_id>/summarize" in rules
     assert "/api/conversations/<int:conv_id>/summarize/preview" in rules
     assert "/api/conversations/<int:conv_id>/summaries/<int:summary_id>/undo" in rules
+
+
+def test_fix_text_improves_composer_text(client, monkeypatch):
+    import routes.chat as chat_routes
+
+    captured = {}
+
+    def fake_collect_agent_response(messages, model, max_tokens, tools, temperature):
+        captured["messages"] = messages
+        captured["model"] = model
+        return {"content": "This sentence is improved.", "errors": []}
+
+    monkeypatch.setattr(chat_routes, "collect_agent_response", fake_collect_agent_response)
+
+    response = client.post("/api/fix-text", json={"text": "this sentence needs improve"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"text": "This sentence is improved."}
+    assert captured["messages"][1]["content"] == '{"text": "this sentence needs improve"}'
