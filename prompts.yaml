@@ -189,9 +189,7 @@ agent:
     create_canvas_document: "Check that content is valid and the document format is recognized."
     batch_canvas_edits: "Re-read the document with batch_read_canvas_documents first, verify line numbers, then adjust your edit ranges. Include expected_lines to guard against stale edits."
     delete_canvas_document: "Verify the document still exists and the id or path is correct."
-    transcribe_youtube_video: "Verify the URL is a valid YouTube URL. Ensure the video is publicly accessible."
     ask_clarifying_question: "Ensure each question has id and label fields. Check that required questions are included."
-    expand_truncated_tool_result: "Verify message_id and tool_call_id both refer to an existing tool result in this conversation."
     analyze_image: "Verify the image_id refers to a stored image in this conversation. If from another conversation, ask the user to re-upload."
     list_conversation_images: "This tool requires no arguments. It lists all non-deleted images in the conversation."
     generic: "Tool '{tool_name}' failed. Check the arguments, try a different tool for the same goal, or re-read the relevant state first."
@@ -201,17 +199,17 @@ agent:
 # ---------------------------------------------------------------------------
 tools:
   append_scratchpad:
-    description: "Append durable facts to one scratchpad section. For cross-conversation memory only — use conversation memory for current-chat details."
-    purpose: Save durable cross-conversation facts into a scratchpad section.
+    description: "Append durable facts to the scratchpad. For cross-conversation memory only — use conversation memory for current-chat details."
+    purpose: Save durable cross-conversation facts into the scratchpad.
     guidance: "Use sparingly for facts likely to matter later. Skip current-chat details, secrets, one-off tasks, and speculative inferences. Each notes item = one short standalone fact."
 
   replace_scratchpad:
-    description: "Replace one scratchpad section entirely. Use to rewrite, reorganize, or clean up outdated durable facts."
-    purpose: Rewrite one scratchpad section.
-    guidance: "Read the section first with read_scratchpad to preserve existing facts you want to keep. Compact the text. For current-chat state, use conversation memory instead."
+    description: "Replace the scratchpad content entirely. Use to rewrite, reorganize, or clean up outdated durable facts."
+    purpose: Rewrite the scratchpad.
+    guidance: "Read the scratchpad first with read_scratchpad to preserve existing facts you want to keep. Compact the text. For current-chat state, use conversation memory instead."
 
   read_scratchpad:
-    description: "Read all scratchpad sections as currently stored. Use before editing to inspect live state."
+    description: "Read the scratchpad content as currently stored. Use before editing to inspect live state."
     purpose: Inspect the current scratchpad before editing.
     guidance: "Call before replace_scratchpad when you need to preserve existing facts."
 
@@ -222,11 +220,6 @@ tools:
       This must be the ONLY tool call in its turn. Put question text in tool arguments, not in the assistant message body. Keep the assistant reply short — let the UI render the questions.
       Use plain UI text for labels and options. Each question needs id + label + input_type. Prefer select/multi_select when answer options are known. Use required=false for optional follow-ups.
       After calling, wait for the user's reply before any other action.
-
-  transcribe_youtube_video:
-    description: "Transcribe a YouTube video and return a context-ready transcript block."
-    purpose: Extract transcript text from a YouTube URL.
-    guidance: "Call only when the user asks for transcript-driven analysis from a YouTube link. Skip non-YouTube URLs. Surface missing-dependency errors clearly."
 
   search_knowledge_base:
     description: "Semantic search over the RAG-indexed knowledge base (conversation history, tool outputs, uploaded documents)."
@@ -281,11 +274,6 @@ tools:
     description: "Read a canvas document or a focused line range. Returns a call-time snapshot."
     purpose: Read a canvas document excerpt.
     guidance: "Omit start_line/end_line for the default excerpt, or provide both for a focused range. The result is a snapshot — re-read before editing if the document may have changed."
-
-  expand_truncated_tool_result:
-    description: "Retrieve the full content of a previously truncated tool result."
-    purpose: Get the complete output of an earlier tool call.
-    guidance: "Use when a prior tool result was cut off and you need the full output to proceed."
 
   delegate_task:
     description: "Spawn a sub-agent for a self-contained sub-task. The sub-agent has a clean context and its own tools."

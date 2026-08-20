@@ -6665,40 +6665,6 @@ def set_attachment_excluded_from_context(
         return True
 
 
-def get_message_tool_result_content(message_id: int, tool_call_id: str) -> str | None:
-    normalized_message_id = int(message_id or 0)
-    if normalized_message_id <= 0:
-        return None
-
-    normalized_tool_call_id = str(tool_call_id or "").strip()
-    if not normalized_tool_call_id:
-        return None
-
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT id, conversation_id, content, metadata FROM messages WHERE id = ?",
-            (normalized_message_id,),
-        ).fetchone()
-        if not row:
-            return None
-
-        raw_metadata = row["metadata"]
-        if raw_metadata:
-            try:
-                meta = json.loads(raw_metadata)
-                tool_results = meta.get("tool_results") if isinstance(meta.get("tool_results"), list) else []
-                for tr in tool_results:
-                    if str(tr.get("tool_call_id") or "").strip() == normalized_tool_call_id:
-                        result_content = tr.get("content")
-                        if isinstance(result_content, str):
-                            return result_content
-                        return json.dumps(result_content, ensure_ascii=False)
-            except Exception:
-                LOGGER.debug("Failed to parse tool result content for tool_call_id=%s", normalized_tool_call_id, exc_info=True)
-
-        return None
-
-
 # =============================================================================
 # Conversation Truncation Policy
 # (per Conversation Truncation Policy.md)

@@ -316,7 +316,6 @@ DEFAULT_ACTIVE_TOOL_NAMES = [
     "replace_scratchpad",
     "read_scratchpad",
     "ask_clarifying_question",
-    "transcribe_youtube_video",
     "search_knowledge_base",
     "search_web",
     "fetch_url",
@@ -345,43 +344,11 @@ MAX_ASSISTANT_BEHAVIOR_LENGTH = MAX_USER_PREFERENCES_LENGTH + MAX_AI_PERSONALITY
 MAX_PERSONA_NAME_LENGTH = 80
 MAX_PERSONA_COUNT = 50
 SCRATCHPAD_DEFAULT_SECTION = "notes"
-SCRATCHPAD_SECTION_ORDER = (
-    "lessons",
-    "profile",
-    "notes",
-    "problems",
-    "tasks",
-    "preferences",
-    "domain",
-)
+SCRATCHPAD_SECTION_ORDER = ("notes",)
 SCRATCHPAD_SECTION_METADATA = {
-    "lessons": {
-        "title": "Lessons Learned",
-        "description": "Reliable patterns, postmortems, and takeaways that should change future decisions.",
-    },
-    "profile": {
-        "title": "User Profile & Mindset",
-        "description": "Durable clues about how the user thinks, decides, and frames problems.",
-    },
     "notes": {
-        "title": "General Notes",
-        "description": "Durable general uncategorized context that does not fit the other sections.",
-    },
-    "problems": {
-        "title": "Open Problems",
-        "description": "Recurring or durable unresolved issues worth revisiting across conversations.",
-    },
-    "tasks": {
-        "title": "In-Progress Tasks",
-        "description": "Longer-running cross-conversation workstreams the assistant should preserve continuity on.",
-    },
-    "preferences": {
-        "title": "User Preferences",
-        "description": "Stable language, formatting, and collaboration preferences.",
-    },
-    "domain": {
-        "title": "Domain Facts",
-        "description": "Durable facts about the user's stack, systems, or technical domain.",
+        "title": "Scratchpad",
+        "description": "Durable cross-conversation facts the assistant should remember.",
     },
 }
 SCRATCHPAD_SECTION_SETTING_KEYS = {section_id: f"scratchpad_{section_id}" for section_id in SCRATCHPAD_SECTION_ORDER}
@@ -485,13 +452,7 @@ DEFAULT_SETTINGS = {
     "ai_personality": "",
     "default_persona_id": "",
     "scratchpad": "",
-    "scratchpad_lessons": "",
-    "scratchpad_profile": "",
     "scratchpad_notes": "",
-    "scratchpad_problems": "",
-    "scratchpad_tasks": "",
-    "scratchpad_preferences": "",
-    "scratchpad_domain": "",
     "max_steps": "5",
     "max_parallel_tools": str(DEFAULT_MAX_PARALLEL_TOOLS),
     "temperature": "0.7",

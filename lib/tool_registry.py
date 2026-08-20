@@ -8,8 +8,6 @@ from core.config import (
     CLARIFICATION_QUESTION_LIMIT_MAX,
     CLARIFICATION_QUESTION_LIMIT_MIN,
     DEFAULT_SEARCH_TOOL_QUERY_LIMIT,
-    SCRATCHPAD_SECTION_METADATA,
-    SCRATCHPAD_SECTION_ORDER,
     SEARCH_TOOL_QUERY_LIMIT_MAX,
     SEARCH_TOOL_QUERY_LIMIT_MIN,
     get_runtime_setting,
@@ -19,11 +17,6 @@ from utils.logging_config import get_logger
 
 LOGGER = get_logger(__name__)
 
-SCRATCHPAD_SECTION_ENUM = list(SCRATCHPAD_SECTION_ORDER)
-SCRATCHPAD_SECTION_DESCRIPTION = "Section to update: " + "; ".join(
-    f"{section_id} = {SCRATCHPAD_SECTION_METADATA[section_id]['title']} ({SCRATCHPAD_SECTION_METADATA[section_id]['description']})"
-    for section_id in SCRATCHPAD_SECTION_ORDER
-)
 CANVAS_LINE_ARRAY_DESCRIPTION = (
     "Each element is one line of text as a properly quoted JSON string with no trailing newline characters. "
     "Code content, including quotes, backslashes, and semicolons, must appear inside these strings and be properly escaped. "
@@ -134,18 +127,13 @@ TOOL_SPECS = [
     {
         "name": "append_scratchpad",
         "description": (
-            "Append one or more rare durable general facts to one section of the persistent scratchpad. "
+            "Append one or more rare durable general facts to the persistent scratchpad. "
             "Reserve this for cross-conversation memory only. If the detail is mainly about the current chat or task, save it to conversation memory instead. "
             "Do not store temporary task details, sensitive secrets, one-off requests, or speculative inferences."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "section": {
-                    "type": "string",
-                    "enum": SCRATCHPAD_SECTION_ENUM,
-                    "description": SCRATCHPAD_SECTION_DESCRIPTION,
-                },
                 "notes": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -153,12 +141,11 @@ TOOL_SPECS = [
                     "minItems": 1,
                 },
             },
-            "required": ["section", "notes"],
+            "required": ["notes"],
         },
         "prompt": {
-            "purpose": "Saves one or more short durable cross-conversation memory lines into a specific scratchpad section only when they are likely to matter later.",
+            "purpose": "Saves one or more short durable cross-conversation memory lines into the scratchpad only when they are likely to matter later.",
             "inputs": {
-                "section": "target section id such as preferences, profile, lessons, tasks, problems, notes, or domain",
                 "notes": "list of single short durable memory lines — one fact per item",
             },
             "guidance": (
@@ -171,33 +158,27 @@ TOOL_SPECS = [
     {
         "name": "replace_scratchpad",
         "description": (
-            "Completely replace one section of the persistent scratchpad. "
-            "Use this to rewrite, reorganize, or remove outdated durable general facts in a single section. "
+            "Completely replace the persistent scratchpad content. "
+            "Use this to rewrite, reorganize, or remove outdated durable general facts. "
             "Reserve scratchpad edits for cross-conversation memory, not current-chat state."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "section": {
-                    "type": "string",
-                    "enum": SCRATCHPAD_SECTION_ENUM,
-                    "description": SCRATCHPAD_SECTION_DESCRIPTION,
-                },
                 "new_content": {
                     "type": "string",
-                    "description": "The new content that will fully replace the selected scratchpad section.",
+                    "description": "The new content that will fully replace the scratchpad.",
                 },
             },
-            "required": ["section", "new_content"],
+            "required": ["new_content"],
         },
         "prompt": {
-            "purpose": "Completely rewrites one structured scratchpad section.",
+            "purpose": "Completely rewrites the scratchpad.",
             "inputs": {
-                "section": "target section id",
-                "new_content": "the new complete content for that one section",
+                "new_content": "the new complete content for the scratchpad",
             },
             "guidance": (
-                "Use carefully to prune or reorganize existing facts in one section. "
+                "Use carefully to prune or reorganize existing facts. "
                 "Keep the text compact. If the content is mainly about the current chat, use conversation memory instead."
             ),
         },
@@ -205,8 +186,8 @@ TOOL_SPECS = [
     {
         "name": "read_scratchpad",
         "description": (
-            "Read the current persistent scratchpad content across all sections exactly as stored. "
-            "Use this when you need to inspect the live structured scratchpad before editing it."
+            "Read the current persistent scratchpad content exactly as stored. "
+            "Use this when you need to inspect the live scratchpad before editing it."
         ),
         "parameters": {
             "type": "object",
@@ -214,7 +195,7 @@ TOOL_SPECS = [
             "required": [],
         },
         "prompt": {
-            "purpose": "Reads the current structured scratchpad memory for inspection before editing.",
+            "purpose": "Reads the current scratchpad memory for inspection before editing.",
             "inputs": {},
             "guidance": (
                 "Use this when you need to verify or quote the current durable memory before appending or replacing it. "
@@ -273,34 +254,6 @@ TOOL_SPECS = [
                 "Use depends_on only for short follow-up branches that should stay hidden until a previous answer makes them relevant. "
                 'Each questions item must be an object with id, label, and input_type; example: {"id":"scope","label":"Which scope?","input_type":"text"}. '
                 "Use plain UI text only for intro, labels, placeholders, and options. Do not include Q:/A: prefixes, markdown bullets, XML/tag wrappers, code fences, or markers like <| and |>."
-            ),
-        },
-    },
-    {
-        "name": "transcribe_youtube_video",
-        "description": (
-            "Normalize a YouTube URL, transcribe the video's speech locally, and return a prompt-ready transcript context block. "
-            "Use this only when the user explicitly asks for a YouTube transcription or video-summary workflow and a URL is provided."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "YouTube URL to transcribe (watch, short, embed, or youtu.be format).",
-                }
-            },
-            "required": ["url"],
-        },
-        "prompt": {
-            "purpose": "Transcribes a YouTube video and returns transcript text plus a context block ready for prompt injection.",
-            "inputs": {
-                "url": "full YouTube URL",
-            },
-            "guidance": (
-                "Call this when the user wants transcript-driven analysis from a YouTube link and no transcript is already available in the current turn. "
-                "Do not call it for non-YouTube URLs. "
-                "If the runtime reports missing dependencies or disabled feature flags, surface that error clearly and continue with alternatives."
             ),
         },
     },
@@ -836,29 +789,6 @@ TOOL_SPECS = [
         },
     },
     {
-        "name": "expand_truncated_tool_result",
-        "description": "Retrieves the full uncropped content of a previously executed tool call that may have been truncated in the conversation history. Use this when you need complete details from an earlier tool execution whose result was cut off.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "message_id": {
-                    "type": "string",
-                    "description": "The message ID of the assistant message that issued the tool call.",
-                },
-                "tool_call_id": {
-                    "type": "string",
-                    "description": "The tool call ID of the specific tool result to expand.",
-                },
-            },
-            "required": ["message_id", "tool_call_id"],
-        },
-        "prompt": {
-            "purpose": "Retrieves the full content of a previously executed tool call whose result was truncated.",
-            "inputs": {"message_id": "the assistant message id", "tool_call_id": "the tool call id to expand"},
-            "guidance": "Use this when a previous tool result was truncated and you need the complete output to proceed.",
-        },
-    },
-    {
         "name": "delegate_task",
         "description": (
             "Spawn a fresh sub-agent to handle a self-contained research or analysis task independently. "
@@ -1195,9 +1125,6 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
         "ui_hidden": True,
         "exclusive_turn": True,
         "state_domains": ("delegation",),
-    },
-    "transcribe_youtube_video": {
-        "state_domains": ("video",),
     },
     "search_knowledge_base": {
         "read_only": True,

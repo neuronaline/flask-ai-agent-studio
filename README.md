@@ -117,12 +117,6 @@ The LLM is equipped with a vast array of tools. Schemas are strictly validated b
 ### Code & File Operations
 *   `delegate_task`: Delegate a sub-task to a sub-agent with isolated context.
 
-### YouTube & Media
-*   `transcribe_youtube_video`: Extract transcript from YouTube videos.
-
-### Context & Memory Management
-*   `expand_truncated_tool_result`: Request the full text of a truncated tool output.
-
 ---
 
 ## 🔌 HTTP API Endpoints

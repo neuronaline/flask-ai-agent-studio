@@ -34,7 +34,7 @@ class TestRuntimeSystemMessage:
 
         message = build_runtime_system_message(
             user_preferences="Keep answers short.",
-            scratchpad_sections={"profile": "The user is 22 years old."},
+            scratchpad_sections={"notes": "The user is 22 years old."},
             active_tool_names=[
                 "append_scratchpad",
                 "ask_clarifying_question",

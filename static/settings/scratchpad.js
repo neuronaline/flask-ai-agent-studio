@@ -11,15 +11,9 @@
 
   // ─── Constants ───────────────────────────────────────────────────────────────
   const DEFAULT_SCRATCHPAD_SECTION_ID = "notes";
-  const DEFAULT_SCRATCHPAD_SECTION_ORDER = window.__settingsCore?.DEFAULT_SCRATCHPAD_SECTION_ORDER || ["lessons", "profile", "notes", "problems", "tasks", "preferences", "domain"];
+  const DEFAULT_SCRATCHPAD_SECTION_ORDER = window.__settingsCore?.DEFAULT_SCRATCHPAD_SECTION_ORDER || ["notes"];
   const DEFAULT_SCRATCHPAD_SECTION_META = {
-    lessons: { title: "Lessons Learned", description: "Reliable takeaways, postmortems, and patterns that should change future decisions." },
-    profile: { title: "User Profile & Mindset", description: "Durable clues about how the user thinks, decides, and frames problems." },
-    notes: { title: "General Notes", description: "Durable general uncategorized context that does not fit the other sections." },
-    problems: { title: "Open Problems", description: "Recurring or durable unresolved issues worth revisiting across conversations." },
-    tasks: { title: "In-Progress Tasks", description: "Longer-running cross-conversation workstreams the assistant should preserve continuity on." },
-    preferences: { title: "User Preferences", description: "Stable language, formatting, and collaboration preferences." },
-    domain: { title: "Domain Facts", description: "Durable facts about the user's stack, systems, or technical domain." },
+    notes: { title: "Scratchpad", description: "Durable cross-conversation facts the assistant should remember." },
   };
 
   // ─── State ──────────────────────────────────────────────────────────────────

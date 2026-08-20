@@ -62,6 +62,7 @@ from core.config import (
     PROMPT_MAX_INPUT_TOKENS,
     RAG_TOOL_RESULT_MAX_TEXT_CHARS,
     RAG_TOOL_RESULT_SUMMARY_MAX_CHARS,
+    SCRATCHPAD_DEFAULT_SECTION,
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
     get_runtime_setting,
@@ -81,7 +82,6 @@ from core.db import (
     get_app_settings,
     get_db,
     get_clarification_max_questions,
-    get_message_tool_result_content,
     get_model_temperature,
     get_prompt_max_input_tokens,
     get_rag_source_types,
@@ -130,12 +130,6 @@ from web.web_tools import (
     search_scholar_tool,
     search_web_tool,
 )
-from services.video_transcript_service import (
-    build_video_transcript_context_block,
-    normalize_youtube_url,
-    transcribe_youtube_video,
-)
-
 from agent.tool_parsing import (
     _coerce_text,
     _extract_native_tool_calls,
@@ -872,9 +866,7 @@ _RECOVERY_HINT_KEY_MAP: dict[str, str] = {
     "create_canvas_document": "create_canvas_document",
     "batch_canvas_edits": "batch_canvas_edits",
     "delete_canvas_document": "delete_canvas_document",
-    "transcribe_youtube_video": "transcribe_youtube_video",
     "ask_clarifying_question": "ask_clarifying_question",
-    "expand_truncated_tool_result": "expand_truncated_tool_result",
     "analyze_uploaded_image": "analyze_image",
     "answer_image_question": "analyze_image",
 }
@@ -2742,8 +2734,6 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
     if tool_name == "append_scratchpad" and "notes" not in tool_args and "note" in tool_args:
         legacy_note = tool_args.pop("note")
         tool_args["notes"] = [legacy_note]
-    if tool_name in {"append_scratchpad", "replace_scratchpad"} and "section" not in tool_args:
-        tool_args["section"] = "notes"
     if tool_name in SEARCH_QUERY_BATCHED_TOOL_NAMES:
         _coerce_search_tool_queries(tool_args, ensure_key=True)
     if tool_name == "create_canvas_document" and not str(tool_args.get("title") or "").strip():
@@ -3049,22 +3039,20 @@ def _get_agent_state_mutation_context(runtime_state: dict) -> tuple[int | None, 
 
 def _run_append_scratchpad(tool_args: dict, runtime_state: dict):
     notes = tool_args.get("notes") or tool_args.get("note", "")
-    section = tool_args.get("section") or "notes"
     conversation_id, source_message_id = _get_agent_state_mutation_context(runtime_state)
     return append_to_scratchpad(
         notes,
-        section=section,
+        section=SCRATCHPAD_DEFAULT_SECTION,
         conversation_id=conversation_id,
         source_message_id=source_message_id,
     )
 
 
 def _run_replace_scratchpad(tool_args: dict, runtime_state: dict):
-    section = tool_args.get("section") or "notes"
     conversation_id, source_message_id = _get_agent_state_mutation_context(runtime_state)
     return replace_scratchpad(
         tool_args.get("new_content", ""),
-        section=section,
+        section=SCRATCHPAD_DEFAULT_SECTION,
         conversation_id=conversation_id,
         source_message_id=source_message_id,
     )
@@ -3166,51 +3154,6 @@ def _execute_streaming_tool_with_event_buffer(tool_name: str, tool_args: dict, r
     return result, summary, []
 
 
-def _run_transcribe_youtube_video(tool_args: dict, runtime_state: dict):
-    del runtime_state
-    raw_url = str(tool_args.get("url") or "").strip()
-    if not raw_url:
-        return {"status": "error", "error": "A YouTube URL is required."}, "Failed: missing YouTube URL"
-
-    try:
-        normalized_url = normalize_youtube_url(raw_url)
-        transcript_payload = transcribe_youtube_video(normalized_url)
-        transcript_text = str(transcript_payload.get("transcript_text") or "").strip()
-        if not transcript_text:
-            return {
-                "status": "error",
-                "error": "A readable speech transcript could not be extracted from the video.",
-            }, "Failed: transcript extraction"
-
-        context_block, transcript_truncated = build_video_transcript_context_block(
-            str(transcript_payload.get("title") or "YouTube video").strip(),
-            transcript_text,
-            source_url=str(transcript_payload.get("source_url") or normalized_url).strip(),
-            transcript_language=str(transcript_payload.get("transcript_language") or "").strip(),
-            duration_seconds=transcript_payload.get("duration_seconds"),
-        )
-        result = {
-            "status": "ok",
-            "platform": "youtube",
-            "source_url": str(transcript_payload.get("source_url") or normalized_url).strip(),
-            "source_video_id": str(transcript_payload.get("source_video_id") or "").strip(),
-            "title": str(transcript_payload.get("title") or "YouTube video").strip(),
-            "duration_seconds": transcript_payload.get("duration_seconds"),
-            "transcript_language": str(transcript_payload.get("transcript_language") or "").strip(),
-            "transcript_text": transcript_text,
-            "transcript_context_block": context_block,
-            "transcript_truncated": transcript_truncated,
-        }
-        summary_title = _clean_tool_text(result.get("title") or "YouTube video", limit=80)
-        summary = f"YouTube transcript ready: {summary_title}"
-        if transcript_truncated:
-            summary += " (truncated)"
-        return result, summary
-    except Exception as exc:
-        error_text = _format_tool_execution_error(exc, tool_name="transcribe_youtube_video")
-        return {"status": "error", "error": error_text}, f"Failed: {error_text}"
-
-
 def _run_search_knowledge_base(tool_args: dict, runtime_state: dict):
     del runtime_state
     result = search_knowledge_base_tool(
@@ -3221,20 +3164,6 @@ def _run_search_knowledge_base(tool_args: dict, runtime_state: dict):
         min_similarity=tool_args.get("min_similarity"),
     )
     return result, _build_search_summary(f"{result.get('count', 0)} knowledge chunks found")
-
-
-def _run_expand_truncated_tool_result(tool_args: dict, runtime_state: dict):
-    del runtime_state
-    message_id = str(tool_args.get("message_id") or "").strip()
-    tool_call_id = str(tool_args.get("tool_call_id") or "").strip()
-    if not message_id or not tool_call_id:
-        return {
-            "error": "message_id and tool_call_id are required"
-        }, "expand_truncated_tool_result skipped: missing parameters"
-    result_text = get_message_tool_result_content(int(message_id), tool_call_id)
-    if result_text is None:
-        return {"error": "Tool result not found or access denied."}, "expand_truncated_tool_result: not found"
-    return {"content": result_text}, f"expand_truncated_tool_result: retrieved {len(result_text)} characters"
 
 
 def _run_search_web(tool_args: dict, runtime_state: dict):
@@ -3755,9 +3684,7 @@ _TOOL_EXECUTORS = {
     "replace_scratchpad": _run_replace_scratchpad,
     "read_scratchpad": _run_read_scratchpad,
     "ask_clarifying_question": _run_ask_clarifying_question,
-    "transcribe_youtube_video": _run_transcribe_youtube_video,
     "search_knowledge_base": _run_search_knowledge_base,
-    "expand_truncated_tool_result": _run_expand_truncated_tool_result,
     "search_web": _run_search_web,
     "search_scholar": _run_search_scholar,
     "fetch_url": _run_fetch_url,
@@ -4573,8 +4500,6 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
         if tool_args.get("all_documents") is True:
             target = "all canvas documents"
         return f"{query} @ {target}"[:300]
-    if tool_name == "transcribe_youtube_video":
-        return str(tool_args.get("url") or "").strip()[:300]
     return ""
 
 
@@ -4685,23 +4610,6 @@ def _build_tool_result_storage_entry(
             if display_content:
                 parts.append(display_content)
             text = "\n\n".join(parts)
-    elif tool_name == "transcribe_youtube_video" and isinstance(result, dict):
-        parts = []
-        title = _clean_tool_text(result.get("title") or "", limit=160)
-        url = _clean_tool_text(result.get("source_url") or tool_args.get("url") or "", limit=220)
-        language = _clean_tool_text(result.get("transcript_language") or "", limit=32)
-        context_block = _clean_tool_text(
-            result.get("transcript_context_block") or "", limit=RAG_TOOL_RESULT_MAX_TEXT_CHARS
-        )
-        if title:
-            parts.append(f"Title: {title}")
-        if url:
-            parts.append(f"URL: {url}")
-        if language:
-            parts.append(f"Language: {language}")
-        if context_block:
-            parts.append(context_block)
-        text = "\n\n".join(parts)
     elif tool_name == "search_web" and isinstance(result, list):
         text = _format_list_tool_result(result, "Web results", link_key="url")
     elif tool_name == "search_scholar" and isinstance(result, list):

@@ -43,7 +43,7 @@
   // its response is returned, so none currently require a server restart.
   const RESTART_REQUIRED_SETTING_KEYS = [];
 
-  const DEFAULT_SCRATCHPAD_SECTION_ORDER = ["lessons", "profile", "notes", "problems", "tasks", "preferences", "domain"];
+  const DEFAULT_SCRATCHPAD_SECTION_ORDER = ["notes"];
 
   // ─── State ───────────────────────────────────────────────────────────────────
   let hasUnsavedChanges = false;

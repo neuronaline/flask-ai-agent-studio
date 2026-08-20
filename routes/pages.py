@@ -175,7 +175,6 @@ TOOL_PERMISSION_LABELS = {
     "replace_scratchpad": "Rewrite persistent scratchpad section",
     "read_scratchpad": "Read persistent scratchpad",
     "ask_clarifying_question": "Ask interactive clarification questions",
-    "transcribe_youtube_video": "Transcribe YouTube video",
     "search_knowledge_base": "Knowledge base search",
     "search_web": "Web search",
     "fetch_url": "Read URL content",
@@ -188,7 +187,6 @@ TOOL_PERMISSION_LABELS = {
     "delete_canvas_document": "Delete canvas document",
     "list_conversation_images": "List conversation images",
     "analyze_image": "Ask vision helper about images",
-    "expand_truncated_tool_result": "Expand truncated tool result",
     "purge": "Purge selected context blocks",
     "compact_context": "Compact the conversation context",
 }
@@ -198,7 +196,6 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "replace_scratchpad": "Fully rewrite one persistent memory section.",
     "read_scratchpad": "Read the current persistent memory before editing.",
     "ask_clarifying_question": "Pause and ask the user structured questions before answering.",
-    "transcribe_youtube_video": "Validate a YouTube URL and generate a local speech transcript with a prompt-ready context block.",
     "search_knowledge_base": "Semantic search over synced chats and uploaded documents.",
     "search_web": "Live Google search via Bright Data SERP for current facts.",
     "fetch_url": "Read cleaned URL content or return a focused AI summary.",
@@ -211,7 +208,6 @@ TOOL_PERMISSION_DESCRIPTIONS = {
     "delete_canvas_document": "Permanently remove a canvas document from the conversation.",
     "list_conversation_images": "List all images uploaded in the current conversation with metadata.",
     "analyze_image": "Send conversation images to the configured vision helper model for analysis.",
-    "expand_truncated_tool_result": "Retrieve the full uncropped content of a previously executed tool call that was truncated in the conversation history.",
     "purge": "Permanently remove selected visible context blocks and any required tool-call dependencies.",
     "compact_context": "Replace the active conversation ledger with a validated compact state and resume instruction.",
 }
@@ -271,11 +267,9 @@ def _get_tool_permission_section_key(name: str) -> str:
         "replace_scratchpad",
         "read_scratchpad",
         "ask_clarifying_question",
-        "transcribe_youtube_video",
         "search_knowledge_base",
         "list_conversation_images",
         "analyze_image",
-        "expand_truncated_tool_result",
         "purge",
         "compact_context",
     }:
@@ -716,36 +710,14 @@ def register_page_routes(app) -> None:
         data: dict,
         settings: dict,
     ) -> tuple[None, None] | tuple[dict, int]:
-        """Apply scratchpad-related settings. Returns ((None, None) on success, (error_response, status_code) on error)."""
+        """Apply scratchpad settings. Returns ((None, None) on success, (error_response, status_code) on error)."""
         scratchpad = data.get("scratchpad")
-        scratchpad_sections_raw = data.get("scratchpad_sections")
-
         if scratchpad is not None:
             if not isinstance(scratchpad, str):
                 return jsonify({"error": "Invalid scratchpad."}), 400
             settings[SCRATCHPAD_SECTION_SETTING_KEYS[SCRATCHPAD_DEFAULT_SECTION]] = normalize_scratchpad_text(
                 scratchpad
             )
-
-        if scratchpad_sections_raw is not None:
-            if not isinstance(scratchpad_sections_raw, dict):
-                return jsonify({"error": "Invalid scratchpad sections."}), 400
-            unexpected_sections = [
-                section_id
-                for section_id in scratchpad_sections_raw
-                if section_id not in SCRATCHPAD_SECTION_SETTING_KEYS
-            ]
-            if unexpected_sections:
-                return jsonify(
-                    {"error": f"Unknown scratchpad sections: {', '.join(sorted(unexpected_sections))}."}
-                ), 400
-            for section_id, content in scratchpad_sections_raw.items():
-                if not isinstance(content, str):
-                    return jsonify({"error": f"Invalid scratchpad section content for {section_id}."}), 400
-                try:
-                    settings[SCRATCHPAD_SECTION_SETTING_KEYS[section_id]] = normalize_scratchpad_text(content)
-                except Exception as e:
-                    return jsonify({"error": f"Invalid scratchpad section content for {section_id}: {str(e)}"}), 400
 
         return None, None
 

@@ -97,7 +97,7 @@
   const featureFlags = window.__featureFlags || appSettings.features || {};
   const core = window.__settingsCore || {};
 
-  const DEFAULT_SCRATCHPAD_SECTION_ORDER = core.DEFAULT_SCRATCHPAD_SECTION_ORDER || ["lessons", "profile", "notes", "problems", "tasks", "preferences", "domain"];
+  const DEFAULT_SCRATCHPAD_SECTION_ORDER = core.DEFAULT_SCRATCHPAD_SECTION_ORDER || ["notes"];
 
   // Numeric readers — delegate to core
   const readNumericSetting = (el, defaultVal, opts = {}) => core.readNumericSetting(el, defaultVal, opts);
@@ -328,13 +328,10 @@
   }
 
   function buildScratchpadPayload(scratchpadSections) {
-    return {
-      scratchpad_sections: DEFAULT_SCRATCHPAD_SECTION_ORDER.reduce((acc, sectionId) => {
-        const sectionContent = scratchpadSections[sectionId];
-        acc[sectionId] = Array.isArray(sectionContent) ? sectionContent.join("\n") : "";
-        return acc;
-      }, {}),
-    };
+    const notesSection = Array.isArray(scratchpadSections?.notes)
+      ? scratchpadSections.notes.join("\n")
+      : "";
+    return { scratchpad: notesSection };
   }
 
   // ═══════════════════════════════════════════════════════════════════════════════
