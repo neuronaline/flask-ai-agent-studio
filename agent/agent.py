@@ -5773,13 +5773,13 @@ def run_agent_stream(
             )
 
         _stream_latency_ms = None
+        t0_stream = time.monotonic()
         try:
             _raise_if_agent_cancelled(runtime_state.get("agent_context"))
-            t0_stream = time.monotonic()
             response = model_target["client"].chat.completions.create(**request_kwargs)
             _stream_latency_ms = max(0, round((time.monotonic() - t0_stream) * 1000))
         except Exception as exc:
-            if _stream_latency_ms is None and "t0_stream" in dir():
+            if _stream_latency_ms is None:
                 _stream_latency_ms = max(0, round((time.monotonic() - t0_stream) * 1000))
             append_turn_invocation(
                 {

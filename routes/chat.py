@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import atexit
 import hashlib
 import math
 import logging
@@ -238,6 +239,18 @@ SUMMARY_MIN_TEXT_LENGTH = 100
 SUMMARY_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 POST_RESPONSE_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 CHAT_STREAM_EXECUTOR = ThreadPoolExecutor(max_workers=4)
+
+
+def _shutdown_module_executors() -> None:
+    """Reap module-level executors at interpreter shutdown."""
+    for executor in (CHAT_STREAM_EXECUTOR, SUMMARY_EXECUTOR, POST_RESPONSE_EXECUTOR):
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:  # noqa: BLE001 - shutdown is best-effort
+            pass
+
+
+atexit.register(_shutdown_module_executors)
 
 
 class _ConversationSummaryLockState:

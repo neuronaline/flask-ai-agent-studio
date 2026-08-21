@@ -1175,6 +1175,15 @@ def acquire_compaction_lock(conversation_id: int, *, timeout: float = 10.0) -> b
 
     Returns True if the lock was acquired, False if it timed out
     (another compaction is in progress).
+
+    NOTE: This is a process-local (per-Python-interpreter) lock. Under
+    multi-worker WSGI deployments (gunicorn/uWSGI) two workers can still
+    run ``compact_conversation`` concurrently and race on the underlying
+    write — SQLite's transaction serialization keeps the write consistent,
+    but the pre-transaction LLM call (``_generate_compacted_state``) may
+    run twice and one result will be discarded by the row-lock race.
+    Callers must tolerate this. A cluster-wide lock would require a
+    separate ``application_locks`` table or ``BEGIN IMMEDIATE`` upgrade.
     """
     cid = int(conversation_id)
     with _compaction_locks_lock:
@@ -1188,7 +1197,7 @@ def acquire_compaction_lock(conversation_id: int, *, timeout: float = 10.0) -> b
 
 
 def release_compaction_lock(conversation_id: int) -> None:
-    """Release the per-conversation compaction lock."""
+    """Release the per-conversation compaction lock (process-local)."""
     cid = int(conversation_id)
     with _compaction_locks_lock:
         lock = _compaction_locks.get(cid)

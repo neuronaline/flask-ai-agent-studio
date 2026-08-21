@@ -246,6 +246,39 @@ def _guarded_dns_resolution(enabled: bool = True):
     yield
 
 
+@contextlib.contextmanager
+def _pin_hostname_dns(hostname: str, approved_addresses: list[str]):
+    """Pin ``hostname`` DNS resolution to ``approved_addresses`` during the block.
+
+    The caller has already validated the addresses via
+    :func:`web.url_security.assert_public_addresses` and received a green light.
+    PageFetch re-resolves the hostname when it opens the connection, so without
+    this pin a malicious DNS server can return a private IP between our check
+    and the outbound socket. We patch :func:`socket.getaddrinfo` for the
+    duration of the fetch to guarantee PageFetch can only connect to the
+    pre-validated public addresses.
+    """
+    pinned = tuple(approved_addresses or ())
+    original_getaddrinfo = socket.getaddrinfo
+
+    def _pinned_getaddrinfo(host, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if host == hostname and pinned:
+            results = []
+            for address in pinned:
+                family = socket.AF_INET6 if ":" in address else socket.AF_INET
+                results.append(
+                    (family, socket.SOCK_STREAM, 6, "", (address, args[0] if args else 0))
+                )
+            return results
+        return original_getaddrinfo(host, *args, **kwargs)
+
+    socket.getaddrinfo = _pinned_getaddrinfo
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
+
+
 def _validate_hostname_dns(hostname: str) -> None:
     """Per-call DNS validation helper (backward-compatible)."""
     from web import url_security
@@ -407,9 +440,18 @@ def fetch_url_tool(
         return cached
 
     try:
-        # Pre-fetch DNS validation: thread-safe per-call check
-        url_security.validate_url(url)
-        fetched = _run_pagefetch(url)
+        # Pre-fetch DNS validation: thread-safe per-call check. Capture the
+        # approved addresses so we can pin socket.getaddrinfo during the
+        # PageFetch connection and defeat DNS rebinding between this check
+        # and the outbound socket.
+        validated = url_security.validate_url(url)
+        approved_addresses = list(validated.get("addresses") or [])
+        pinned_hostname = validated.get("hostname") or ""
+        if pinned_hostname and approved_addresses:
+            with _pin_hostname_dns(pinned_hostname, approved_addresses):
+                fetched = _run_pagefetch(url)
+        else:
+            fetched = _run_pagefetch(url)
     except url_security.URLSecurityError as exc:
         LOGGER.error("URL policy rejected %s: %s", url, exc)
         return {

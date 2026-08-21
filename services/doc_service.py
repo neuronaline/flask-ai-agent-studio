@@ -146,7 +146,7 @@ def _build_pdf_ocr_unavailable_notice(status: str) -> str:
 
 def _extract_text_from_pdf_ocr(page) -> tuple[str, str]:
     try:
-        from ocr_service import extract_image_text
+        from services.ocr_service import extract_image_text
     except ImportError:
         return "", "unavailable"
 

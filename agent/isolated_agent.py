@@ -17,6 +17,9 @@ from typing import Any
 
 from core.config import DEFAULT_CHAT_MODEL
 from lib.model_registry import get_operation_model
+from utils.logging_config import get_logger
+
+LOGGER = get_logger(__name__)
 
 ISOLATED_AGENT_DEFAULT_MAX_STEPS = 8
 ISOLATED_AGENT_DEFAULT_TIMEOUT = 120.0
@@ -142,8 +145,19 @@ def run_isolated_agent(
         allowlist_tools = []
 
     # Defensive: drop any tool names that are no longer registered so a
-    # removed or renamed tool cannot leak into a child context.
-    safe_tools = [t for t in allowlist_tools if t in {"search_web", "fetch_url"}]
+    # removed or renamed tool cannot leak into a child context. We filter
+    # against the live tool registry (not a hard-coded allowlist) so future
+    # additions like search_scholar / summarized_fetch / search_knowledge_base
+    # / web_search_agent remain available to legitimate callers.
+    from lib.tool_registry import TOOL_RUNTIME_METADATA
+
+    registered_tool_names = set(TOOL_RUNTIME_METADATA)
+    safe_tools = [t for t in allowlist_tools if t in registered_tool_names]
+    filtered_out = [t for t in allowlist_tools if t not in registered_tool_names]
+    if filtered_out:
+        LOGGER.debug(
+            "Isolated agent filtered unknown tool names: %s", filtered_out
+        )
 
     # Resolve model
     from core.db import get_app_settings
@@ -176,6 +190,7 @@ def run_isolated_agent(
 
     report_parts: list[str] = []
     errors: list[str] = []
+    seen_fatal_api_error = False
     tool_results: list[dict] = []
     usage_data: dict | None = None
     success = False
@@ -221,7 +236,9 @@ def run_isolated_agent(
                     success = True
                 else:
                     success = False
-                    if errors is not None and "fatal_api_error" not in errors:
+                    fatal_tag = "fatal_api_error"
+                    if fatal_tag not in (event.get("error_tags") or []) and not seen_fatal_api_error:
+                        seen_fatal_api_error = True
                         errors.append(
                             f"Sub-agent ended with fatal status: {done_status or 'unknown'}"
                         )
