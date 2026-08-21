@@ -185,6 +185,7 @@ from services.rag_service import (
     conversation_archived_rag_source_key,
     conversation_rag_source_key,
 )
+from services.activity_types import ModelInvocationLog
 from services.rag_service import sync_conversations_to_rag_background, sync_conversations_to_rag_safe
 from routes.request_utils import is_valid_model_id, normalize_model_id, parse_messages_payload, parse_optional_int
 from routes.conversations import normalize_title_source
@@ -5244,33 +5245,35 @@ def chat():
                     insert_model_invocation(
                         conn,
                         conv_id,
-                        assistant_message_id=assistant_message_id,
-                        source_message_id=entry.get("source_message_id") or persisted_user_message_id,
-                        step=entry.get("step"),
-                        call_index=call_index,
-                        call_type=str(entry.get("call_type") or "agent_step").strip() or "agent_step",
-                        is_retry=entry.get("is_retry") is True,
-                        retry_reason=str(entry.get("retry_reason") or "").strip() or None,
-                        provider=str(entry.get("provider") or "").strip(),
-                        api_model=str(entry.get("api_model") or "").strip(),
-                        request_payload=entry.get("request_payload")
-                        if entry.get("request_payload") is not None
-                        else {},
-                        response_summary=(
-                            entry.get("response_summary") if entry.get("response_summary") is not None else {}
+                        log=ModelInvocationLog(
+                            source_message_id=entry.get("source_message_id") or persisted_user_message_id,
+                            step=entry.get("step") or 0,
+                            call_index=call_index,
+                            call_type=str(entry.get("call_type") or "agent_step").strip() or "agent_step",
+                            is_retry=entry.get("is_retry") is True,
+                            retry_reason=str(entry.get("retry_reason") or "").strip() or None,
+                            provider=str(entry.get("provider") or "").strip(),
+                            api_model=str(entry.get("api_model") or "").strip(),
+                            request_payload=entry.get("request_payload")
+                            if entry.get("request_payload") is not None
+                            else {},
+                            response_summary=(
+                                entry.get("response_summary") if entry.get("response_summary") is not None else {}
+                            ),
+                            operation=str(entry.get("operation") or entry.get("call_type") or "").strip() or None,
+                            prompt_tokens=entry.get("prompt_tokens"),
+                            completion_tokens=entry.get("completion_tokens"),
+                            total_tokens=entry.get("total_tokens"),
+                            estimated_input_tokens=entry.get("estimated_input_tokens"),
+                            prompt_cache_hit_tokens=entry.get("prompt_cache_hit_tokens"),
+                            prompt_cache_miss_tokens=entry.get("prompt_cache_miss_tokens"),
+                            prompt_cache_write_tokens=entry.get("prompt_cache_write_tokens"),
+                            latency_ms=entry.get("latency_ms"),
+                            response_status=str(entry.get("response_status") or "").strip() or None,
+                            error_type=str(entry.get("error_type") or "").strip() or None,
+                            error_message=str(entry.get("error_message") or "").strip() or None,
                         ),
-                        operation=str(entry.get("operation") or entry.get("call_type") or "").strip() or None,
-                        prompt_tokens=entry.get("prompt_tokens"),
-                        completion_tokens=entry.get("completion_tokens"),
-                        total_tokens=entry.get("total_tokens"),
-                        estimated_input_tokens=entry.get("estimated_input_tokens"),
-                        prompt_cache_hit_tokens=entry.get("prompt_cache_hit_tokens"),
-                        prompt_cache_miss_tokens=entry.get("prompt_cache_miss_tokens"),
-                        prompt_cache_write_tokens=entry.get("prompt_cache_write_tokens"),
-                        latency_ms=entry.get("latency_ms"),
-                        response_status=str(entry.get("response_status") or "").strip() or None,
-                        error_type=str(entry.get("error_type") or "").strip() or None,
-                        error_message=str(entry.get("error_message") or "").strip() or None,
+                        assistant_message_id=assistant_message_id,
                     )
             model_invocations_persisted = True
 

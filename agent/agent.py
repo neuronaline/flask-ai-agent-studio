@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -70,9 +71,11 @@ from core.config import (
 )
 from core.prompts import get_prompt
 from core.db import (
+    acquire_compaction_lock,
     append_to_scratchpad,
     count_scratchpad_notes,
     delete_conversation_memory_entry,
+    execute_purge_transaction,
     get_context_compaction_keep_recent_rounds,
     get_context_compaction_threshold,
     get_effective_conversation_persona,
@@ -89,8 +92,11 @@ from core.db import (
     get_rag_source_types,
     get_search_tool_query_limit,
     insert_conversation_memory_entry,
+    list_conversation_image_assets,
     parse_message_tool_calls,
+    release_compaction_lock,
     replace_scratchpad,
+    resolve_purge_dependency_closure,
 )
 from core.messages import (
     _build_canvas_prompt_payload,
@@ -114,8 +120,12 @@ from lib.model_registry import (
     resolve_model_target,
     should_retry_model_target_tool_choice_with_auto,
 )
+from services.activity_types import ModelInvocationLog
+from services.context_compaction import compact_conversation
+from services.image_service import analyze_images_with_vl
 from services.rag_service import (
     search_knowledge_base_tool,
+    sync_conversations_to_rag_safe,
 )
 from lib.tool_registry import (
     CANVAS_READ_BARRIER_TOOL_NAMES,
@@ -176,6 +186,10 @@ REASONING_REPLAY_MARKER = _get_prompt_constant("agent.constants.reasoning_replay
 MAX_REASONING_REPLAY_ENTRIES = 2
 MAX_REASONING_REPLAY_CHARS = 4_000
 MAX_REASONING_REPLAY_TOTAL_CHARS = 10_000
+MAX_ERROR_OBJECT_DEPTH = 4
+MAX_ERROR_FRAGMENT_LENGTH = 600
+TOOL_TITLE_MAX_WORDS = 5
+TOOL_TITLE_MAX_CHARS = 48
 CANVAS_STREAM_CONTENT_TOOL_NAMES = {
     "create_canvas_document",
 }
@@ -579,7 +593,7 @@ def _extract_error_signal_text(error) -> str:
     fragments: list[str] = []
 
     def visit(value, depth: int = 0):
-        if depth > 4 or value in (None, ""):
+        if depth > MAX_ERROR_OBJECT_DEPTH or value in (None, ""):
             return
         if isinstance(value, bytes):
             visit(value.decode("utf-8", errors="replace"), depth + 1)
@@ -609,8 +623,8 @@ def _extract_error_signal_text(error) -> str:
             else:
                 visit(parsed, depth + 1)
                 return
-        if len(text) > 600:
-            text = text[:600]
+        if len(text) > MAX_ERROR_FRAGMENT_LENGTH:
+            text = text[:MAX_ERROR_FRAGMENT_LENGTH]
         fragments.append(text)
 
     visit(error)
@@ -746,13 +760,22 @@ def _classify_retryable_model_error(error: Exception | str) -> str:
     return "low" if re.search(r"\b429\b", error_text) else "none"
 
 
-# ---------------------------------------------------------------------------
-# Legacy aliases — kept to avoid breaking external test patches that reference
-# the old function names. Remove once all callers are updated.
-# ---------------------------------------------------------------------------
-_is_context_overflow_error = _classify_context_overflow_error
-_is_truncated_stream_disconnect_error = _classify_truncated_stream_disconnect_error
-_is_retryable_model_error = _classify_retryable_model_error
+def _classify_stream_outcome(stream_error: str | None) -> str:
+    """Classify a streamed turn outcome for the agent loop's recovery path.
+
+    Returns one of:
+    - ``"overflow"`` — context overflow that may recover via compaction.
+    - ``"truncated_disconnect"`` — truncated stream that is *expected* and
+      should not be surfaced as a tool error (model simply didn't finish).
+    - ``"other"`` — anything else: treat as fatal.
+    """
+    if not stream_error:
+        return "other"
+    if _classify_context_overflow_error(stream_error) != "none":
+        return "overflow"
+    if _classify_truncated_stream_disconnect_error(stream_error):
+        return "truncated_disconnect"
+    return "other"
 
 
 def _normalize_tool_args_for_cache(value):
@@ -858,20 +881,12 @@ def _truncate_preview_text(text: str, limit: int | None = None) -> str:
     return cleaned
 
 
-# Tool → recovery hints YAML key mapping (see prompts.yaml: agent.recovery_hints)
+# Tool → recovery hints YAML key mapping (see prompts.yaml: agent.recovery_hints).
+# Only non-identity mappings live here; for any tool name not in this map the
+# canonical rule "tool name == yaml key" is used directly.
 _RECOVERY_HINT_KEY_MAP: dict[str, str] = {
-    "fetch_url": "fetch_url",
-    "search_web": "search_web",
-    "search_scholar": "search_scholar",
-    "search_knowledge_base": "search_knowledge_base",
     "search_canvas_document": "search_canvas",
     "batch_read_canvas_documents": "batch_read_canvas",
-    "create_canvas_document": "create_canvas_document",
-    "batch_canvas_edits": "batch_canvas_edits",
-    "delete_canvas_document": "delete_canvas_document",
-    "ask_clarifying_question": "ask_clarifying_question",
-    "analyze_uploaded_image": "analyze_image",
-    "answer_image_question": "analyze_image",
 }
 
 
@@ -900,6 +915,24 @@ def _build_recovery_hint_for_tool(tool_name: str, tool_args: dict | None = None)
         f"correctness, using a different tool for the same goal, or re-reading the "
         f"relevant state first."
     )
+
+
+INT32_MAX = 2_147_483_647
+_SCRATCHPAD_WRITE_TOOLS = frozenset({"append_scratchpad", "replace_scratchpad"})
+
+
+def _ensure_scratchpad_read_tool(tool_names: list[str]) -> list[str]:
+    """Ensure ``read_scratchpad`` is present whenever a scratchpad write tool is.
+
+    Mirrors the guard in ``core.db.get_active_tool_names`` so direct callers
+    (and tests) that supply only ``append_scratchpad`` / ``replace_scratchpad``
+    don't end up with the system-prompt referencing a tool the API doesn't
+    expose.
+    """
+    if any(name in _SCRATCHPAD_WRITE_TOOLS for name in tool_names):
+        if "read_scratchpad" not in tool_names:
+            tool_names = [*tool_names, "read_scratchpad"]
+    return tool_names
 
 
 def _coerce_int_range(value, default: int, minimum: int, maximum: int) -> int:
@@ -968,10 +1001,6 @@ def _iter_search_query_batches(raw_queries, *, batch_size: int | None = None):
     resolved_batch_size = _resolve_search_query_batch_size(batch_size)
     for index in range(0, len(normalized_queries), resolved_batch_size):
         yield normalized_queries[index : index + resolved_batch_size]
-
-
-def _get_search_tool_queries(tool_args: dict):
-    return _coerce_search_tool_queries(tool_args)
 
 
 def _coerce_search_tool_queries(tool_args: dict, *, ensure_key: bool = False):
@@ -1768,13 +1797,14 @@ def _build_model_invocation_usage_summary(
 def _append_model_invocation_log(
     invocation_log_sink: list[dict] | None,
     *,
-    agent_context: dict | None,
-    step: int,
-    call_type: str,
-    retry_reason: str | None,
-    model_target: dict,
-    request_payload,
-    response_summary,
+    log: ModelInvocationLog | None = None,
+    agent_context: dict | None = None,
+    step: int | None = None,
+    call_type: str | None = None,
+    retry_reason: str | None = None,
+    model_target: dict | None = None,
+    request_payload=None,
+    response_summary=None,
     operation: str | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
@@ -1789,31 +1819,111 @@ def _append_model_invocation_log(
     error_type: str | None = None,
     error_message: str | None = None,
 ) -> None:
+    """Record one model invocation in the in-memory log sink and trace logger.
+
+    New callers should build a :class:`ModelInvocationLog` and pass it via the
+    ``log=`` kwarg. The legacy kwargs remain supported for backward
+    compatibility; explicit kwargs override fields on the dataclass.
+    """
     context = agent_context if isinstance(agent_context, dict) else {}
     record = model_target.get("record") if isinstance(model_target, dict) else {}
+    if log is None:
+        log = ModelInvocationLog(
+            step=int(step or 0),
+            call_type=str(call_type or "agent_step"),
+            retry_reason=retry_reason,
+            provider=str((record or {}).get("provider") or ""),
+            api_model=str(model_target.get("api_model") or "") if isinstance(model_target, dict) else "",
+            operation=operation,
+            request_payload=request_payload,
+            response_summary=response_summary,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            estimated_input_tokens=estimated_input_tokens,
+            prompt_cache_hit_tokens=prompt_cache_hit_tokens,
+            prompt_cache_miss_tokens=prompt_cache_miss_tokens,
+            prompt_cache_write_tokens=prompt_cache_write_tokens,
+            cost=cost,
+            latency_ms=latency_ms,
+            response_status=response_status,
+            error_type=error_type,
+            error_message=error_message,
+        )
+    else:
+        # Allow legacy kwargs to override individual fields on the dataclass.
+        overrides: dict[str, object] = {}
+        if step is not None:
+            overrides["step"] = int(step or 0)
+        if call_type is not None:
+            overrides["call_type"] = str(call_type or "agent_step")
+        if retry_reason is not None:
+            overrides["retry_reason"] = retry_reason
+        if operation is not None:
+            overrides["operation"] = operation
+        if request_payload is not None:
+            overrides["request_payload"] = request_payload
+        if response_summary is not None:
+            overrides["response_summary"] = response_summary
+        if prompt_tokens is not None:
+            overrides["prompt_tokens"] = prompt_tokens
+        if completion_tokens is not None:
+            overrides["completion_tokens"] = completion_tokens
+        if total_tokens is not None:
+            overrides["total_tokens"] = total_tokens
+        if estimated_input_tokens is not None:
+            overrides["estimated_input_tokens"] = estimated_input_tokens
+        if prompt_cache_hit_tokens is not None:
+            overrides["prompt_cache_hit_tokens"] = prompt_cache_hit_tokens
+        if prompt_cache_miss_tokens is not None:
+            overrides["prompt_cache_miss_tokens"] = prompt_cache_miss_tokens
+        if prompt_cache_write_tokens is not None:
+            overrides["prompt_cache_write_tokens"] = prompt_cache_write_tokens
+        if cost is not None:
+            overrides["cost"] = cost
+        if latency_ms is not None:
+            overrides["latency_ms"] = latency_ms
+        if response_status is not None:
+            overrides["response_status"] = response_status
+        if error_type is not None:
+            overrides["error_type"] = error_type
+        if error_message is not None:
+            overrides["error_message"] = error_message
+        if overrides:
+            log = dataclasses.replace(log, **overrides)
+        # If model_target is supplied on the legacy path, propagate provider/api_model.
+        if isinstance(model_target, dict):
+            extras = {}
+            if not log.provider and record.get("provider"):
+                extras["provider"] = str((record or {}).get("provider") or "")
+            if not log.api_model and model_target.get("api_model"):
+                extras["api_model"] = str(model_target.get("api_model") or "")
+            if extras:
+                log = dataclasses.replace(log, **extras)
+
     log_record = {
-        "source_message_id": _coerce_int_range(context.get("source_message_id"), 0, 0, 2_147_483_647),
-        "step": max(0, int(step or 0)),
-        "call_type": str(call_type or "agent_step").strip() or "agent_step",
-        "is_retry": bool(retry_reason),
-        "retry_reason": str(retry_reason or "").strip() or None,
-        "provider": str((record or {}).get("provider") or "").strip(),
-        "api_model": str(model_target.get("api_model") or "").strip(),
-        "operation": str(operation or call_type or "").strip() or None,
-        "request_payload": _snapshot_model_invocation_value(request_payload),
-        "response_summary": _snapshot_model_invocation_value(response_summary),
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": total_tokens,
-        "estimated_input_tokens": estimated_input_tokens,
-        "prompt_cache_hit_tokens": prompt_cache_hit_tokens,
-        "prompt_cache_miss_tokens": prompt_cache_miss_tokens,
-        "prompt_cache_write_tokens": prompt_cache_write_tokens,
-        "cost": cost,
-        "latency_ms": latency_ms,
-        "response_status": response_status,
-        "error_type": error_type,
-        "error_message": error_message,
+        "source_message_id": _coerce_int_range(context.get("source_message_id"), 0, 0, INT32_MAX),
+        "step": max(0, int(log.step or 0)),
+        "call_type": str(log.call_type or "agent_step").strip() or "agent_step",
+        "is_retry": bool(log.retry_reason),
+        "retry_reason": str(log.retry_reason or "").strip() or None,
+        "provider": str(log.provider or "").strip(),
+        "api_model": str(log.api_model or "").strip(),
+        "operation": str(log.operation or log.call_type or "").strip() or None,
+        "request_payload": _snapshot_model_invocation_value(log.request_payload),
+        "response_summary": _snapshot_model_invocation_value(log.response_summary),
+        "prompt_tokens": log.prompt_tokens,
+        "completion_tokens": log.completion_tokens,
+        "total_tokens": log.total_tokens,
+        "estimated_input_tokens": log.estimated_input_tokens,
+        "prompt_cache_hit_tokens": log.prompt_cache_hit_tokens,
+        "prompt_cache_miss_tokens": log.prompt_cache_miss_tokens,
+        "prompt_cache_write_tokens": log.prompt_cache_write_tokens,
+        "cost": log.cost,
+        "latency_ms": log.latency_ms,
+        "response_status": log.response_status,
+        "error_type": log.error_type,
+        "error_message": log.error_message,
     }
     if isinstance(invocation_log_sink, list):
         invocation_log_sink.append(log_record)
@@ -1830,8 +1940,8 @@ def _append_model_invocation_log(
         error_message=log_record["error_message"],
         raw_fields={
             "agent_context": context,
-            "request_payload": request_payload,
-            "response_summary": response_summary,
+            "request_payload": log.request_payload,
+            "response_summary": log.response_summary,
             "record": log_record,
         },
     )
@@ -2723,9 +2833,6 @@ def _validate_tool_arguments(tool_name: str, tool_args: dict) -> str | None:
     manual type checking with fragile if/else blocks. Preserves coercion logic
     and silent fallbacks for specific tools where appropriate.
     """
-    import jsonschema
-    from jsonschema import Draft7Validator
-
     tool_name = _normalize_tool_name(tool_name)
     spec = TOOL_SPEC_BY_NAME.get(tool_name)
     if not spec:
@@ -3460,7 +3567,7 @@ def _run_search_knowledge_base(tool_args: dict, runtime_state: dict):
 
 def _run_search_web(tool_args: dict, runtime_state: dict):
     del runtime_state
-    raw_queries = _get_search_tool_queries(tool_args)
+    raw_queries = _coerce_search_tool_queries(tool_args)
     query_limit = get_search_tool_query_limit(get_app_settings())
     # Detect the "all-5-empty" hidden-drop case before _iter_search_query_batches
     # silently filters them out so the model can self-correct.
@@ -3493,7 +3600,7 @@ def _run_search_web(tool_args: dict, runtime_state: dict):
 def _run_search_scholar(tool_args: dict, runtime_state: dict):
     del runtime_state
     query_limit = get_search_tool_query_limit(get_app_settings())
-    raw_queries = _get_search_tool_queries(tool_args)
+    raw_queries = _coerce_search_tool_queries(tool_args)
     visible_limit = max(0, int(query_limit))
     input_window = list(raw_queries or [])[:visible_limit]
     skipped_empty = sum(1 for q in input_window if not str(q or "").strip())
@@ -3886,9 +3993,9 @@ def _normalize_conversation_title_for_tool(raw_title: str) -> str:
     if not text:
         return ""
     words = text.split(" ")
-    if len(words) > 5:
-        text = " ".join(words[:5]).strip()
-    return text[:48].strip()
+    if len(words) > TOOL_TITLE_MAX_WORDS:
+        text = " ".join(words[:TOOL_TITLE_MAX_WORDS]).strip()
+    return text[:TOOL_TITLE_MAX_CHARS].strip()
 
 
 def _build_internal_title_generation_prompt(source_text: str) -> list[dict]:
@@ -3947,26 +4054,36 @@ def _generate_conversation_title_with_dedicated_model(conversation_id: int, fall
 
 
 # ---------------------------------------------------------------------------
-_TOOL_EXECUTORS = {
-    "append_scratchpad": _run_append_scratchpad,
-    "replace_scratchpad": _run_replace_scratchpad,
-    "read_scratchpad": _run_read_scratchpad,
-    "save_to_conversation_memory": _run_save_to_conversation_memory,
-    "delete_conversation_memory_entry": _run_delete_conversation_memory_entry,
-    "ask_clarifying_question": _run_ask_clarifying_question,
-    "search_knowledge_base": _run_search_knowledge_base,
-    "search_web": _run_search_web,
-    "search_scholar": _run_search_scholar,
-    "fetch_url": _run_fetch_url,
-    "web_search_agent": _run_web_search_agent,
-    "summarized_fetch": _run_summarized_fetch,
-    "batch_read_canvas_documents": _run_batch_read_canvas_documents,
-    "read_canvas_document": _run_read_canvas_document,
-    "search_canvas_document": _run_search_canvas_document,
-    "create_canvas_document": _run_create_canvas_document,
-    "batch_canvas_edits": _run_batch_canvas_edits,
-    "delete_canvas_document": _run_delete_canvas_document,
-}
+def _register_tool(registry: dict, name: str, handler) -> None:
+    """Register a tool handler, asserting the name is unique.
+
+    Centralising registration next to each handler definition makes the
+    registry impossible to forget to update when a new handler is added.
+    """
+    if name in registry:
+        raise RuntimeError(f"Tool handler '{name}' registered twice in _TOOL_EXECUTORS")
+    registry[name] = handler
+
+
+_TOOL_EXECUTORS: dict[str, object] = {}
+_register_tool(_TOOL_EXECUTORS, "append_scratchpad", _run_append_scratchpad)
+_register_tool(_TOOL_EXECUTORS, "replace_scratchpad", _run_replace_scratchpad)
+_register_tool(_TOOL_EXECUTORS, "read_scratchpad", _run_read_scratchpad)
+_register_tool(_TOOL_EXECUTORS, "save_to_conversation_memory", _run_save_to_conversation_memory)
+_register_tool(_TOOL_EXECUTORS, "delete_conversation_memory_entry", _run_delete_conversation_memory_entry)
+_register_tool(_TOOL_EXECUTORS, "ask_clarifying_question", _run_ask_clarifying_question)
+_register_tool(_TOOL_EXECUTORS, "search_knowledge_base", _run_search_knowledge_base)
+_register_tool(_TOOL_EXECUTORS, "search_web", _run_search_web)
+_register_tool(_TOOL_EXECUTORS, "search_scholar", _run_search_scholar)
+_register_tool(_TOOL_EXECUTORS, "fetch_url", _run_fetch_url)
+_register_tool(_TOOL_EXECUTORS, "web_search_agent", _run_web_search_agent)
+_register_tool(_TOOL_EXECUTORS, "summarized_fetch", _run_summarized_fetch)
+_register_tool(_TOOL_EXECUTORS, "batch_read_canvas_documents", _run_batch_read_canvas_documents)
+_register_tool(_TOOL_EXECUTORS, "read_canvas_document", _run_read_canvas_document)
+_register_tool(_TOOL_EXECUTORS, "search_canvas_document", _run_search_canvas_document)
+_register_tool(_TOOL_EXECUTORS, "create_canvas_document", _run_create_canvas_document)
+_register_tool(_TOOL_EXECUTORS, "batch_canvas_edits", _run_batch_canvas_edits)
+_register_tool(_TOOL_EXECUTORS, "delete_canvas_document", _run_delete_canvas_document)
 
 
 def _run_purge(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
@@ -4000,13 +4117,6 @@ def _run_purge(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
         return {"error": "Cannot determine conversation context."}, "purge: missing conversation context"
 
     try:
-        from core.db import (
-            resolve_purge_dependency_closure,
-            execute_purge_transaction,
-            acquire_compaction_lock,
-            release_compaction_lock,
-        )
-
         # Dry-run needs the closure but is read-only; do not acquire the lock
         # so dry-runs don't block (or get blocked by) a real compaction/purge.
         # The dry-run path uses the closure as a preview only.
@@ -4064,8 +4174,6 @@ def _run_purge(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
                 return result, f"purge: {result['error']}"
 
             try:
-                from services.rag_service import sync_conversations_to_rag_safe
-
                 sync_conversations_to_rag_safe(conversation_id=conversation_id, force=True)
                 result["rag_cleanup_pending"] = False
             except Exception:
@@ -4095,7 +4203,7 @@ def _run_purge(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
         return {"error": f"Purge failed: {exc}"}, f"purge: error — {exc}"
 
 
-_TOOL_EXECUTORS["purge"] = _run_purge
+_register_tool(_TOOL_EXECUTORS, "purge", _run_purge)
 
 
 def _run_compact_context(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
@@ -4123,8 +4231,6 @@ def _run_compact_context(tool_args: dict, runtime_state: dict) -> tuple[dict, st
             ),
         }, "compact_context: dry-run — call again with confirm: true to execute"
 
-    from services.context_compaction import compact_conversation
-
     result = compact_conversation(conversation_id, resume_instruction, actor="model")
     if result.get("error"):
         return result, f"compact_context: {result['error']}"
@@ -4135,7 +4241,7 @@ def _run_compact_context(tool_args: dict, runtime_state: dict) -> tuple[dict, st
     )
 
 
-_TOOL_EXECUTORS["compact_context"] = _run_compact_context
+_register_tool(_TOOL_EXECUTORS, "compact_context", _run_compact_context)
 
 
 def _run_list_conversation_images(tool_args: dict, runtime_state: dict):
@@ -4144,8 +4250,6 @@ def _run_list_conversation_images(tool_args: dict, runtime_state: dict):
     conversation_id, _ = _get_agent_state_mutation_context(runtime_state)
     if conversation_id is None:
         return {"error": "Cannot determine conversation context."}, "list_conversation_images: missing conversation context"
-
-    from core.db import list_conversation_image_assets
 
     try:
         assets = list_conversation_image_assets(conversation_id)
@@ -4176,7 +4280,7 @@ def _run_list_conversation_images(tool_args: dict, runtime_state: dict):
     }, "\n".join(summary_lines)
 
 
-_TOOL_EXECUTORS["list_conversation_images"] = _run_list_conversation_images
+_register_tool(_TOOL_EXECUTORS, "list_conversation_images", _run_list_conversation_images)
 
 
 def _run_analyze_image(tool_args: dict, runtime_state: dict):
@@ -4206,8 +4310,6 @@ def _run_analyze_image(tool_args: dict, runtime_state: dict):
     if conversation_id is None:
         return {"error": "Cannot determine conversation context."}, "analyze_image: missing conversation context"
 
-    from services.image_service import analyze_images_with_vl
-
     settings = get_app_settings()
     try:
         result = analyze_images_with_vl(
@@ -4236,7 +4338,7 @@ def _run_analyze_image(tool_args: dict, runtime_state: dict):
     }, summary
 
 
-_TOOL_EXECUTORS["analyze_image"] = _run_analyze_image
+_register_tool(_TOOL_EXECUTORS, "analyze_image", _run_analyze_image)
 
 
 def _execute_tool(tool_name: str, tool_args: dict, runtime_state: dict | None = None):
@@ -4536,7 +4638,7 @@ def _tool_input_preview(tool_name: str, tool_args: dict) -> str:
     tool_name = _normalize_tool_name(tool_name)
     tool_args = tool_args if isinstance(tool_args, dict) else {}
     if tool_name in {"search_web", "search_scholar"}:
-        values = _get_search_tool_queries(tool_args)
+        values = _coerce_search_tool_queries(tool_args)
         if isinstance(values, list):
             return ", ".join(str(value).strip() for value in values if str(value).strip())[:300]
     if tool_name == "search_knowledge_base":
@@ -5068,10 +5170,7 @@ def _append_reasoning_replay_entry(
     if not cleaned_reasoning:
         return
 
-    try:
-        max_entries = max(MAX_REASONING_REPLAY_ENTRIES, int(reasoning_state.get("max_entries") or 0))
-    except (TypeError, ValueError):
-        max_entries = MAX_REASONING_REPLAY_ENTRIES
+    max_entries = max(MAX_REASONING_REPLAY_ENTRIES, int(reasoning_state.get("max_entries") or 0))
 
     entries = reasoning_state.setdefault("entries", [])
     tool_names = [
@@ -5099,10 +5198,7 @@ def _build_reasoning_replay_instruction(reasoning_state: dict, current_goal: str
     if not entries:
         return None
 
-    try:
-        max_entries = max(MAX_REASONING_REPLAY_ENTRIES, int(reasoning_state.get("max_entries") or 0))
-    except (TypeError, ValueError):
-        max_entries = MAX_REASONING_REPLAY_ENTRIES
+    max_entries = max(MAX_REASONING_REPLAY_ENTRIES, int(reasoning_state.get("max_entries") or 0))
 
     parts = [REASONING_REPLAY_MARKER]
     parts.append(
@@ -5218,8 +5314,6 @@ def _record_deleted_tool_call_ids(runtime_state: dict, public_ids: list[str]) ->
 
     captured_ids: set[str] = set()
     try:
-        from core.db import get_db
-
         placeholders = ",".join("?" for _ in normalized_ids)
         params = [int(conversation_id)] + normalized_ids
         with get_db() as conn:
@@ -5279,8 +5373,6 @@ def _attempt_overflow_compaction(conversation_id: int, source: str, resume_instr
     if not conversation_id:
         return False
     try:
-        from services.context_compaction import compact_conversation
-
         result = compact_conversation(
             int(conversation_id),
             resume_instruction,
@@ -5368,13 +5460,8 @@ def run_agent_stream(
     # (e.g. tests) that pass only append_scratchpad/replace_scratchpad without read_scratchpad,
     # which would otherwise cause the system-prompt to reference the tool but the API not to
     # expose it, confusing the model's reasoning.
-    _SCRATCHPAD_WRITE_TOOLS = {"append_scratchpad", "replace_scratchpad"}
-    if any(name in _SCRATCHPAD_WRITE_TOOLS for name in normalized_enabled_tool_names):
-        if "read_scratchpad" not in normalized_enabled_tool_names:
-            normalized_enabled_tool_names.append("read_scratchpad")
-    if any(name in _SCRATCHPAD_WRITE_TOOLS for name in normalized_prompt_tool_names):
-        if "read_scratchpad" not in normalized_prompt_tool_names:
-            normalized_prompt_tool_names.append("read_scratchpad")
+    normalized_enabled_tool_names = _ensure_scratchpad_read_tool(normalized_enabled_tool_names)
+    normalized_prompt_tool_names = _ensure_scratchpad_read_tool(normalized_prompt_tool_names)
     normalized_parallel_tool_limit = _normalize_parallel_tool_limit(max_parallel_tools)
     runtime_state = {
         "canvas": create_canvas_runtime_state(
@@ -5400,8 +5487,8 @@ def run_agent_stream(
         "enabled_tool_names": normalized_enabled_tool_names,
         "prompt_tool_names": normalized_prompt_tool_names,
         "max_parallel_tools": normalized_parallel_tool_limit,
-        "conversation_id": _coerce_int_range((agent_context or {}).get("conversation_id"), 0, 0, 2_147_483_647),
-        "source_message_id": _coerce_int_range((agent_context or {}).get("source_message_id"), 0, 0, 2_147_483_647),
+        "conversation_id": _coerce_int_range((agent_context or {}).get("conversation_id"), 0, 0, INT32_MAX),
+        "source_message_id": _coerce_int_range((agent_context or {}).get("source_message_id"), 0, 0, INT32_MAX),
         "cancel_event": (agent_context or {}).get("cancel_event"),
         "cancel_reason": str((agent_context or {}).get("cancel_reason") or "").strip() or USER_CANCELLED_ERROR_TEXT,
     }
@@ -5443,7 +5530,6 @@ def run_agent_stream(
         else get_context_compaction_keep_recent_rounds(model_settings)
     )
     model_target = resolve_model_target(model, model_settings)
-    native_reasoning_continuation = model_target_supports_native_reasoning_continuation(model_target)
 
     def build_tool_capture_event() -> dict:
         current_canvas_snapshot = get_canvas_runtime_snapshot(runtime_state.get("canvas"))
@@ -6160,7 +6246,10 @@ def run_agent_stream(
         step_retry_reason = pending_step_retry_reason
         pending_step_retry_reason = None
         reasoning_replay_instruction = None
-        if not (native_reasoning_continuation and _has_native_reasoning_details(messages)):
+        if not (
+            model_target_supports_native_reasoning_continuation(model_target)
+            and _has_native_reasoning_details(messages)
+        ):
             reasoning_replay_instruction = _build_reasoning_replay_instruction(
                 reasoning_state,
                 current_goal=working_state.get("current_goal") or "",
@@ -6195,7 +6284,7 @@ def run_agent_stream(
             )
         except Exception as exc:
             fatal_api_error = str(exc)
-            if _is_context_overflow_error(fatal_api_error) != "none" and not context_compacted_this_step:
+            if _classify_context_overflow_error(fatal_api_error) != "none" and not context_compacted_this_step:
                 compaction_attempts = 0
                 overflow_handled = False
                 _overflow_conv_id = int(
@@ -6365,7 +6454,10 @@ def run_agent_stream(
                 if not answer_started:
                     for event in emit_answer(content_text):
                         yield event
-                if stream_error and not _is_truncated_stream_disconnect_error(stream_error):
+                if (
+                    stream_error
+                    and _classify_stream_outcome(stream_error) != "truncated_disconnect"
+                ):
                     yield {"type": "tool_error", "step": step, "tool": "api", "error": stream_error}
                 if usage_totals["total_tokens"]:
                     yield usage_event()
@@ -6374,7 +6466,7 @@ def run_agent_stream(
                 return
 
             if stream_error:
-                if _is_context_overflow_error(stream_error) != "none" and not context_compacted_this_step:
+                if _classify_context_overflow_error(stream_error) != "none" and not context_compacted_this_step:
                     compaction_attempts = 0
                     overflow_handled = False
                     _overflow_conv_id = int(
@@ -7266,7 +7358,7 @@ def run_agent_stream(
             tool_calls = turn_result.get("tool_calls")
             stream_error = turn_result.get("stream_error")
             answer_emitted = bool(turn_result.get("answer_emitted"))
-            if stream_error and _is_context_overflow_error(stream_error) != "none" and not final_phase_compaction_used:
+            if stream_error and _classify_context_overflow_error(stream_error) != "none" and not final_phase_compaction_used:
                 compaction_attempts = 0
                 overflow_handled = False
                 _overflow_conv_id = int(
@@ -7395,7 +7487,10 @@ def run_agent_stream(
                 final_text = FINAL_ANSWER_MISSING_TEXT
             else:
                 final_text = content_text
-            if stream_error and not _is_truncated_stream_disconnect_error(stream_error):
+            if (
+                stream_error
+                and _classify_stream_outcome(stream_error) != "truncated_disconnect"
+            ):
                 yield {"type": "tool_error", "step": step, "tool": "final_answer", "error": stream_error}
             if not answer_emitted:
                 for event in emit_answer(final_text):
@@ -7403,7 +7498,7 @@ def run_agent_stream(
             break
         except Exception as exc:
             error = str(exc)
-            if _is_context_overflow_error(error) != "none" and not final_phase_compaction_used:
+            if _classify_context_overflow_error(error) != "none" and not final_phase_compaction_used:
                 compaction_attempts = 0
                 overflow_handled = False
                 _overflow_conv_id = int(

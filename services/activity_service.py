@@ -7,10 +7,15 @@ provider call to the model_invocations Activity log. All call-paths
 """
 from __future__ import annotations
 
+import dataclasses
 import time
 from typing import Any
 
-from services.activity_types import ActivityCallParams
+from services.activity_types import (
+    ActivityCallParams,
+    ModelInvocationLog,
+    activity_call_params_to_log,
+)
 from utils.logging_config import get_logger
 
 LOGGER = get_logger(__name__)
@@ -55,37 +60,18 @@ def log_activity_call(
     try:
         from core.db import get_db, insert_model_invocation  # local to avoid circular imports
 
-        kwargs = dict(
-            provider=params.get("provider", ""),
-            api_model=params.get("api_model", ""),
-            operation=params.get("operation", ""),
-            call_type=params.get("call_type", "agent_step"),
-            request_payload=params.get("request_payload") or {},
-            response_summary=params.get("response_summary") or {},
-            response_status=params.get("response_status", STATUS_OK),
-            error_type=params.get("error_type"),
-            error_message=params.get("error_message"),
-            latency_ms=params.get("latency_ms"),
-            prompt_tokens=params.get("prompt_tokens"),
-            completion_tokens=params.get("completion_tokens"),
-            total_tokens=params.get("total_tokens"),
-            estimated_input_tokens=params.get("estimated_input_tokens"),
-            prompt_cache_hit_tokens=params.get("prompt_cache_hit_tokens"),
-            prompt_cache_miss_tokens=params.get("prompt_cache_miss_tokens"),
-            prompt_cache_write_tokens=params.get("prompt_cache_write_tokens"),
-            assistant_message_id=params.get("assistant_message_id"),
-            source_message_id=params.get("source_message_id"),
-            step=params.get("step", 0),
-            call_index=params.get("call_index", 0),
-            is_retry=params.get("is_retry", False),
-            retry_reason=params.get("retry_reason"),
-        )
+        log: ModelInvocationLog = activity_call_params_to_log(params)
+        # Apply the remaining fields that ActivityCallParams doesn't track.
+        # ``is_retry`` is the only derived field here; everything else maps 1:1
+        # to a dataclass attribute and was already populated above.
+        if log.is_retry is False and params.get("is_retry"):
+            log = dataclasses.replace(log, is_retry=bool(params["is_retry"]))
 
         if conn is not None:
-            return insert_model_invocation(conn, conversation_id, **kwargs)
+            return insert_model_invocation(conn, conversation_id, log=log)
 
         with get_db() as _conn:
-            return insert_model_invocation(_conn, conversation_id, **kwargs)
+            return insert_model_invocation(_conn, conversation_id, log=log)
 
     except Exception:
         LOGGER.exception("activity_service: failed to log activity call (non-fatal)")

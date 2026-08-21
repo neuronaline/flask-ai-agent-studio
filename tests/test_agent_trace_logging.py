@@ -4,6 +4,7 @@ import json
 import pathlib
 
 import agent.agent
+from services.activity_types import ModelInvocationLog
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -64,15 +65,19 @@ def test_append_model_invocation_log_traces_raw_request_and_response_without_sin
 
     agent.agent._append_model_invocation_log(
         None,
+        log=ModelInvocationLog(
+            step=2,
+            call_type="agent_step",
+            retry_reason=None,
+            provider="demo-provider",
+            api_model="demo-model",
+            request_payload={"messages": [{"role": "user", "content": "hello"}]},
+            response_summary={"status": "ok", "content_text": "world"},
+            operation="chat",
+            response_status="ok",
+        ),
         agent_context={"source_message_id": 17},
-        step=2,
-        call_type="agent_step",
-        retry_reason=None,
         model_target={"api_model": "demo-model", "record": {"provider": "demo-provider"}},
-        request_payload={"messages": [{"role": "user", "content": "hello"}]},
-        response_summary={"status": "ok", "content_text": "world"},
-        operation="chat",
-        response_status="ok",
     )
 
     assert len(logger.messages) == 1

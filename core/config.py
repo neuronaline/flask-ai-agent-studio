@@ -198,10 +198,9 @@ def coerce_image_helper_max_images(settings: dict | None = None) -> int:
 # ── Limits & defaults shared across settings validation ──
 _MAX_STEPS = 1
 _MAX_STEPS_MAX = 12
-_DEFAULT_MAX_STEPS = 5
-_MAX_PARALLEL_TOOLS_MIN_ = 1
-_MAX_PARALLEL_TOOLS_MAX_ = 12
-_DEFAULT_MAX_PARALLEL_TOOLS = 4
+MAX_PARALLEL_TOOLS_MIN = 1
+MAX_PARALLEL_TOOLS_MAX = 12
+DEFAULT_MAX_PARALLEL_TOOLS = 4
 _TIMEOUT_SECONDS_MIN = 5
 _TIMEOUT_SECONDS_MAX = 900
 _RETRY_ATTEMPTS_MIN = 0
@@ -217,10 +216,6 @@ _WEB_CACHE_TTL_HOURS_MAX = 168
 _CONVERSATION_MIN_MESSAGES = 3
 _CONVERSATION_MIN_MESSAGE_CHARS = 100
 
-MAX_PARALLEL_TOOLS_MIN = _MAX_PARALLEL_TOOLS_MIN_
-MAX_PARALLEL_TOOLS_MAX = _MAX_PARALLEL_TOOLS_MAX_
-DEFAULT_MAX_PARALLEL_TOOLS = _DEFAULT_MAX_PARALLEL_TOOLS
-
 # Sub-agent settings
 SUB_AGENT_MAX_STEPS_MIN = _MAX_STEPS
 SUB_AGENT_MAX_STEPS_MAX = _MAX_STEPS_MAX
@@ -234,8 +229,8 @@ DEFAULT_SUB_AGENT_RETRY_ATTEMPTS = 2
 SUB_AGENT_RETRY_DELAY_SECONDS_MIN = _RETRY_DELAY_SECONDS_MIN
 SUB_AGENT_RETRY_DELAY_SECONDS_MAX = _RETRY_DELAY_SECONDS_MAX
 DEFAULT_SUB_AGENT_RETRY_DELAY_SECONDS = 5
-SUB_AGENT_MAX_PARALLEL_TOOLS_MIN = _MAX_PARALLEL_TOOLS_MIN_
-SUB_AGENT_MAX_PARALLEL_TOOLS_MAX = _MAX_PARALLEL_TOOLS_MAX_
+SUB_AGENT_MAX_PARALLEL_TOOLS_MIN = MAX_PARALLEL_TOOLS_MIN
+SUB_AGENT_MAX_PARALLEL_TOOLS_MAX = MAX_PARALLEL_TOOLS_MAX
 DEFAULT_SUB_AGENT_MAX_PARALLEL_TOOLS = 2
 
 CHAT_SUMMARY_DEFAULT_DETAIL_LEVEL = "balanced"
@@ -596,6 +591,65 @@ class RuntimeSettings:
         )
 
 
+# Per-field (persisted_key → (coercer, min, max)). The persisted key is the
+# lowercase field name; the coercer is one of ``_runtime_setting_*``.
+_RUNTIME_FIELD_COERCERS: dict[str, tuple[str, int | float, int | float]] = {
+    "OPENROUTER_HTTP_REFERER": ("str", "", ""),
+    "OPENROUTER_APP_TITLE": ("str", "", ""),
+    "LOGIN_SESSION_TIMEOUT_MINUTES": ("int", 1, 10_080),
+    "LOGIN_MAX_FAILED_ATTEMPTS": ("int", 1, 50),
+    "LOGIN_LOCKOUT_SECONDS": ("int", 1, 86_400),
+    "LOGIN_REMEMBER_SESSION_DAYS": ("int", 1, 3_650),
+    "CONVERSATION_MEMORY_ENABLED": ("bool", 0, 1),
+    "OCR_ENABLED": ("bool", 0, 1),
+    "YOUTUBE_TRANSCRIPTS_ENABLED": ("bool", 0, 1),
+    "RAG_ENABLED": ("bool", 0, 1),
+    "CHAT_SUMMARY_MODEL": ("str", "", ""),
+    "RAG_CHUNK_SIZE": ("int", 300, CONTENT_MAX_CHARS),
+    "RAG_CHUNK_OVERLAP": ("int", 0, max(0, RAG_CHUNK_SIZE // 2)),
+    "RAG_MAX_CHUNKS_PER_SOURCE": ("int", 1, 20),
+    "RAG_SEARCH_DEFAULT_TOP_K": ("int", 1, 50),
+    "RAG_SEARCH_MIN_SIMILARITY": ("float", 0.0, 1.0),
+    "RAG_QUERY_EXPANSION_ENABLED": ("bool", 0, 1),
+    "RAG_QUERY_EXPANSION_MAX_VARIANTS": ("int", 1, 10),
+    "FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS": ("int", 1_000, CONTENT_MAX_CHARS),
+    "FETCH_SUMMARY_MAX_CHARS": ("int", 500, CONTENT_MAX_CHARS),
+}
+_RUNTIME_FIELD_PERSISTED_KEYS: dict[str, str] = {
+    "FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS": "fetch_raw_max_text_chars",
+    "FETCH_SUMMARY_MAX_CHARS": "fetch_summary_max_chars",
+    "RAG_SEARCH_DEFAULT_TOP_K": "rag_search_top_k",
+}
+
+
+def _apply_persisted_runtime_setting(rs: "RuntimeSettings", field_name: str, persisted: dict) -> None:
+    """Coerce one persisted setting onto ``rs`` based on its declared coercer.
+
+    ``RAG_CHUNK_OVERLAP`` is handled specially: its upper bound is the
+    post-coercion ``rs.RAG_CHUNK_SIZE // 2``, which depends on a sibling field
+    that has already been coerced in this loop (iteration order in
+    ``_RUNTIME_FIELD_COERCERS`` keeps ``RAG_CHUNK_SIZE`` first).
+    """
+    coercer_kind, minimum, maximum = _RUNTIME_FIELD_COERCERS.get(field_name, ("str", "", ""))
+    persisted_key = _RUNTIME_FIELD_PERSISTED_KEYS.get(field_name, field_name.lower())
+    raw = persisted.get(persisted_key)
+    current = getattr(rs, field_name)
+    if field_name == "RAG_CHUNK_OVERLAP":
+        overlap_max = max(0, int(rs.RAG_CHUNK_SIZE) // 2)
+        setattr(rs, field_name, _runtime_setting_int(raw, current, 0, overlap_max))
+        return
+    if coercer_kind == "bool":
+        setattr(rs, field_name, _runtime_setting_bool(raw, current))
+    elif coercer_kind == "int":
+        setattr(rs, field_name, _runtime_setting_int(raw, current, minimum, maximum))
+    elif coercer_kind == "float":
+        setattr(rs, field_name, _runtime_setting_float(raw, current, minimum, maximum))
+    elif field_name == "CHAT_SUMMARY_MODEL":
+        setattr(rs, field_name, (str(raw or "").strip() or current) or DEFAULT_CHAT_MODEL)
+    else:
+        setattr(rs, field_name, str(raw if raw is not None else current or "").strip())
+
+
 _runtime_settings: RuntimeSettings | None = None
 
 
@@ -606,10 +660,6 @@ def _init_runtime_settings() -> None:
 
 
 _init_runtime_settings()
-
-# Backward-compatible empty dict — test fixtures may still write to it.
-# apply_persisted_runtime_settings() reads from _runtime_settings, not this.
-_RUNTIME_BASE_VALUES: dict[str, object] = {}
 
 
 def _read_persisted_runtime_settings(database_path: str | None = None) -> dict[str, str]:
@@ -635,102 +685,9 @@ def apply_persisted_runtime_settings(database_path: str | None = None) -> dict[s
     # keeping a stale in-memory override.
     rs = RuntimeSettings.from_defaults()
 
-    rs.OPENROUTER_HTTP_REFERER = str(
-        persisted.get("openrouter_http_referer", rs.OPENROUTER_HTTP_REFERER) or ""
-    ).strip()
-    rs.OPENROUTER_APP_TITLE = str(
-        persisted.get("openrouter_app_title", rs.OPENROUTER_APP_TITLE) or ""
-    ).strip()
-    rs.LOGIN_SESSION_TIMEOUT_MINUTES = _runtime_setting_int(
-        persisted.get("login_session_timeout_minutes"),
-        rs.LOGIN_SESSION_TIMEOUT_MINUTES,
-        1,
-        10_080,
-    )
-    rs.LOGIN_MAX_FAILED_ATTEMPTS = _runtime_setting_int(
-        persisted.get("login_max_failed_attempts"),
-        rs.LOGIN_MAX_FAILED_ATTEMPTS,
-        1,
-        50,
-    )
-    rs.LOGIN_LOCKOUT_SECONDS = _runtime_setting_int(
-        persisted.get("login_lockout_seconds"),
-        rs.LOGIN_LOCKOUT_SECONDS,
-        1,
-        86_400,
-    )
-    rs.LOGIN_REMEMBER_SESSION_DAYS = _runtime_setting_int(
-        persisted.get("login_remember_session_days"),
-        rs.LOGIN_REMEMBER_SESSION_DAYS,
-        1,
-        3_650,
-    )
-    rs.CONVERSATION_MEMORY_ENABLED = _runtime_setting_bool(
-        persisted.get("conversation_memory_enabled"),
-        rs.CONVERSATION_MEMORY_ENABLED,
-    )
-    rs.OCR_ENABLED = _runtime_setting_bool(persisted.get("ocr_enabled"), rs.OCR_ENABLED)
-    rs.YOUTUBE_TRANSCRIPTS_ENABLED = _runtime_setting_bool(
-        persisted.get("youtube_transcripts_enabled"),
-        rs.YOUTUBE_TRANSCRIPTS_ENABLED,
-    )
-    rs.RAG_ENABLED = _runtime_setting_bool(persisted.get("rag_enabled"), rs.RAG_ENABLED)
-    rs.CHAT_SUMMARY_MODEL = (
-        str(persisted.get("chat_summary_model", rs.CHAT_SUMMARY_MODEL) or "").strip()
-        or DEFAULT_CHAT_MODEL
-    )
-    rs.RAG_CHUNK_SIZE = _runtime_setting_int(
-        persisted.get("rag_chunk_size"),
-        rs.RAG_CHUNK_SIZE,
-        300,
-        CONTENT_MAX_CHARS,
-    )
-    rs.RAG_CHUNK_OVERLAP = _runtime_setting_int(
-        persisted.get("rag_chunk_overlap"),
-        rs.RAG_CHUNK_OVERLAP,
-        0,
-        max(0, rs.RAG_CHUNK_SIZE // 2),
-    )
-    rs.RAG_MAX_CHUNKS_PER_SOURCE = _runtime_setting_int(
-        persisted.get("rag_max_chunks_per_source"),
-        rs.RAG_MAX_CHUNKS_PER_SOURCE,
-        1,
-        20,
-    )
-    rs.RAG_SEARCH_DEFAULT_TOP_K = _runtime_setting_int(
-        persisted.get("rag_search_top_k"),
-        rs.RAG_SEARCH_DEFAULT_TOP_K,
-        1,
-        50,
-    )
-    rs.RAG_SEARCH_MIN_SIMILARITY = _runtime_setting_float(
-        persisted.get("rag_search_min_similarity"),
-        rs.RAG_SEARCH_MIN_SIMILARITY,
-        0.0,
-        1.0,
-    )
-    rs.RAG_QUERY_EXPANSION_ENABLED = _runtime_setting_bool(
-        persisted.get("rag_query_expansion_enabled"),
-        rs.RAG_QUERY_EXPANSION_ENABLED,
-    )
-    rs.RAG_QUERY_EXPANSION_MAX_VARIANTS = _runtime_setting_int(
-        persisted.get("rag_query_expansion_max_variants"),
-        rs.RAG_QUERY_EXPANSION_MAX_VARIANTS,
-        1,
-        10,
-    )
-    rs.FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS = _runtime_setting_int(
-        persisted.get("fetch_raw_max_text_chars"),
-        rs.FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS,
-        1_000,
-        CONTENT_MAX_CHARS,
-    )
-    rs.FETCH_SUMMARY_MAX_CHARS = _runtime_setting_int(
-        persisted.get("fetch_summary_max_chars"),
-        rs.FETCH_SUMMARY_MAX_CHARS,
-        500,
-        CONTENT_MAX_CHARS,
-    )
+    for field_name in _RUNTIME_FIELD_COERCERS:
+        _apply_persisted_runtime_setting(rs, field_name, persisted)
+
     rs.IMAGE_UPLOADS_ENABLED = (
         rs.OCR_ENABLED
         or bool(OPENROUTER_API_KEY)
@@ -740,30 +697,18 @@ def apply_persisted_runtime_settings(database_path: str | None = None) -> dict[s
     # Store back to module-level runtime settings
     _runtime_settings = rs
 
-    DEFAULT_SETTINGS.update(
-        {
-            "openrouter_http_referer": rs.OPENROUTER_HTTP_REFERER,
-            "openrouter_app_title": rs.OPENROUTER_APP_TITLE,
-            "login_session_timeout_minutes": str(rs.LOGIN_SESSION_TIMEOUT_MINUTES),
-            "login_max_failed_attempts": str(rs.LOGIN_MAX_FAILED_ATTEMPTS),
-            "login_lockout_seconds": str(rs.LOGIN_LOCKOUT_SECONDS),
-            "login_remember_session_days": str(rs.LOGIN_REMEMBER_SESSION_DAYS),
-            "conversation_memory_enabled": "true" if rs.CONVERSATION_MEMORY_ENABLED else "false",
-            "ocr_enabled": "true" if rs.OCR_ENABLED else "false",
-            "rag_enabled": "true" if rs.RAG_ENABLED else "false",
-            "youtube_transcripts_enabled": "true" if rs.YOUTUBE_TRANSCRIPTS_ENABLED else "false",
-            "chat_summary_model": rs.CHAT_SUMMARY_MODEL,
-            "rag_chunk_size": str(rs.RAG_CHUNK_SIZE),
-            "rag_chunk_overlap": str(rs.RAG_CHUNK_OVERLAP),
-            "rag_max_chunks_per_source": str(rs.RAG_MAX_CHUNKS_PER_SOURCE),
-            "rag_search_top_k": str(rs.RAG_SEARCH_DEFAULT_TOP_K),
-            "rag_search_min_similarity": str(rs.RAG_SEARCH_MIN_SIMILARITY),
-            "rag_query_expansion_enabled": "true" if rs.RAG_QUERY_EXPANSION_ENABLED else "false",
-            "rag_query_expansion_max_variants": str(rs.RAG_QUERY_EXPANSION_MAX_VARIANTS),
-            "fetch_raw_max_text_chars": str(rs.FETCH_RAW_TOOL_RESULT_MAX_TEXT_CHARS),
-            "fetch_summary_max_chars": str(rs.FETCH_SUMMARY_MAX_CHARS),
-        }
-    )
+    for field_name in _RUNTIME_FIELD_COERCERS:
+        value = getattr(rs, field_name)
+        if isinstance(value, bool):
+            DEFAULT_SETTINGS[_RUNTIME_FIELD_PERSISTED_KEYS.get(field_name, field_name.lower())] = (
+                "true" if value else "false"
+            )
+        elif isinstance(value, float):
+            DEFAULT_SETTINGS[_RUNTIME_FIELD_PERSISTED_KEYS.get(field_name, field_name.lower())] = str(value)
+        elif field_name == "CHAT_SUMMARY_MODEL":
+            DEFAULT_SETTINGS["chat_summary_model"] = value or DEFAULT_CHAT_MODEL
+        else:
+            DEFAULT_SETTINGS[_RUNTIME_FIELD_PERSISTED_KEYS.get(field_name, field_name.lower())] = str(value)
 
     return persisted
 

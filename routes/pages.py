@@ -1281,24 +1281,105 @@ def register_page_routes(app) -> None:
         settings: dict,
     ) -> tuple[None, None] | tuple[dict, int]:
         """Apply prompt, summary, and compaction settings. Returns (None, None) on success, (error_response, status_code) on error."""
-        chat_summary_mode_raw = data.get("chat_summary_mode")
-        chat_summary_detail_level_raw = data.get("chat_summary_detail_level")
-        chat_summary_trigger_raw = data.get("chat_summary_trigger_token_count")
-        summary_skip_first_raw = data.get("summary_skip_first")
-        summary_skip_last_raw = data.get("summary_skip_last")
-        prompt_max_input_tokens_raw = data.get("prompt_max_input_tokens")
-        prompt_response_token_reserve_raw = data.get("prompt_response_token_reserve")
-        prompt_recent_history_max_tokens_raw = data.get("prompt_recent_history_max_tokens")
-        prompt_summary_max_tokens_raw = data.get("prompt_summary_max_tokens")
-        prompt_preflight_summary_token_count_raw = data.get("prompt_preflight_summary_token_count")
-        prompt_rag_max_tokens_raw = data.get("prompt_rag_max_tokens")
-        prompt_tool_trace_max_tokens_raw = data.get("prompt_tool_trace_max_tokens")
-        summary_source_target_tokens_raw = data.get("summary_source_target_tokens")
-        summary_retry_min_source_tokens_raw = data.get("summary_retry_min_source_tokens")
-        context_compaction_threshold_raw = data.get("context_compaction_threshold")
-        context_compaction_keep_recent_rounds_raw = data.get("context_compaction_keep_recent_rounds")
-        reasoning_auto_collapse_raw = data.get("reasoning_auto_collapse")
 
+        # Declarative validation spec: each entry is (key, kind, kwargs).
+        # kind="enum" requires ``allowed`` and ``error``; kind="int" requires
+        # ``min``, ``max``, ``error``; kind="float" requires ``min``, ``max``,
+        # ``error``; kind="bool" just needs ``error``. Cross-field validation
+        # runs after the spec-driven loop below.
+        int_specs: list[dict] = [
+            {
+                "key": "chat_summary_trigger_token_count",
+                "min": 1_000,
+                "max": 200_000,
+                "error": "chat_summary_trigger_token_count must be between 1000 and 200000.",
+            },
+            {
+                "key": "summary_skip_first",
+                "min": 0,
+                "max": 20,
+                "error": "summary_skip_first must be between 0 and 20.",
+            },
+            {
+                "key": "summary_skip_last",
+                "min": 0,
+                "max": 20,
+                "error": "summary_skip_last must be between 0 and 20.",
+            },
+            {
+                "key": "prompt_max_input_tokens",
+                "min": 8_000,
+                "max": 120_000,
+                "error": "prompt_max_input_tokens must be between 8000 and 120000.",
+            },
+            {
+                "key": "prompt_response_token_reserve",
+                "min": 1_000,
+                "max": 32_000,
+                "error": "prompt_response_token_reserve must be between 1000 and 32000.",
+            },
+            {
+                "key": "prompt_recent_history_max_tokens",
+                "min": 1_000,
+                "max": 120_000,
+                "error": "prompt_recent_history_max_tokens must be between 1000 and 120000.",
+            },
+            {
+                "key": "prompt_summary_max_tokens",
+                "min": 500,
+                "max": 120_000,
+                "error": "prompt_summary_max_tokens must be between 500 and 120000.",
+            },
+            {
+                "key": "prompt_preflight_summary_token_count",
+                "min": 2_000,
+                "max": 200_000,
+                "error": "prompt_preflight_summary_token_count must be between 2000 and 200000.",
+            },
+            {
+                "key": "prompt_rag_max_tokens",
+                "min": 0,
+                "max": 120_000,
+                "error": "prompt_rag_max_tokens must be between 0 and 120000.",
+            },
+            {
+                "key": "prompt_tool_trace_max_tokens",
+                "min": 0,
+                "max": 120_000,
+                "error": "prompt_tool_trace_max_tokens must be between 0 and 120000.",
+            },
+            {
+                "key": "summary_source_target_tokens",
+                "min": 1_000,
+                "max": 40_000,
+                "error": "summary_source_target_tokens must be between 1000 and 40000.",
+            },
+            {
+                "key": "summary_retry_min_source_tokens",
+                "min": 500,
+                "max": 40_000,
+                "error": "summary_retry_min_source_tokens must be between 500 and 40000.",
+            },
+            {
+                "key": "context_compaction_keep_recent_rounds",
+                "min": 0,
+                "max": 6,
+                "error": "context_compaction_keep_recent_rounds must be between 0 and 6.",
+            },
+        ]
+        for spec in int_specs:
+            raw = data.get(spec["key"])
+            if raw is None:
+                continue
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": f"{spec['key']} must be an integer."}), 400
+            if not (spec["min"] <= value <= spec["max"]):
+                return jsonify({"error": spec["error"]}), 400
+            settings[spec["key"]] = str(value)
+
+        chat_summary_mode_raw = data.get("chat_summary_mode")
         if chat_summary_mode_raw is not None:
             normalized_summary_mode = str(chat_summary_mode_raw or "").strip().lower()
             if normalized_summary_mode not in CHAT_SUMMARY_ALLOWED_MODES:
@@ -1307,6 +1388,7 @@ def register_page_routes(app) -> None:
                 ), 400
             settings["chat_summary_mode"] = normalized_summary_mode
 
+        chat_summary_detail_level_raw = data.get("chat_summary_detail_level")
         if chat_summary_detail_level_raw is not None:
             normalized_summary_detail_level = str(chat_summary_detail_level_raw or "").strip().lower()
             if normalized_summary_detail_level not in {
@@ -1323,114 +1405,7 @@ def register_page_routes(app) -> None:
                 ), 400
             settings["chat_summary_detail_level"] = normalized_summary_detail_level
 
-        if chat_summary_trigger_raw is not None:
-            try:
-                chat_summary_trigger = int(chat_summary_trigger_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "chat_summary_trigger_token_count must be an integer."}), 400
-            if not (1_000 <= chat_summary_trigger <= 200_000):
-                return jsonify({"error": "chat_summary_trigger_token_count must be between 1000 and 200000."}), 400
-            settings["chat_summary_trigger_token_count"] = str(chat_summary_trigger)
-
-        if summary_skip_first_raw is not None:
-            try:
-                summary_skip_first = int(summary_skip_first_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "summary_skip_first must be an integer."}), 400
-            if not (0 <= summary_skip_first <= 20):
-                return jsonify({"error": "summary_skip_first must be between 0 and 20."}), 400
-            settings["summary_skip_first"] = str(summary_skip_first)
-
-        if summary_skip_last_raw is not None:
-            try:
-                summary_skip_last = int(summary_skip_last_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "summary_skip_last must be an integer."}), 400
-            if not (0 <= summary_skip_last <= 20):
-                return jsonify({"error": "summary_skip_last must be between 0 and 20."}), 400
-            settings["summary_skip_last"] = str(summary_skip_last)
-
-        if prompt_max_input_tokens_raw is not None:
-            try:
-                prompt_max_input_tokens = int(prompt_max_input_tokens_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "prompt_max_input_tokens must be an integer."}), 400
-            if not (8_000 <= prompt_max_input_tokens <= 120_000):
-                return jsonify({"error": "prompt_max_input_tokens must be between 8000 and 120000."}), 400
-            settings["prompt_max_input_tokens"] = str(prompt_max_input_tokens)
-
-        if prompt_response_token_reserve_raw is not None:
-            try:
-                prompt_response_token_reserve = int(prompt_response_token_reserve_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "prompt_response_token_reserve must be an integer."}), 400
-            if not (1_000 <= prompt_response_token_reserve <= 32_000):
-                return jsonify({"error": "prompt_response_token_reserve must be between 1000 and 32000."}), 400
-            settings["prompt_response_token_reserve"] = str(prompt_response_token_reserve)
-
-        if prompt_recent_history_max_tokens_raw is not None:
-            try:
-                prompt_recent_history_max_tokens = int(prompt_recent_history_max_tokens_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "prompt_recent_history_max_tokens must be an integer."}), 400
-            if not (1_000 <= prompt_recent_history_max_tokens <= 120_000):
-                return jsonify({"error": "prompt_recent_history_max_tokens must be between 1000 and 120000."}), 400
-            settings["prompt_recent_history_max_tokens"] = str(prompt_recent_history_max_tokens)
-
-        if prompt_summary_max_tokens_raw is not None:
-            try:
-                prompt_summary_max_tokens = int(prompt_summary_max_tokens_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "prompt_summary_max_tokens must be an integer."}), 400
-            if not (500 <= prompt_summary_max_tokens <= 120_000):
-                return jsonify({"error": "prompt_summary_max_tokens must be between 500 and 120000."}), 400
-            settings["prompt_summary_max_tokens"] = str(prompt_summary_max_tokens)
-
-        if prompt_preflight_summary_token_count_raw is not None:
-            try:
-                prompt_preflight_summary_token_count = int(prompt_preflight_summary_token_count_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "prompt_preflight_summary_token_count must be an integer."}), 400
-            if not (2_000 <= prompt_preflight_summary_token_count <= 200_000):
-                return jsonify({"error": "prompt_preflight_summary_token_count must be between 2000 and 200000."}), 400
-            settings["prompt_preflight_summary_token_count"] = str(prompt_preflight_summary_token_count)
-
-        if prompt_rag_max_tokens_raw is not None:
-            try:
-                prompt_rag_max_tokens = int(prompt_rag_max_tokens_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "prompt_rag_max_tokens must be an integer."}), 400
-            if not (0 <= prompt_rag_max_tokens <= 120_000):
-                return jsonify({"error": "prompt_rag_max_tokens must be between 0 and 120000."}), 400
-            settings["prompt_rag_max_tokens"] = str(prompt_rag_max_tokens)
-
-        if prompt_tool_trace_max_tokens_raw is not None:
-            try:
-                prompt_tool_trace_max_tokens = int(prompt_tool_trace_max_tokens_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "prompt_tool_trace_max_tokens must be an integer."}), 400
-            if not (0 <= prompt_tool_trace_max_tokens <= 120_000):
-                return jsonify({"error": "prompt_tool_trace_max_tokens must be between 0 and 120000."}), 400
-            settings["prompt_tool_trace_max_tokens"] = str(prompt_tool_trace_max_tokens)
-
-        if summary_source_target_tokens_raw is not None:
-            try:
-                summary_source_target_tokens = int(summary_source_target_tokens_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "summary_source_target_tokens must be an integer."}), 400
-            if not (1_000 <= summary_source_target_tokens <= 40_000):
-                return jsonify({"error": "summary_source_target_tokens must be between 1000 and 40000."}), 400
-            settings["summary_source_target_tokens"] = str(summary_source_target_tokens)
-
-        if summary_retry_min_source_tokens_raw is not None:
-            try:
-                summary_retry_min_source_tokens = int(summary_retry_min_source_tokens_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "summary_retry_min_source_tokens must be an integer."}), 400
-            if not (500 <= summary_retry_min_source_tokens <= 40_000):
-                return jsonify({"error": "summary_retry_min_source_tokens must be between 500 and 40000."}), 400
-            settings["summary_retry_min_source_tokens"] = str(summary_retry_min_source_tokens)
-
+        context_compaction_threshold_raw = data.get("context_compaction_threshold")
         if context_compaction_threshold_raw is not None:
             try:
                 context_compaction_threshold = float(context_compaction_threshold_raw)
@@ -1440,15 +1415,7 @@ def register_page_routes(app) -> None:
                 return jsonify({"error": "context_compaction_threshold must be between 0.5 and 0.98."}), 400
             settings["context_compaction_threshold"] = str(context_compaction_threshold)
 
-        if context_compaction_keep_recent_rounds_raw is not None:
-            try:
-                context_compaction_keep_recent_rounds = int(context_compaction_keep_recent_rounds_raw)
-            except (TypeError, ValueError):
-                return jsonify({"error": "context_compaction_keep_recent_rounds must be an integer."}), 400
-            if not (0 <= context_compaction_keep_recent_rounds <= 6):
-                return jsonify({"error": "context_compaction_keep_recent_rounds must be between 0 and 6."}), 400
-            settings["context_compaction_keep_recent_rounds"] = str(context_compaction_keep_recent_rounds)
-
+        reasoning_auto_collapse_raw = data.get("reasoning_auto_collapse")
         if reasoning_auto_collapse_raw is not None:
             if isinstance(reasoning_auto_collapse_raw, bool):
                 settings["reasoning_auto_collapse"] = "true" if reasoning_auto_collapse_raw else "false"

@@ -233,20 +233,6 @@ def _validate_resolved_ip_address(address: str) -> None:
 
 
 @contextlib.contextmanager
-def _guarded_dns_resolution(enabled: bool = True):
-    """Deprecated: kept for backward compatibility of internal callers."""
-    import warnings
-
-    warnings.warn(
-        "_guarded_dns_resolution is deprecated. DNS validation is now handled "
-        "per-call by web.url_security.assert_public_addresses().",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    yield
-
-
-@contextlib.contextmanager
 def _pin_hostname_dns(hostname: str, approved_addresses: list[str]):
     """Pin ``hostname`` DNS resolution to ``approved_addresses`` during the block.
 

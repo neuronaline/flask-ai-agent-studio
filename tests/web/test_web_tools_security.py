@@ -37,18 +37,6 @@ def test_validate_resolved_ip_address_accepts_public_ip():
     web_tools._validate_resolved_ip_address("93.184.216.34")
 
 
-
-def test_guarded_dns_resolution_emits_deprecation_warning():
-    import warnings
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        with web_tools._guarded_dns_resolution(enabled=True):
-            pass
-    deprecations = [x for x in w if issubclass(x.category, DeprecationWarning)]
-    assert len(deprecations) >= 1
-    assert "_guarded_dns_resolution is deprecated" in str(deprecations[0].message)
-
-
 def test_validate_hostname_dns_rejects_private_ip(monkeypatch):
     def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 0))]

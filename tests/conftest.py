@@ -71,7 +71,6 @@ def isolate_test_state(monkeypatch):
 
     # Ensure runtime settings are at their defaults via get_runtime_setting()
     config._runtime_settings = config.RuntimeSettings.from_defaults()
-    config._RUNTIME_BASE_VALUES["RAG_ENABLED"] = True  # backward-compat fallback
 
     fake_client = FakeChromaClient()
     rag_store._client = None
