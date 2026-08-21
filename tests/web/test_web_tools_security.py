@@ -7,22 +7,23 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
+from web import url_security
 from web import web_tools
 
 
 @pytest.mark.parametrize(
-    ("url", "expected_reason"),
+    ("url", "expected_reason_fragment"),
     [
-        ("ftp://example.com/file.txt", "Only http and https are supported"),
-        ("https:///missing-host", "Hostname not found"),
-        ("http://localhost/internal", "Local addresses are prohibited"),
+        ("ftp://example.com/file.txt", "not allowed"),
+        ("https:///missing-host", "Empty hostname"),
+        ("http://localhost/internal", "localhost"),
     ],
 )
-def test_is_safe_url_rejects_invalid_and_local_urls(url, expected_reason):
+def test_is_safe_url_rejects_invalid_and_local_urls(url, expected_reason_fragment):
     safe, reason = web_tools._is_safe_url(url)
 
     assert safe is False
-    assert reason == expected_reason
+    assert expected_reason_fragment.lower() in reason.lower()
 
 
 @pytest.mark.parametrize("address", ["127.0.0.1", "10.0.0.5", "169.254.169.254"])
@@ -52,7 +53,7 @@ def test_validate_hostname_dns_rejects_private_ip(monkeypatch):
     def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 0))]
     monkeypatch.setattr(web_tools.socket, "getaddrinfo", fake_getaddrinfo)
-    with pytest.raises(socket.gaierror, match="non-public"):
+    with pytest.raises((socket.gaierror, url_security.URLSecurityError), match="not public"):
         web_tools._validate_hostname_dns("internal.example.com")
 
 
@@ -69,7 +70,8 @@ def test_fetch_url_tool_rejects_localhost_without_network_access():
 
     assert result["url"] == "http://localhost/private"
     assert result["content"] == ""
-    assert result["error"] == "Local addresses are prohibited"
+    assert "localhost" in result["error"].lower()
+    assert result["code"] in {"url_rejected", "dns_rejected"}
 
 
 def test_search_web_tool_uses_cached_results_without_hitting_provider(monkeypatch):
@@ -297,8 +299,7 @@ def test_fetch_url_tool_surfaces_pagefetch_error(monkeypatch):
 
     result = web_tools.fetch_url_tool("https://example.com")
 
-    assert result == {
-        "url": "https://example.com",
-        "error": "blocked upstream",
-        "content": "",
-    }
+    assert result["url"] == "https://example.com"
+    assert result["error"] == "blocked upstream"
+    assert result["content"] == ""
+    assert result["code"] == "fetch_failed"

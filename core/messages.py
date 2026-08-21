@@ -2546,9 +2546,6 @@ def _build_runtime_dynamic_state_parts(
         parts.append(profile_text)
         parts.append("")
 
-    persona_memory_tools_enabled = any(
-        name in {"save_to_persona_memory", "delete_persona_memory_entry"} for name in runtime_tool_names
-    )
     conversation_memory_tools_enabled = any(
         name in {"save_to_conversation_memory", "delete_conversation_memory_entry"} for name in runtime_tool_names
     )
@@ -2718,9 +2715,6 @@ def _build_runtime_static_parts(
     canvas_documents: list[dict] | None = None,
 ) -> list[str]:
     preferences_text = (user_preferences or "").strip()
-    persona_memory_tools_enabled = any(
-        name in {"save_to_persona_memory", "delete_persona_memory_entry"} for name in runtime_tool_names
-    )
     conversation_memory_tools_enabled = any(
         name in {"save_to_conversation_memory", "delete_conversation_memory_entry"} for name in runtime_tool_names
     )
@@ -2763,11 +2757,6 @@ def _build_runtime_static_parts(
         policies.append(f"**Clarification**: {clarification_policy['guidance']}")
     if policies:
         parts.append(get_prompt("system.policies_intro", "## Important Policies\n") + "\n".join(f"- {policy}" for policy in policies) + "\n")
-
-    if persona_memory_tools_enabled:
-        parts.append(get_prompt("memory.persona.header", "## Persona Memory"))
-        parts.append(get_prompt("memory.persona.guidance", ""))
-        parts.append("")
 
     if conversation_memory_tools_enabled:
         parts.append(get_prompt("memory.conversation.header", "## Conversation Memory"))

@@ -4,7 +4,7 @@ Isolated Agent Runner — Reusable sub-agent execution for delegation and web to
 Per Phase 6 of AI Memory and Context Management:
 - Fresh message list (no access to parent Tier 2 history)
 - Explicit tool allowlist
-- No recursive delegation (delegate_task stripped from child context)
+- Defensive filtering of unknown tools to prevent tool-name drift
 - Cancellation, timeout, structured failure handling
 - Canvas: read-only snapshot provided as context preamble
 """
@@ -15,8 +15,8 @@ import threading
 import time
 from typing import Any
 
-from core.config import get_runtime_setting, DEFAULT_CHAT_MODEL
-from lib.model_registry import get_operation_model, resolve_model_target, DEFAULT_CHAT_MODEL as _MD
+from core.config import DEFAULT_CHAT_MODEL
+from lib.model_registry import get_operation_model
 
 ISOLATED_AGENT_DEFAULT_MAX_STEPS = 8
 ISOLATED_AGENT_DEFAULT_TIMEOUT = 120.0
@@ -47,7 +47,7 @@ def _build_isolated_system_message(
     tools_note = ", ".join(sorted(allowlist_tools or []))
     parts.append(
         f"\n## Available Tools\n{tools_note}\n"
-        "You do NOT have access to delegate_task — you must complete the work directly."
+        "You only have access to the tools listed above — complete the work directly."
     )
 
     if canvas_readonly_snapshot:
@@ -141,8 +141,9 @@ def run_isolated_agent(
     if not allowlist_tools:
         allowlist_tools = []
 
-    # Strip delegate_task to prevent recursive delegation
-    safe_tools = [t for t in allowlist_tools if t != "delegate_task"]
+    # Defensive: drop any tool names that are no longer registered so a
+    # removed or renamed tool cannot leak into a child context.
+    safe_tools = [t for t in allowlist_tools if t in {"search_web", "fetch_url"}]
 
     # Resolve model
     from core.db import get_app_settings
@@ -210,7 +211,20 @@ def run_isolated_agent(
             elif event_type == "tool_error":
                 errors.append(event.get("error") or "Unknown tool error")
             elif event_type == "done":
-                success = True
+                # The agent emits a status field to distinguish clean completion
+                # from fatal-error termination. Treat anything other than
+                # "ok" / "clarification" as a non-success so callers do not
+                # report a successful sub-agent run when the parent aborted
+                # with a context-overflow or other fatal error.
+                done_status = str(event.get("status") or "ok").strip().lower()
+                if done_status in {"ok", "clarification"}:
+                    success = True
+                else:
+                    success = False
+                    if errors is not None and "fatal_api_error" not in errors:
+                        errors.append(
+                            f"Sub-agent ended with fatal status: {done_status or 'unknown'}"
+                        )
 
     except Exception as exc:
         exc_str = str(exc)

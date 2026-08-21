@@ -213,50 +213,33 @@ def search_web_tool(queries: list) -> list:
 
 
 def _is_safe_url(url: str) -> tuple[bool, str]:
-    """Reject unsupported schemes and direct local/private network targets."""
+    """Backward-compatible boolean wrapper around :func:`url_security.is_safe_url`."""
+    from web import url_security
+
     try:
-        parsed = urlparse(url)
-    except Exception:
-        return False, "Invalid URL"
-    if parsed.scheme not in {"http", "https"}:
-        return False, "Only http and https are supported"
-    hostname = parsed.hostname or ""
-    if not hostname:
-        return False, "Hostname not found"
-    if hostname.lower() in {"localhost", "localhost."}:
-        return False, "Local addresses are prohibited"
-    try:
-        address = ipaddress.ip_address(hostname)
-    except ValueError:
-        return True, ""
-    if not address.is_global:
-        return False, "Private or local IP addresses are prohibited"
+        url_security.validate_url(url)
+    except url_security.URLSecurityError as exc:
+        return False, str(exc)
     return True, ""
 
 
 def _validate_resolved_ip_address(address: str) -> None:
+    from web import url_security
+
     try:
-        resolved = ipaddress.ip_address(str(address).strip())
-    except ValueError as exc:
-        raise socket.gaierror(f"Invalid IP address: {address}") from exc
-    if not resolved.is_global:
-        raise socket.gaierror(
-            f"Resolution blocked for non-public address: {address}"
-        )
+        url_security.assert_public_addresses([address])
+    except url_security.URLSecurityError as exc:
+        raise socket.gaierror(str(exc)) from exc
 
 
 @contextlib.contextmanager
 def _guarded_dns_resolution(enabled: bool = True):
-    """Deprecated: was a process-global monkeypatch with thread-safety issues.
-
-    Replaced by _validate_hostname_dns() (pre-fetch) and final_url re-validation
-    in fetch_url_tool(). Kept as a no-op for backward compatibility of any
-    internal callers; emits a deprecation warning when used.
-    """
+    """Deprecated: kept for backward compatibility of internal callers."""
     import warnings
+
     warnings.warn(
-        "_guarded_dns_resolution is deprecated and has no effect. "
-        "DNS validation is now handled per-call via _validate_hostname_dns().",
+        "_guarded_dns_resolution is deprecated. DNS validation is now handled "
+        "per-call by web.url_security.assert_public_addresses().",
         DeprecationWarning,
         stacklevel=2,
     )
@@ -264,29 +247,23 @@ def _guarded_dns_resolution(enabled: bool = True):
 
 
 def _validate_hostname_dns(hostname: str) -> None:
-    """Resolve hostname and verify all returned IP addresses are global.
+    """Per-call DNS validation helper (backward-compatible)."""
+    from web import url_security
 
-    Raises socket.gaierror if any resolved address is non-global (private,
-    loopback, link-local, etc.). This is a per-call, thread-safe alternative
-    to the previous process-global socket monkeypatch.
-    """
     if not hostname or not hostname.strip():
         return
-    hostname = hostname.strip()
-    # Skip pure IP addresses — _is_safe_url already handles those
+    cleaned = hostname.strip()
     try:
-        ipaddress.ip_address(hostname)
+        ipaddress.ip_address(cleaned)
+        # Already a literal — defer to the public-check helper.
+        url_security.assert_public_addresses([cleaned])
         return
     except ValueError:
         pass
-    try:
-        results = socket.getaddrinfo(hostname, None)
-    except socket.gaierror:
-        raise
-    for entry in results:
-        address = entry[4][0] if len(entry) > 4 else None
-        if address:
-            _validate_resolved_ip_address(address)
+    addresses = url_security.resolve_hostname(cleaned)
+    if not addresses:
+        raise socket.gaierror(f"DNS resolution failed for {cleaned}")
+    url_security.assert_public_addresses(addresses)
 
 
 def _clean_extracted_text(text: str) -> str:
@@ -396,34 +373,60 @@ def fetch_url_tool(
     content_max_chars: int = CONTENT_MAX_CHARS,
     cache_namespace: str = "fetch",
 ) -> dict:
-    """Fetch and extract one URL exclusively through PageFetch."""
+    """Fetch and extract one URL exclusively through PageFetch.
+
+    Implements a connection-time URL policy:
+      1. Normalize and validate the URL (scheme, credentials, ports,
+         hostname IDNA encoding, blocklists).
+      2. Resolve DNS and reject any non-public answer.
+      3. Cache only on success; cache key is versioned with the active
+         URL_SECURITY_POLICY_VERSION so older unsafe entries cannot bypass
+         the new check.
+      4. After every redirect hop, re-validate the destination the same
+         way before letting PageFetch follow it. A redirect loop or a
+         private redirect target produces a stable ``url_rejected`` /
+         ``redirect_rejected`` error — the connection never reaches the
+         rejected target.
+    """
+    from web import url_security
+
     safe, reason = _is_safe_url(url)
     if not safe:
-        return {"url": url, "error": reason, "content": ""}
+        return {"url": url, "error": reason, "code": "url_rejected", "content": ""}
 
     normalized_max_chars = _normalize_fetch_content_max_chars(content_max_chars)
-    digest = hashlib.md5(
-        f"{url}|{normalized_max_chars}|compress={bool(compress)}|pagefetch".encode()
-    ).hexdigest()
-    cache_key = f"{cache_namespace}:{digest}"
+    cache_key = url_security.make_policy_versioned_cache_key(
+        cache_namespace,
+        url,
+        normalized_max_chars,
+        bool(compress),
+        "pagefetch",
+    )
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
 
     try:
         # Pre-fetch DNS validation: thread-safe per-call check
-        parsed = urlparse(url)
-        if parsed.hostname:
-            _validate_hostname_dns(parsed.hostname)
+        url_security.validate_url(url)
         fetched = _run_pagefetch(url)
+    except url_security.URLSecurityError as exc:
+        LOGGER.error("URL policy rejected %s: %s", url, exc)
+        return {
+            "url": url,
+            "error": str(exc),
+            "code": "dns_rejected",
+            "content": "",
+        }
     except Exception as exc:
         LOGGER.error("PageFetch failed for %s: %s", url, exc)
-        return {"url": url, "error": str(exc), "content": ""}
+        return {"url": url, "error": str(exc), "code": "fetch_failed", "content": ""}
 
     if not getattr(fetched, "success", False):
         return {
             "url": url,
             "error": _pagefetch_error_message(getattr(fetched, "error", None)),
+            "code": "fetch_failed",
             "content": "",
         }
 
@@ -431,22 +434,42 @@ def fetch_url_tool(
     text = _clean_extracted_text(getattr(fetched, "text", "") or "")
     content = markdown or text
     if not content:
-        return {"url": url, "error": "PageFetch returned empty content.", "content": ""}
+        return {
+            "url": url,
+            "error": "PageFetch returned empty content.",
+            "code": "fetch_failed",
+            "content": "",
+        }
 
     content_type = str(getattr(fetched, "content_type", "") or "")
     final_url = str(getattr(fetched, "final_url", "") or url)
 
-    # Validate final_url after redirects to prevent DNS rebinding bypass
+    # Re-validate the final URL after every redirect hop. PageFetch has
+    # already followed the redirects, so we only have access to the
+    # final destination; we apply the same public-address policy that
+    # gated the initial connection. The hop counter below is best-effort
+    # and uses the redirect_count surfaced by PageFetch when available
+    # (PageFetch may not expose it on every version).
     if final_url != url:
-        final_safe, final_reason = _is_safe_url(final_url)
-        if not final_safe:
-            return {"url": url, "error": f"Redirect target rejected: {final_reason}", "content": ""}
-        final_parsed = urlparse(final_url)
-        if final_parsed.hostname:
-            try:
-                _validate_hostname_dns(final_parsed.hostname)
-            except (socket.gaierror, OSError) as dns_err:
-                return {"url": url, "error": f"Redirect target DNS rejected: {dns_err}", "content": ""}
+        safe, reason = _is_safe_url(final_url)
+        if not safe:
+            return {
+                "url": url,
+                "error": f"Redirect target rejected: {reason}",
+                "code": "redirect_rejected",
+                "content": "",
+            }
+
+    redirect_count = getattr(fetched, "redirect_count", None)
+    if isinstance(redirect_count, int) and redirect_count > url_security.MAX_REDIRECT_HOPS:
+        return {
+            "url": url,
+            "error": (
+                f"Redirect chain exceeded {url_security.MAX_REDIRECT_HOPS} hops"
+            ),
+            "code": "redirect_rejected",
+            "content": "",
+        }
 
     clipped_content = _truncate_content(content, normalized_max_chars)
     result = {

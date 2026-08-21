@@ -4259,6 +4259,13 @@ def extract_message_usage(
 
 
 def _normalize_clarification_question_payload(value) -> dict | None:
+    """Normalize one stored clarification question preserving every canonical field.
+
+    Display text is sanitized; stable identifiers (id, option value) and
+    dependency targets are preserved verbatim so the form can match them
+    after a reload. Legacy string options are upgraded to the canonical
+    object form on read so older stored messages still render.
+    """
     if not isinstance(value, dict):
         return None
 
@@ -4266,23 +4273,87 @@ def _normalize_clarification_question_payload(value) -> dict | None:
     if not label:
         return None
 
-    cleaned = {"label": label}
+    cleaned: dict = {}
 
-    raw_options = value.get("options") if isinstance(value.get("options"), list) else []
-    normalized_options = []
-    for option in raw_options[:12]:
-        if isinstance(option, str):
-            text = str(option).strip()[:120]
-            if text:
-                normalized_options.append(text)
-        elif isinstance(option, dict):
-            text = str(option.get("label") or option.get("value") or "").strip()[:120]
-            if text:
-                normalized_options.append(text)
-    if normalized_options:
-        cleaned["options"] = normalized_options
+    raw_id = value.get("id")
+    if isinstance(raw_id, str) and raw_id.strip():
+        cleaned["id"] = raw_id.strip()[:80]
+
+    cleaned["label"] = label
+
+    raw_input_type = str(value.get("input_type") or "text").strip().lower()
+    cleaned["input_type"] = raw_input_type if raw_input_type in {
+        "text",
+        "single_select",
+        "multi_select",
+    } else "text"
+
+    if isinstance(value.get("required"), bool):
+        cleaned["required"] = value["required"]
+    else:
+        cleaned["required"] = True
+
+    placeholder = str(value.get("placeholder") or "").strip()[:200]
+    if placeholder:
+        cleaned["placeholder"] = placeholder
+
+    if isinstance(value.get("allow_free_text"), bool):
+        cleaned["allow_free_text"] = value["allow_free_text"]
+
+    raw_options = value.get("options")
+    if isinstance(raw_options, list):
+        normalized_options: list[dict] = []
+        for option in raw_options[:20]:
+            normalized_option = _normalize_clarification_option_payload(option)
+            if normalized_option is not None:
+                normalized_options.append(normalized_option)
+        if normalized_options:
+            cleaned["options"] = normalized_options
+
+    raw_depends_on = value.get("depends_on")
+    normalized_depends_on = _normalize_clarification_dependency_payload(raw_depends_on)
+    if normalized_depends_on is not None:
+        cleaned["depends_on"] = normalized_depends_on
 
     return cleaned
+
+
+def _normalize_clarification_option_payload(option) -> dict | None:
+    if isinstance(option, str):
+        text = option.strip()[:120]
+        if not text:
+            return None
+        # Legacy: stored string options are upgraded to objects on read.
+        return {"label": text, "value": text, "description": ""}
+    if not isinstance(option, dict):
+        return None
+    label = str(option.get("label") or option.get("value") or "").strip()[:120]
+    raw_value = option.get("value")
+    value = str(raw_value if raw_value not in (None, "") else option.get("label") or "").strip()[:120]
+    if not label or not value:
+        return None
+    description = str(option.get("description") or "").strip()[:200]
+    normalized = {"label": label, "value": value}
+    if description:
+        normalized["description"] = description
+    return normalized
+
+
+def _normalize_clarification_dependency_payload(value) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    question_id = str(value.get("question_id") or value.get("id") or "").strip()[:80]
+    raw_values = value.get("values")
+    if not question_id or not isinstance(raw_values, list):
+        return None
+    normalized_values: list[str] = []
+    for raw_value in raw_values:
+        text = str(raw_value or "").strip()[:120]
+        if text and text not in normalized_values:
+            normalized_values.append(text)
+    if not normalized_values:
+        return None
+    return {"question_id": question_id, "values": normalized_values}
 
 
 def extract_pending_clarification(metadata: dict | None) -> dict | None:
@@ -4294,10 +4365,28 @@ def extract_pending_clarification(metadata: dict | None) -> dict | None:
     questions = pending.get("questions") if isinstance(pending.get("questions"), list) else []
     normalized_questions = []
     question_limit = get_clarification_max_questions()
-    for question in questions[:question_limit]:
+    seen_ids: set[str] = set()
+    for index, question in enumerate(questions[:question_limit], start=1):
         normalized_question = _normalize_clarification_question_payload(question)
-        if normalized_question is not None:
-            normalized_questions.append(normalized_question)
+        if normalized_question is None:
+            continue
+
+        # Drop dependencies that point at later or unknown questions.
+        depends_on = normalized_question.get("depends_on")
+        if isinstance(depends_on, dict):
+            target_id = str(depends_on.get("question_id") or "")
+            if target_id not in seen_ids:
+                normalized_question.pop("depends_on", None)
+            elif target_id == normalized_question.get("id"):
+                normalized_question.pop("depends_on", None)
+
+        question_id = normalized_question.get("id") or f"question_{index}"
+        if question_id in seen_ids:
+            # Drop duplicates so the browser form has unique ids.
+            continue
+        normalized_question["id"] = question_id
+        seen_ids.add(question_id)
+        normalized_questions.append(normalized_question)
     if not normalized_questions:
         return None
 

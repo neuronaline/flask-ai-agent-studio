@@ -204,6 +204,76 @@ TOOL_SPECS = [
         },
     },
     {
+        "name": "save_to_conversation_memory",
+        "description": (
+            "Persist a durable task-specific fact for the current conversation. "
+            "Use this for goals, constraints, decisions, and other in-chat context "
+            "that should survive later summarization. Do not store ephemeral "
+            "details, secrets, or speculative inferences."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "entry_type": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "Short category for the entry (e.g. 'goal', 'decision', 'constraint').",
+                },
+                "key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "Short stable identifier for the entry within this conversation.",
+                },
+                "value": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000,
+                    "description": "The durable fact to remember.",
+                },
+            },
+            "required": ["entry_type", "key", "value"],
+            "additionalProperties": False,
+        },
+        "prompt": {
+            "purpose": "Persists a durable task-specific fact for the current conversation.",
+            "inputs": {
+                "entry_type": "short category for the entry (1-64 chars)",
+                "key": "short stable identifier within this conversation (1-64 chars)",
+                "value": "the durable fact to remember (1-4000 chars)",
+            },
+            "guidance": (
+                "Use for task context, goals, decisions, and other in-chat facts that should "
+                "survive summarization. Avoid ephemeral details, secrets, and speculation."
+            ),
+        },
+    },
+    {
+        "name": "delete_conversation_memory_entry",
+        "description": (
+            "Remove a single persisted conversation memory entry by its entry id. "
+            "Use this when an entry is stale, incorrect, or duplicates another entry."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "entry_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Numeric id of the conversation memory entry to remove.",
+                },
+            },
+            "required": ["entry_id"],
+            "additionalProperties": False,
+        },
+        "prompt": {
+            "purpose": "Removes a single persisted conversation memory entry.",
+            "inputs": {"entry_id": "numeric id of the conversation memory entry"},
+            "guidance": "Use only when the entry is stale, incorrect, or a duplicate.",
+        },
+    },
+    {
         "name": "ask_clarifying_question",
         "description": (
             "Ask the user one or more structured clarification questions and stop answering until they reply. "
@@ -222,19 +292,77 @@ TOOL_SPECS = [
                     "items": {
                         "type": "object",
                         "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "Short stable identifier referenced by the answer and any depends_on clause.",
+                            },
                             "label": {"type": "string", "description": "The question shown to the user."},
+                            "input_type": {
+                                "type": "string",
+                                "enum": ["text", "single_select", "multi_select"],
+                                "description": "How the user answers this question.",
+                            },
+                            "required": {
+                                "type": "boolean",
+                                "description": "When false the question is optional. Defaults to true.",
+                            },
+                            "placeholder": {
+                                "type": "string",
+                                "description": "Optional placeholder shown in empty text inputs.",
+                            },
+                            "allow_free_text": {
+                                "type": "boolean",
+                                "description": "For select questions, allow a free-text fallback in addition to the declared options.",
+                            },
                             "options": {
                                 "type": "array",
-                                "description": "Selectable options. If omitted, user enters free text.",
-                                "items": {"type": "string"},
+                                "description": "Selectable options for select questions.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "label": {
+                                            "type": "string",
+                                            "description": "Human-readable label shown next to the option.",
+                                        },
+                                        "value": {
+                                            "type": "string",
+                                            "description": "Stable value submitted when the option is chosen.",
+                                        },
+                                        "description": {
+                                            "type": "string",
+                                            "description": "Optional secondary line describing the option.",
+                                        },
+                                    },
+                                    "required": ["label", "value"],
+                                    "additionalProperties": False,
+                                },
+                            },
+                            "depends_on": {
+                                "type": "object",
+                                "description": "Show this question only when a previous question has one of these values.",
+                                "properties": {
+                                    "question_id": {
+                                        "type": "string",
+                                        "description": "Id of the previously declared question that controls visibility.",
+                                    },
+                                    "values": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "Values that satisfy the dependency.",
+                                    },
+                                },
+                                "required": ["question_id", "values"],
+                                "additionalProperties": False,
                             },
                         },
-                        "required": ["label"],
+                        "required": ["id", "label", "input_type"],
+                        "additionalProperties": False,
                     },
                 },
                 "submit_label": {"type": "string", "description": "Optional button label shown in the UI."},
             },
             "required": ["questions"],
+            "additionalProperties": False,
         },
         "prompt": {
             "purpose": "Collects missing user requirements before continuing the answer.",
@@ -789,55 +917,6 @@ TOOL_SPECS = [
         },
     },
     {
-        "name": "delegate_task",
-        "description": (
-            "Spawn a fresh sub-agent to handle a self-contained research or analysis task independently. "
-            "The sub-agent gets a clean context window and limited tool access (web search, "
-            "page fetch, canvas document reading, knowledge base search). "
-            "Returns a summary of findings and actions taken. "
-            "Use this for: web research, synthesizing information across multiple sources, "
-            "analyzing canvas documents, or querying the knowledge base. "
-            "Do NOT use for single tool calls, quick lookups, or file system operations "
-            "(the sub-agent cannot read or write files on disk)."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "goal": {
-                    "type": "string",
-                    "description": "Clear description of what the sub-agent should accomplish.",
-                },
-                "scope": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Optional list of reference paths or document names the sub-agent should focus on (informational only — appended to the task prompt).",
-                },
-                "constraints": {
-                    "type": "string",
-                    "description": "Optional constraints (e.g. 'Only use sources from 2024 or later.').",
-                },
-            },
-            "required": ["goal"],
-        },
-        "prompt": {
-            "purpose": "Delegates a self-contained research or analysis task to a fresh sub-agent to keep the main context lean.",
-            "inputs": {
-                "goal": "task description",
-                "scope": "optional list of reference paths or document names",
-                "constraints": "optional constraints",
-            },
-            "guidance": (
-                "Delegate when: (1) the task involves web research across multiple sources, "
-                "(2) the task analyzes canvas documents that are already loaded in the workspace, "
-                "(3) the task requires querying the knowledge base for stored information. "
-                "Do NOT delegate when: the task requires reading or writing files on disk, "
-                "running tests or commands, or editing source code — the sub-agent has no file system access. "
-                "The sub-agent returns only a summary — do not re-verify its work unless the summary "
-                "indicates uncertainty."
-            ),
-        },
-    },
-    {
         "name": "purge",
         "description": (
             "Permanently remove selected conversation blocks by their public IDs. "
@@ -1098,8 +1177,6 @@ SEARCH_QUERY_LIMITED_TOOL_NAMES = {"search_web", "search_scholar"}
 ADDITIONAL_RUNTIME_TOOL_NAMES = frozenset({
     "save_to_conversation_memory",
     "delete_conversation_memory_entry",
-    "save_to_persona_memory",
-    "delete_persona_memory_entry",
 })
 
 _TOOL_RUNTIME_DEFAULTS = {
@@ -1120,11 +1197,6 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
     "ask_clarifying_question": {
         "exclusive_turn": True,
         "state_domains": ("clarification",),
-    },
-    "delegate_task": {
-        "ui_hidden": True,
-        "exclusive_turn": True,
-        "state_domains": ("delegation",),
     },
     "search_knowledge_base": {
         "read_only": True,
@@ -1185,6 +1257,12 @@ _TOOL_RUNTIME_METADATA_OVERRIDES = {
     "read_scratchpad": {
         "read_only": True,
         "parallel_safe": True,
+        "state_domains": ("memory",),
+    },
+    "save_to_conversation_memory": {
+        "state_domains": ("memory",),
+    },
+    "delete_conversation_memory_entry": {
         "state_domains": ("memory",),
     },
     "purge": {
@@ -1338,6 +1416,66 @@ def _normalize_search_tool_query_limit(value: int | None) -> int:
     return max(SEARCH_TOOL_QUERY_LIMIT_MIN, min(SEARCH_TOOL_QUERY_LIMIT_MAX, normalized))
 
 
+def _normalize_image_helper_max_items(value: int | None) -> int:
+    """Clamp the analyze_image batch cap to the configured runtime range.
+
+    Returns the effective cap so the schema advertised to the model matches the
+    cap actually enforced by ``services.image_service.analyze_images_with_vl``.
+    Falls back to ``IMAGE_HELPER_MAX_IMAGES_DEFAULT`` when the runtime value is
+    missing or malformed.
+    """
+    try:
+        from core.config import (
+            IMAGE_HELPER_MAX_IMAGES_DEFAULT,
+            IMAGE_HELPER_MAX_IMAGES_MAX,
+            IMAGE_HELPER_MAX_IMAGES_MIN,
+        )
+    except ImportError:
+        return 4
+    try:
+        normalized = int(value) if value is not None else IMAGE_HELPER_MAX_IMAGES_DEFAULT
+    except (TypeError, ValueError):
+        normalized = IMAGE_HELPER_MAX_IMAGES_DEFAULT
+    return max(IMAGE_HELPER_MAX_IMAGES_MIN, min(IMAGE_HELPER_MAX_IMAGES_MAX, normalized))
+
+
+def _build_image_max_items_spec(tool: dict, image_helper_max_items: int | None = None) -> dict:
+    """Override the analyze_image schema's image_ids maxItems to the runtime cap.
+
+    Without this, the static schema (maxItems=8) advertises the upper bound, not
+    the active limit, and the model can issue a request that the service will
+    silently trim or reject.
+    """
+    spec = copy.deepcopy(tool)
+    if spec.get("name") != "analyze_image":
+        return spec
+
+    limit = _normalize_image_helper_max_items(image_helper_max_items)
+    parameters = spec.get("parameters") if isinstance(spec.get("parameters"), dict) else {}
+    properties = parameters.get("properties") if isinstance(parameters.get("properties"), dict) else {}
+    image_ids_schema = properties.get("image_ids") if isinstance(properties.get("image_ids"), dict) else {}
+    image_ids_schema["maxItems"] = limit
+    image_ids_schema["description"] = (
+        f"Image IDs to analyze (1-{limit}). Obtain from list_conversation_images."
+    )
+    properties["image_ids"] = image_ids_schema
+    parameters["properties"] = properties
+    spec["parameters"] = parameters
+
+    prompt = spec.get("prompt") if isinstance(spec.get("prompt"), dict) else {}
+    prompt_inputs = prompt.get("inputs") if isinstance(prompt.get("inputs"), dict) else {}
+    prompt_inputs["image_ids"] = f"list of 1-{limit} image IDs from list_conversation_images"
+    prompt["inputs"] = prompt_inputs
+
+    guidance = str(prompt.get("guidance") or "").strip()
+    limit_note = f" Provide at most {limit} image(s) per call."
+    if limit_note.strip() not in guidance:
+        guidance = f"{guidance}{limit_note}".strip()
+    prompt["guidance"] = guidance
+    spec["prompt"] = prompt
+    return spec
+
+
 def _build_clarification_spec(tool: dict, clarification_max_questions: int | None = None) -> dict:
     spec = copy.deepcopy(tool)
     if spec.get("name") != "ask_clarifying_question":
@@ -1424,6 +1562,7 @@ def get_enabled_tool_specs(
     active_tool_names: list[str],
     clarification_max_questions: int | None = None,
     search_tool_query_limit: int | None = None,
+    image_helper_max_items: int | None = None,
 ) -> list[dict]:
     active_set = set(active_tool_names or [])
     specs = [tool for tool in TOOL_SPECS if tool["name"] in active_set]
@@ -1436,9 +1575,12 @@ def get_enabled_tool_specs(
             if tool["name"] not in {"save_to_conversation_memory", "delete_conversation_memory_entry"}
         ]
     return [
-        _build_search_query_limit_spec(
-            _build_clarification_spec(tool, clarification_max_questions),
-            search_tool_query_limit,
+        _build_image_max_items_spec(
+            _build_search_query_limit_spec(
+                _build_clarification_spec(tool, clarification_max_questions),
+                search_tool_query_limit,
+            ),
+            image_helper_max_items,
         )
         for tool in specs
     ]
@@ -1512,6 +1654,7 @@ def get_openai_tool_specs(
     canvas_documents: list[dict] | None = None,
     clarification_max_questions: int | None = None,
     search_tool_query_limit: int | None = None,
+    image_helper_max_items: int | None = None,
 ) -> list[dict]:
     specs = []
     runtime_tool_names = resolve_runtime_tool_names(
@@ -1522,6 +1665,7 @@ def get_openai_tool_specs(
         runtime_tool_names,
         clarification_max_questions=clarification_max_questions,
         search_tool_query_limit=search_tool_query_limit,
+        image_helper_max_items=image_helper_max_items,
     ):
         parameters = copy.deepcopy(tool.get("parameters") or {})
         if parameters.get("type") == "object":
@@ -1554,6 +1698,7 @@ def get_prompt_tool_context(
     canvas_documents: list[dict] | None = None,
     clarification_max_questions: int | None = None,
     search_tool_query_limit: int | None = None,
+    image_helper_max_items: int | None = None,
 ) -> list[dict] | None:
     tools = []
     runtime_tool_names = resolve_runtime_tool_names(
@@ -1564,6 +1709,7 @@ def get_prompt_tool_context(
         runtime_tool_names,
         clarification_max_questions=clarification_max_questions,
         search_tool_query_limit=search_tool_query_limit,
+        image_helper_max_items=image_helper_max_items,
     ):
         parameters = tool.get("parameters") if isinstance(tool.get("parameters"), dict) else {}
         properties = parameters.get("properties") if isinstance(parameters.get("properties"), dict) else {}

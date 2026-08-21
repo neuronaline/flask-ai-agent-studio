@@ -65,12 +65,14 @@ from core.config import (
     SCRATCHPAD_DEFAULT_SECTION,
     SCRATCHPAD_SECTION_METADATA,
     SCRATCHPAD_SECTION_ORDER,
+    coerce_image_helper_max_images,
     get_runtime_setting,
 )
 from core.prompts import get_prompt
 from core.db import (
     append_to_scratchpad,
     count_scratchpad_notes,
+    delete_conversation_memory_entry,
     get_context_compaction_keep_recent_rounds,
     get_context_compaction_threshold,
     get_effective_conversation_persona,
@@ -86,6 +88,7 @@ from core.db import (
     get_prompt_max_input_tokens,
     get_rag_source_types,
     get_search_tool_query_limit,
+    insert_conversation_memory_entry,
     parse_message_tool_calls,
     replace_scratchpad,
 )
@@ -2960,49 +2963,171 @@ def _merge_tool_execution_result_message(messages: list[dict], tool_execution_re
 
 
 def _normalize_clarification_question(raw_question: dict, index: int) -> dict | None:
+    """Normalize one model-supplied clarification question to the canonical shape.
+
+    Preserves every canonical field (id, label, input_type, required,
+    placeholder, allow_free_text, options, depends_on). Display text is
+    sanitized; stable identifiers and option values are preserved verbatim.
+    Returns None if the question cannot be turned into a valid canonical
+    entry (missing label/id/input_type, duplicate id, or a forward/cyclic
+    dependency).
+    """
     if not isinstance(raw_question, dict):
         return None
 
-    label = _sanitize_clarification_text(
-        str(raw_question.get("label") or raw_question.get("question") or raw_question.get("prompt") or ""),
-        limit=240,
+    raw_label = (
+        raw_question.get("label")
+        or raw_question.get("question")
+        or raw_question.get("prompt")
+        or ""
     )
+    label = _sanitize_clarification_text(str(raw_label), limit=240)
     if not label:
         return None
 
-    normalized = {"label": label}
+    raw_id = raw_question.get("id")
+    if raw_id not in (None, ""):
+        question_id = _sanitize_clarification_id(str(raw_id), index)
+    else:
+        question_id = ""
 
-    raw_options = raw_question.get("options") if isinstance(raw_question.get("options"), list) else []
-    normalized_options = []
-    for option in raw_options[:10]:
-        if isinstance(option, str):
-            text = _sanitize_clarification_text(option, limit=120)
-            if text:
-                normalized_options.append(text)
-        elif isinstance(option, dict):
-            text = _sanitize_clarification_text(str(option.get("label") or option.get("value") or ""), limit=120)
-            if text:
-                normalized_options.append(text)
+    raw_input_type = str(raw_question.get("input_type") or "text").strip().lower()
+    if raw_input_type not in {"text", "single_select", "multi_select"}:
+        return None
+    input_type = raw_input_type
 
+    required_flag = raw_question.get("required")
+    if isinstance(required_flag, bool):
+        required = required_flag
+    else:
+        required = True
+
+    placeholder = _sanitize_clarification_text(str(raw_question.get("placeholder") or ""), limit=120)
+
+    allow_free_text_flag = raw_question.get("allow_free_text")
+    if isinstance(allow_free_text_flag, bool):
+        allow_free_text = allow_free_text_flag
+    else:
+        allow_free_text = False
+
+    normalized: dict = {
+        "id": question_id,
+        "label": label,
+        "input_type": input_type,
+        "required": required,
+        "placeholder": placeholder,
+        "allow_free_text": allow_free_text,
+    }
+
+    raw_options = raw_question.get("options")
+    normalized_options: list = []
+    if isinstance(raw_options, list):
+        for raw_option in raw_options[:20]:
+            option = _normalize_clarification_option(raw_option)
+            if option is not None:
+                normalized_options.append(option)
     if normalized_options:
         normalized["options"] = normalized_options
+    elif input_type in {"single_select", "multi_select"}:
+        # Backend validation: select inputs must declare at least one option.
+        return None
+
+    raw_depends_on = raw_question.get("depends_on")
+    if isinstance(raw_depends_on, dict):
+        normalized_depends_on = _normalize_clarification_dependency(
+            raw_depends_on, current_index=index
+        )
+        if normalized_depends_on is not None:
+            normalized["depends_on"] = normalized_depends_on
 
     return normalized
 
 
+def _normalize_clarification_option(raw_option) -> dict | None:
+    """Normalize one option to {label, value, description?}."""
+    if isinstance(raw_option, str):
+        text = _sanitize_clarification_text(raw_option, limit=120)
+        if not text:
+            return None
+        # Legacy string options preserve their text as both label and value
+        # so the submitted answer remains stable for already-stored messages.
+        return {"label": text, "value": text, "description": ""}
+
+    if not isinstance(raw_option, dict):
+        return None
+
+    raw_label = raw_option.get("label")
+    raw_value = raw_option.get("value")
+    label = _sanitize_clarification_text(str(raw_label or raw_value or ""), limit=120)
+    value_source = raw_value if raw_value not in (None, "") else raw_label
+    value = _sanitize_clarification_text(str(value_source or ""), limit=120)
+    description = _sanitize_clarification_text(str(raw_option.get("description") or ""), limit=200)
+    if not label or not value:
+        return None
+    return {"label": label, "value": value, "description": description}
+
+
+def _normalize_clarification_dependency(raw_depends_on: dict, *, current_index: int) -> dict | None:
+    """Normalize one depends_on clause to {question_id, values}.
+
+    The dependency is rejected (None) when:
+      - it targets itself;
+      - it points at a later index (forward dependency breaks ordering);
+      - it cycles back through another clause (best-effort, single-level);
+      - it carries no values.
+    """
+    if not isinstance(raw_depends_on, dict):
+        return None
+
+    raw_question_id = str(raw_depends_on.get("question_id") or "").strip()
+    if not raw_question_id:
+        return None
+
+    raw_values = raw_depends_on.get("values")
+    if not isinstance(raw_values, list) or not raw_values:
+        return None
+
+    normalized_values: list[str] = []
+    for raw_value in raw_values:
+        value = _sanitize_clarification_text(str(raw_value or ""), limit=120)
+        if value and value not in normalized_values:
+            normalized_values.append(value)
+    if not normalized_values:
+        return None
+
+    return {"question_id": raw_question_id, "values": normalized_values}
+
+
 def _normalize_clarification_payload(tool_args: dict) -> dict:
     raw_questions = tool_args.get("questions") if isinstance(tool_args.get("questions"), list) else []
-    questions = []
+    questions: list[dict] = []
     question_limit = get_clarification_max_questions(get_app_settings())
+    seen_ids: dict[str, int] = {}
     for index, raw_question in enumerate(raw_questions[:question_limit], start=1):
         normalized_question = _normalize_clarification_question(raw_question, index)
-        if normalized_question is not None:
-            questions.append(normalized_question)
+        if normalized_question is None:
+            continue
+
+        # Reject self- and forward-declared dependencies.
+        depends_on = normalized_question.get("depends_on")
+        if isinstance(depends_on, dict):
+            target_id = str(depends_on.get("question_id") or "")
+            target_index = seen_ids.get(target_id)
+            if target_index is None or target_index >= index:
+                normalized_question.pop("depends_on", None)
+
+        question_id = normalized_question.get("id") or f"question_{index}"
+        if question_id in seen_ids:
+            # Duplicate ids collide on the browser form — drop the duplicate.
+            continue
+        normalized_question["id"] = question_id
+        seen_ids[question_id] = index
+        questions.append(normalized_question)
 
     if not questions:
         raise ValueError("ask_clarifying_question requires at least one valid question.")
 
-    payload = {"questions": questions}
+    payload: dict = {"questions": questions}
     intro = _sanitize_clarification_text(str(tool_args.get("intro") or ""), limit=300)
     if intro:
         payload["intro"] = intro[:300]
@@ -3081,6 +3206,173 @@ def _run_read_scratchpad(tool_args: dict, runtime_state: dict):
         "sections": section_summaries,
         "note_count": note_count,
     }, "Scratchpad read"
+
+
+# Conversation-memory limits enforced by the database normalizers. We mirror
+# them here so the executor can surface a clear validation error before the
+# database rejects the input.
+_CONVERSATION_MEMORY_ENTRY_TYPE_MIN_LENGTH = 1
+_CONVERSATION_MEMORY_ENTRY_TYPE_MAX_LENGTH = 64
+_CONVERSATION_MEMORY_KEY_MIN_LENGTH = 1
+_CONVERSATION_MEMORY_KEY_MAX_LENGTH = 64
+_CONVERSATION_MEMORY_VALUE_MIN_LENGTH = 1
+_CONVERSATION_MEMORY_VALUE_MAX_LENGTH = 4000
+
+
+def _validate_conversation_memory_field(
+    field_name: str,
+    raw_value,
+    *,
+    min_length: int,
+    max_length: int,
+) -> str:
+    if not isinstance(raw_value, str):
+        raise ValueError(
+            f"{field_name} must be a string (got {type(raw_value).__name__}: {raw_value!r})."
+        )
+    cleaned = raw_value.strip()
+    if len(cleaned) < min_length:
+        raise ValueError(
+            f"{field_name} must be at least {min_length} character(s) after trimming whitespace."
+        )
+    if len(cleaned) > max_length:
+        raise ValueError(
+            f"{field_name} must be at most {max_length} character(s); got {len(cleaned)}."
+        )
+    return cleaned
+
+
+def _run_save_to_conversation_memory(tool_args: dict, runtime_state: dict):
+    """Persist a durable task-specific fact for the current conversation.
+
+    The conversation_id and source_message_id are sourced exclusively from
+    the trusted runtime context — never from the model arguments — so a
+    model call cannot save memory into a different conversation.
+
+    Returns a compact structured result with `status`, `entry`, and
+    `updated_existing` so the model can confirm what changed without
+    receiving the full conversation-memory collection.
+    """
+    conversation_id, source_message_id = _get_agent_state_mutation_context(runtime_state)
+    if conversation_id is None:
+        return {
+            "status": "error",
+            "error": "Cannot determine conversation context.",
+        }, "save_to_conversation_memory: missing conversation context"
+
+    if not get_runtime_setting("CONVERSATION_MEMORY_ENABLED"):
+        return {
+            "status": "disabled",
+            "error": "Conversation memory is disabled by configuration.",
+        }, "save_to_conversation_memory: conversation memory disabled"
+
+    entry_type = _validate_conversation_memory_field(
+        "entry_type",
+        tool_args.get("entry_type"),
+        min_length=_CONVERSATION_MEMORY_ENTRY_TYPE_MIN_LENGTH,
+        max_length=_CONVERSATION_MEMORY_ENTRY_TYPE_MAX_LENGTH,
+    )
+    key = _validate_conversation_memory_field(
+        "key",
+        tool_args.get("key"),
+        min_length=_CONVERSATION_MEMORY_KEY_MIN_LENGTH,
+        max_length=_CONVERSATION_MEMORY_KEY_MAX_LENGTH,
+    )
+    value = _validate_conversation_memory_field(
+        "value",
+        tool_args.get("value"),
+        min_length=_CONVERSATION_MEMORY_VALUE_MIN_LENGTH,
+        max_length=_CONVERSATION_MEMORY_VALUE_MAX_LENGTH,
+    )
+
+    mutation_context = {"source_message_id": source_message_id}
+    try:
+        entry = insert_conversation_memory_entry(
+            conversation_id,
+            entry_type,
+            key,
+            value,
+            message_id=source_message_id,
+            mutation_context=mutation_context,
+        )
+    except Exception as exc:
+        LOGGER.error("save_to_conversation_memory failed", exc_info=True)
+        return {
+            "status": "error",
+            "error": f"Failed to persist entry: {exc}",
+        }, f"save_to_conversation_memory: failed — {exc}"
+
+    updated_existing = bool(entry.get("updated_existing"))
+    compact_entry = {
+        "id": entry.get("id"),
+        "conversation_id": entry.get("conversation_id"),
+        "entry_type": entry.get("entry_type"),
+        "key": entry.get("key"),
+        "value": entry.get("value"),
+        "updated_existing": updated_existing,
+    }
+    summary = (
+        "save_to_conversation_memory: updated existing entry"
+        if updated_existing
+        else "save_to_conversation_memory: created new entry"
+    )
+    return {"status": "ok", "entry": compact_entry, "updated_existing": updated_existing}, summary
+
+
+def _run_delete_conversation_memory_entry(tool_args: dict, runtime_state: dict):
+    """Remove a single conversation memory entry scoped to the active conversation.
+
+    Deletion is strictly scoped to the trusted active `conversation_id`. A
+    repeated delete returns `not_found` idempotently instead of an error
+    so the model can self-correct without false failures.
+    """
+    conversation_id, source_message_id = _get_agent_state_mutation_context(runtime_state)
+    if conversation_id is None:
+        return {
+            "status": "error",
+            "error": "Cannot determine conversation context.",
+        }, "delete_conversation_memory_entry: missing conversation context"
+
+    if not get_runtime_setting("CONVERSATION_MEMORY_ENABLED"):
+        return {
+            "status": "disabled",
+            "error": "Conversation memory is disabled by configuration.",
+        }, "delete_conversation_memory_entry: conversation memory disabled"
+
+    raw_entry_id = tool_args.get("entry_id")
+    if isinstance(raw_entry_id, bool) or not isinstance(raw_entry_id, int):
+        raise ValueError(
+            f"entry_id must be a positive integer (got {type(raw_entry_id).__name__}: {raw_entry_id!r})."
+        )
+    if raw_entry_id < 1:
+        raise ValueError(f"entry_id must be >= 1 (got {raw_entry_id}).")
+
+    mutation_context = {"source_message_id": source_message_id}
+    try:
+        deleted = delete_conversation_memory_entry(
+            raw_entry_id,
+            conversation_id,
+            mutation_context=mutation_context,
+        )
+    except Exception as exc:
+        LOGGER.error("delete_conversation_memory_entry failed", exc_info=True)
+        return {
+            "status": "error",
+            "error": f"Failed to delete entry: {exc}",
+        }, f"delete_conversation_memory_entry: failed — {exc}"
+
+    if deleted:
+        return {
+            "status": "ok",
+            "entry_id": raw_entry_id,
+            "deleted": True,
+        }, "delete_conversation_memory_entry: removed entry"
+
+    return {
+        "status": "not_found",
+        "entry_id": raw_entry_id,
+        "deleted": False,
+    }, "delete_conversation_memory_entry: entry not found in active conversation"
 
 
 def _is_parallel_safe_tool_call(tool_name: str, tool_args: dict) -> bool:
@@ -3168,35 +3460,96 @@ def _run_search_knowledge_base(tool_args: dict, runtime_state: dict):
 
 def _run_search_web(tool_args: dict, runtime_state: dict):
     del runtime_state
+    raw_queries = _get_search_tool_queries(tool_args)
     query_limit = get_search_tool_query_limit(get_app_settings())
-    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args), batch_size=query_limit))
+    # Detect the "all-5-empty" hidden-drop case before _iter_search_query_batches
+    # silently filters them out so the model can self-correct.
+    visible_query_limit = max(0, int(query_limit))
+    input_window = list(raw_queries or [])[:visible_query_limit]
+    non_empty = [q for q in input_window if str(q or "").strip()]
+    skipped_empty = max(0, len(input_window) - len(non_empty))
+    query_batches = list(_iter_search_query_batches(raw_queries, batch_size=query_limit))
     if not query_batches:
+        if skipped_empty > 0:
+            return [], (
+                f"search_web skipped: all {skipped_empty} quer"
+                f"{'y was' if skipped_empty == 1 else 'ies were'} empty"
+            )
         return [], "search_web skipped: no queries provided"
     result = _merge_batched_search_results([search_web_tool(batch) for batch in query_batches])
     ok_count = sum(1 for row in result if "error" not in row)
-    return result, f"{ok_count} web results found"
+    summary = f"{ok_count} web results found"
+    if skipped_empty > 0:
+        summary = (
+            f"{summary} ({skipped_empty} empty quer{'y was' if skipped_empty == 1 else 'ies were'} skipped)"
+        )
+        # Surface the skip count on the result so the model can self-correct
+        # without parsing the human-readable summary.
+        if isinstance(result, list):
+            result.append({"skipped_empty_queries": skipped_empty})
+    return result, summary
 
 
 def _run_search_scholar(tool_args: dict, runtime_state: dict):
     del runtime_state
     query_limit = get_search_tool_query_limit(get_app_settings())
-    query_batches = list(_iter_search_query_batches(_get_search_tool_queries(tool_args), batch_size=query_limit))
+    raw_queries = _get_search_tool_queries(tool_args)
+    visible_limit = max(0, int(query_limit))
+    input_window = list(raw_queries or [])[:visible_limit]
+    skipped_empty = sum(1 for q in input_window if not str(q or "").strip())
+
+    query_batches = list(_iter_search_query_batches(raw_queries, batch_size=query_limit))
     if not query_batches:
+        if skipped_empty > 0:
+            return [], (
+                f"search_scholar skipped: all {skipped_empty} quer"
+                f"{'y was' if skipped_empty == 1 else 'ies were'} empty"
+            )
         return [], "search_scholar skipped: no queries provided"
+
+    # Validate year_from/year_to before any network call. The schema declares
+    # them as integers but does not require minimum or cross-field checks,
+    # so we surface a clear error here instead of letting the value reach
+    # the scraper and silently return zero results.
+    year_from = tool_args.get("year_from")
+    year_to = tool_args.get("year_to")
+    for raw_name, raw_value in (("year_from", year_from), ("year_to", year_to)):
+        if raw_value is None:
+            continue
+        if not isinstance(raw_value, int) or isinstance(raw_value, bool):
+            raise ValueError(
+                f"{raw_name} must be an integer (got {type(raw_value).__name__}: {raw_value!r})."
+            )
+        if raw_value < 1900:
+            raise ValueError(
+                f"{raw_name} must be a plausible year (>= 1900); got {raw_value}."
+            )
+    if year_from is not None and year_to is not None and year_from > year_to:
+        raise ValueError(
+            f"year_from ({year_from}) must be <= year_to ({year_to})."
+        )
+
     result = _merge_batched_search_results(
         [
             search_scholar_tool(
                 batch,
                 lang=tool_args.get("lang", "en"),
-                year_from=tool_args.get("year_from"),
-                year_to=tool_args.get("year_to"),
+                year_from=year_from,
+                year_to=year_to,
                 sort_by=tool_args.get("sort_by", "relevance"),
             )
             for batch in query_batches
         ]
     )
     ok_count = sum(1 for row in result if "error" not in row)
-    return result, f"{ok_count} scholar results found"
+    summary = f"{ok_count} scholar results found"
+    if skipped_empty > 0:
+        summary = (
+            f"{summary} ({skipped_empty} empty quer{'y was' if skipped_empty == 1 else 'ies were'} skipped)"
+        )
+        if isinstance(result, list):
+            result.append({"skipped_empty_queries": skipped_empty})
+    return result, summary
 
 
 def _run_fetch_url(tool_args: dict, runtime_state: dict):
@@ -3345,126 +3698,28 @@ def _run_summarized_fetch(tool_args: dict, runtime_state: dict) -> tuple[dict, s
     return output, summary
 
 
-def _run_delegate_task_real(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
-    """Handler for delegate_task tool — real isolated sub-agent execution.
-
-    Per Phase 6: Replaces the stub confirmation-only handler with actual
-    isolated agent execution. The child gets file tools, search, and canvas
-    reads but NO recursive delegation.
-    """
-    goal = str(tool_args.get("goal") or "").strip()
-    scope = tool_args.get("scope") if isinstance(tool_args.get("scope"), list) else []
-    constraints = str(tool_args.get("constraints") or "").strip()
-
-    if not goal:
-        return {"error": "goal is required."}, "delegate_task: missing goal"
-
-    scope_paths = [str(p).strip() for p in scope if str(p or "").strip()]
-
-    from agent.isolated_agent import (
-        run_isolated_agent,
-        _build_isolated_system_message,
-    )
-
-    # Build a read-only canvas snapshot for the child
-    canvas_snapshot_text = ""
-    canvas_state = _get_canvas_runtime_state(runtime_state)
-    if canvas_state is not None:
-        try:
-            from services.canvas import get_canvas_runtime_snapshot
-
-            snapshot = get_canvas_runtime_snapshot(canvas_state)
-            documents = snapshot.get("documents") or []
-            if documents:
-                lines: list[str] = []
-                for doc in documents:
-                    doc_id = str(doc.get("document_id") or doc.get("id") or "")
-                    doc_path = str(doc.get("document_path") or doc.get("path") or "")
-                    doc_title = doc_path or doc_id
-                    lines.append(f"### {doc_title}")
-                    try:
-                        read_result = read_canvas_document(canvas_state, document_id=doc_id)
-                        content = str(read_result.get("content") or "") if isinstance(read_result, dict) else ""
-                        if content:
-                            max_chars = 8000
-                            if len(content) > max_chars:
-                                content = content[:max_chars] + "\n... [truncated]"
-                            lang = str(doc.get("language") or "")
-                            fence = lang if lang else ""
-                            lines.append(f"```{fence}\n{content}\n```")
-                    except Exception:
-                        lines.append("[Content unavailable]")
-                if lines:
-                    canvas_snapshot_text = "\n\n".join(lines)
-        except Exception:
-            canvas_snapshot_text = ""
-
-    system_msg = _build_isolated_system_message(
-        goal,
-        allowlist_tools=["search_web", "fetch_url", "batch_read_canvas_documents",
-                         "read_canvas_document", "search_canvas_document"],
-        constraints=constraints,
-        canvas_readonly_snapshot=canvas_snapshot_text,
-    )
-
-    scope_context = ""
-    if scope_paths:
-        scope_context = "\n\n## Scope Files\n" + "\n".join(f"- {p}" for p in scope_paths)
-
-    task_messages = [
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": f"Complete this task:{scope_context}\n\n{goal}"},
-    ]
-
-    result = run_isolated_agent(
-        task_messages,
-        allowlist_tools=[
-            "search_web", "fetch_url",
-            "batch_read_canvas_documents", "read_canvas_document",
-            "search_canvas_document", "search_knowledge_base",
-        ],
-        max_steps=10,
-        temperature=0.5,
-    )
-
-    report = result.get("report") or ""
-    errors = result.get("errors") or []
-    success = result.get("success", False)
-    elapsed_ms = result.get("elapsed_ms", 0)
-
-    output = {
-        "goal": goal,
-        "report": report,
-        "success": success,
-        "elapsed_ms": elapsed_ms,
-    }
-    if scope_paths:
-        output["scope"] = scope_paths
-    if constraints:
-        output["constraints"] = constraints
-    if errors:
-        output["errors"] = errors
-
-    summary = f"delegate_task: {len(report)} chars report in {elapsed_ms}ms" + (
-        f" ({len(errors)} errors)" if errors else ""
-    )
-    return output, summary
-
-
 def _run_read_canvas_document(tool_args: dict, runtime_state: dict):
     canvas_state = _get_canvas_runtime_state(runtime_state)
     start_line = tool_args.get("start_line")
     end_line = tool_args.get("end_line")
     if (start_line is None) != (end_line is None):
         raise ValueError("start_line and end_line must both be provided for ranged reads.")
-    if start_line is None:
-        result = build_canvas_document_context_result(
-            canvas_state,
-            document_id=tool_args.get("document_id"),
-            document_path=tool_args.get("document_path"),
-            max_lines=tool_args.get("max_lines"),
-        )
-    else:
+    if start_line is not None:
+        # Validate types BEFORE the int() call so we surface a clear schema
+        # error instead of a raw Python TypeError/ValueError. The schema
+        # declares these as integer, but a model may pass a quoted string,
+        # a float, or None-like values.
+        for raw_name, raw_value in (("start_line", start_line), ("end_line", end_line)):
+            if not isinstance(raw_value, int) or isinstance(raw_value, bool):
+                raise ValueError(
+                    f"{raw_name} must be an integer (got {type(raw_value).__name__}: {raw_value!r})."
+                )
+            if raw_value < 1:
+                raise ValueError(f"{raw_name} must be >= 1 (got {raw_value}).")
+        if start_line > end_line:
+            raise ValueError(
+                f"start_line ({start_line}) must be <= end_line ({end_line})."
+            )
         result = read_canvas_document(
             canvas_state,
             int(start_line),
@@ -3472,6 +3727,19 @@ def _run_read_canvas_document(tool_args: dict, runtime_state: dict):
             document_id=tool_args.get("document_id"),
             document_path=tool_args.get("document_path"),
             max_window_lines=int(tool_args.get("max_lines") or 200),
+        )
+    else:
+        # Also validate max_lines when present (defensive — schema is integer).
+        max_lines = tool_args.get("max_lines")
+        if max_lines is not None and (not isinstance(max_lines, int) or isinstance(max_lines, bool)):
+            raise ValueError(
+                f"max_lines must be an integer (got {type(max_lines).__name__}: {max_lines!r})."
+            )
+        result = build_canvas_document_context_result(
+            canvas_state,
+            document_id=tool_args.get("document_id"),
+            document_path=tool_args.get("document_path"),
+            max_lines=max_lines,
         )
     target = str(result.get("document_path") or result.get("title") or "Canvas").strip()
     return result, f"Canvas read: {target}"
@@ -3683,6 +3951,8 @@ _TOOL_EXECUTORS = {
     "append_scratchpad": _run_append_scratchpad,
     "replace_scratchpad": _run_replace_scratchpad,
     "read_scratchpad": _run_read_scratchpad,
+    "save_to_conversation_memory": _run_save_to_conversation_memory,
+    "delete_conversation_memory_entry": _run_delete_conversation_memory_entry,
     "ask_clarifying_question": _run_ask_clarifying_question,
     "search_knowledge_base": _run_search_knowledge_base,
     "search_web": _run_search_web,
@@ -3690,7 +3960,6 @@ _TOOL_EXECUTORS = {
     "fetch_url": _run_fetch_url,
     "web_search_agent": _run_web_search_agent,
     "summarized_fetch": _run_summarized_fetch,
-    "delegate_task": _run_delegate_task_real,
     "batch_read_canvas_documents": _run_batch_read_canvas_documents,
     "read_canvas_document": _run_read_canvas_document,
     "search_canvas_document": _run_search_canvas_document,
@@ -3731,16 +4000,21 @@ def _run_purge(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
         return {"error": "Cannot determine conversation context."}, "purge: missing conversation context"
 
     try:
-        from core.db import resolve_purge_dependency_closure, execute_purge_transaction
+        from core.db import (
+            resolve_purge_dependency_closure,
+            execute_purge_transaction,
+            acquire_compaction_lock,
+            release_compaction_lock,
+        )
 
-        # Resolve and validate (always — needed for both dry-run and execution)
-        resolved_ids, errors = resolve_purge_dependency_closure(requested_ids, conversation_id)
-        if errors:
-            error_msg = "; ".join(errors)
-            return {"error": error_msg, "requested_ids": requested_ids}, f"purge: {error_msg}"
-
-        # Dry-run: return preview without executing
+        # Dry-run needs the closure but is read-only; do not acquire the lock
+        # so dry-runs don't block (or get blocked by) a real compaction/purge.
+        # The dry-run path uses the closure as a preview only.
         if not confirm:
+            resolved_ids, errors = resolve_purge_dependency_closure(requested_ids, conversation_id)
+            if errors:
+                error_msg = "; ".join(errors)
+                return {"error": error_msg, "requested_ids": requested_ids}, f"purge: {error_msg}"
             return {
                 "dry_run": True,
                 "message": (
@@ -3752,41 +4026,69 @@ def _run_purge(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
                 "resolved_ids": resolved_ids,
             }, f"purge: dry-run — {len(resolved_ids)} block(s) would be removed"
 
-        # Execute transaction
-        result = execute_purge_transaction(
-            conversation_id,
-            resolved_ids,
-            summary=summary,
-            actor="model",
-        )
-
-        if result.get("error"):
-            return result, f"purge: {result['error']}"
+        # Take the same per-conversation lock that compaction uses. Without
+        # this, a concurrent compaction or purge on the same conversation can
+        # mutate context_blocks between our resolve() validation and our
+        # execute() transaction, causing the deleted set to silently drift
+        # from the resolved set the audit row records.
+        if not acquire_compaction_lock(conversation_id, timeout=10.0):
+            return {
+                "error": "Another compaction or purge is already in progress for this conversation. Please wait and retry.",
+                "retryable": True,
+                "requested_ids": requested_ids,
+            }, "purge: lock denied — concurrent mutation in progress"
 
         try:
-            from services.rag_service import sync_conversations_to_rag_safe
+            # Resolve and validate (still needs the closure expansion).
+            resolved_ids, errors = resolve_purge_dependency_closure(requested_ids, conversation_id)
+            if errors:
+                error_msg = "; ".join(errors)
+                return {"error": error_msg, "requested_ids": requested_ids}, f"purge: {error_msg}"
 
-            sync_conversations_to_rag_safe(conversation_id=conversation_id, force=True)
-            result["rag_cleanup_pending"] = False
-        except Exception:
-            result["rag_cleanup_pending"] = True
+            # Capture the in-memory provider-side tool_call_ids BEFORE the DB
+            # transaction deletes the blocks. _filter_deleted_tool_results uses
+            # this set to strip the matching tool-result messages from the next
+            # model turn so the model never sees a result for a block that no
+            # longer exists.
+            _record_deleted_tool_call_ids(runtime_state, resolved_ids)
 
-        n_removed = len(result.get("resolved_ids", []))
-        n_requested = len(requested_ids)
-        tokens_saved = result.get("removed_tokens", 0)
-        summary_note = (
-            f" (summary saved as {result['replacement_id']})"
-            if result.get("replacement_id")
-            else ""
-        )
+            # Execute transaction
+            result = execute_purge_transaction(
+                conversation_id,
+                resolved_ids,
+                summary=summary,
+                actor="model",
+            )
 
-        action_summary = (
-            f"purge: removed {n_removed} block(s) ({tokens_saved} tokens) "
-            f"from {n_requested} requested ID(s){summary_note}. "
-            f"Cache reset required for next request."
-        )
+            if result.get("error"):
+                return result, f"purge: {result['error']}"
 
-        return result, action_summary
+            try:
+                from services.rag_service import sync_conversations_to_rag_safe
+
+                sync_conversations_to_rag_safe(conversation_id=conversation_id, force=True)
+                result["rag_cleanup_pending"] = False
+            except Exception:
+                result["rag_cleanup_pending"] = True
+
+            n_removed = len(result.get("resolved_ids", []))
+            n_requested = len(requested_ids)
+            tokens_saved = result.get("removed_tokens", 0)
+            summary_note = (
+                f" (summary saved as {result['replacement_id']})"
+                if result.get("replacement_id")
+                else ""
+            )
+
+            action_summary = (
+                f"purge: removed {n_removed} block(s) ({tokens_saved} tokens) "
+                f"from {n_requested} requested ID(s){summary_note}. "
+                f"Cache reset required for next request."
+            )
+
+            return result, action_summary
+        finally:
+            release_compaction_lock(conversation_id)
 
     except Exception as exc:
         LOGGER.debug("purge tool execution failed", exc_info=True)
@@ -3794,235 +4096,6 @@ def _run_purge(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
 
 
 _TOOL_EXECUTORS["purge"] = _run_purge
-
-
-def _build_compaction_prompt(blocks_text: str, resume_instruction: str) -> tuple[str, str]:
-    """Build system and user messages for the compaction operation-model call.
-
-    Returns (system_message, user_message).
-    """
-    system = (
-        "You are a context compaction assistant. Your job is to analyze a complete "
-        "conversation history and produce a dense, structured state summary as JSON. "
-        "Extract only the essential project context: what was being built, key "
-        "decisions, completed work, current tasks, blockers, and affected files.\n\n"
-        "Respond ONLY with a valid JSON object matching this schema:\n"
-        "{\n"
-        '  "project_summary": "concise summary of the project and current session scope",\n'
-        '  "established_context": ["key fact 1", "key fact 2", ...],\n'
-        '  "key_decisions": ["decision 1", ...],\n'
-        '  "completed_tasks": ["task 1", ...],\n'
-        '  "current_tasks": ["task 1", ...],\n'
-        '  "blockers": ["blocker 1", ...],\n'
-        '  "affected_files": ["path/to/file1.py", ...]\n'
-        "}\n\n"
-        "Rules:\n"
-        "- All array fields must be present (use empty arrays if nothing to report).\n"
-        "- project_summary must be non-empty.\n"
-        "- established_context and current_tasks must have at least one entry.\n"
-        "- Be specific about file paths when they are mentioned.\n"
-        "- Do NOT include the conversation messages themselves — synthesize the state.\n"
-        "- Output pure JSON — no markdown fences, no surrounding text."
-    )
-
-    user = (
-        f"Here is the complete conversation history for context compaction:\n\n"
-        f"{blocks_text}\n\n"
-        f'After compaction, the agent should resume with this instruction: "{resume_instruction}"'
-    )
-
-    return system, user
-
-
-def _run_compact_context_legacy(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
-    """Handler for compact_context tool — full context reset with CompactedState.
-
-    Per AI Memory and Context Management doc Section 5, Phase 5:
-    - Requires a non-empty resume_instruction.
-    - Acquires a per-conversation compaction lock.
-    - Runs a separate operation-model call to produce CompactedState JSON.
-    - Validates JSON against schema; retries up to 3 times on validation failure.
-    - Transactionally deletes all blocks, hides messages, inserts state+resume blocks.
-    - Emits compaction events for SSE streaming.
-    """
-    import json as _json
-    import time as _time
-
-    resume_instruction = str(tool_args.get("resume_instruction") or "").strip()
-    if not resume_instruction:
-        return {"error": "resume_instruction is required and must be non-empty."}, (
-            "compact_context: missing resume_instruction"
-        )
-
-    conversation_id, source_message_id = _get_agent_state_mutation_context(runtime_state)
-    if conversation_id is None:
-        return {"error": "Cannot determine conversation context."}, (
-            "compact_context: missing conversation context"
-        )
-
-    # Acquire compaction lock
-    from core.db import (
-        acquire_compaction_lock,
-        release_compaction_lock,
-        execute_compact_context_transaction,
-        list_context_blocks,
-    )
-    from core.context_memory import validate_compacted_state
-
-    lock_acquired = acquire_compaction_lock(conversation_id, timeout=10.0)
-    if not lock_acquired:
-        return {"error": "Another compaction is already in progress for this conversation. Please wait and retry."}, (
-            "compact_context: lock denied — concurrent compaction in progress"
-        )
-
-    try:
-        # 1. Snapshot all active context blocks
-        try:
-            block_dicts = list_context_blocks(conversation_id)
-        except Exception as exc:
-            return {"error": f"Failed to read conversation blocks: {exc}"}, (
-                f"compact_context: error reading blocks — {exc}"
-            )
-
-        if not block_dicts:
-            return {"error": "No conversation blocks to compact."}, (
-                "compact_context: no blocks found"
-            )
-
-        # 2. Build text representation of the full history
-        blocks_lines: list[str] = []
-        for bd in block_dicts:
-            pid = str(bd.get("public_id") or "")
-            kind = str(bd.get("kind") or "")
-            role = str(bd.get("api_role") or "")
-            content = str(bd.get("content") or "")
-            tool_name = str(bd.get("tool_name") or "")
-            # Truncate very long content blocks for the compaction model
-            max_content = 4000
-            if len(content) > max_content:
-                content = content[:max_content] + "... [truncated]"
-            label = f"[{pid}] ({kind}/{role}"
-            if tool_name:
-                label += f", tool={tool_name}"
-            label += ")"
-            blocks_lines.append(f"{label}\n{content}")
-        blocks_text = "\n\n".join(blocks_lines)
-
-        # 3. Call operation model to produce CompactedState JSON
-        settings = get_app_settings()
-        compaction_model = get_operation_model("compaction", settings)
-
-        max_retries = 3
-        last_error = None
-        compacted_state = None
-
-        for attempt in range(1, max_retries + 1):
-            try:
-                system_msg, user_msg = _build_compaction_prompt(blocks_text, resume_instruction)
-                target = resolve_model_target(compaction_model, settings)
-                request_kwargs = apply_model_target_request_options(
-                    {
-                        "model": target["api_model"],
-                        "messages": [
-                            {"role": "system", "content": system_msg},
-                            {"role": "user", "content": user_msg},
-                        ],
-                        "max_tokens": 4096,
-                        "temperature": 0.2,
-                    },
-                    target,
-                )
-
-                response = target["client"].chat.completions.create(**request_kwargs)
-                raw_text = _extract_chat_completion_text(response)
-
-                if not raw_text or not raw_text.strip():
-                    last_error = "Operation model returned empty response."
-                    if attempt < max_retries:
-                        _time.sleep(1.0)
-                        continue
-                    break
-
-                # Try to parse JSON
-                raw_text = raw_text.strip()
-                # Strip markdown fences if present
-                if raw_text.startswith("```"):
-                    lines = raw_text.split("\n")
-                    if lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines and lines[-1].strip() == "```":
-                        lines = lines[:-1]
-                    raw_text = "\n".join(lines)
-
-                try:
-                    parsed = _json.loads(raw_text)
-                except _json.JSONDecodeError as je:
-                    last_error = f"Operation model returned invalid JSON: {je}"
-                    if attempt < max_retries:
-                        _time.sleep(1.0)
-                        continue
-                    break
-
-                # Validate against CompactedState schema
-                validation_errors = validate_compacted_state(parsed)
-                if validation_errors:
-                    last_error = f"CompactedState validation failed: {'; '.join(validation_errors)}"
-                    if attempt < max_retries:
-                        _time.sleep(1.0)
-                        continue
-                    break
-
-                compacted_state = parsed
-                break
-
-            except Exception as exc:
-                last_error = f"Operation model call failed: {exc}"
-                if attempt < max_retries:
-                    _time.sleep(1.0)
-                    continue
-                break
-
-        if compacted_state is None:
-            return {
-                "error": (
-                    f"Failed to produce a valid CompactedState after "
-                    f"{max_retries} attempt(s). Last error: {last_error}"
-                ),
-            }, f"compact_context: validation failed — {last_error}"
-
-        # 4. Execute the compaction transaction
-        try:
-            compacted_json = _json.dumps(compacted_state, ensure_ascii=False, indent=2)
-            result = execute_compact_context_transaction(
-                conversation_id,
-                compacted_json,
-                resume_instruction,
-                actor="model",
-            )
-        except Exception as exc:
-            return {"error": f"Compaction transaction failed: {exc}"}, (
-                f"compact_context: transaction error — {exc}"
-            )
-
-        if result.get("error"):
-            return result, f"compact_context: {result['error']}"
-
-        # 5. Build summary
-        blocks_removed = result.get("blocks_removed", 0)
-        removed_tokens = result.get("removed_tokens", 0)
-        state_id = result.get("state_public_id", "unknown")
-        resume_id = result.get("resume_public_id", "unknown")
-
-        action_summary = (
-            f"compact_context: removed {blocks_removed} block(s) ({removed_tokens} tokens), "
-            f"new state at {state_id}, resume at {resume_id}. "
-            f"Cache reset required for next request."
-        )
-
-        return result, action_summary
-
-    finally:
-        release_compaction_lock(conversation_id)
 
 
 def _run_compact_context(tool_args: dict, runtime_state: dict) -> tuple[dict, str]:
@@ -4111,10 +4184,23 @@ def _run_analyze_image(tool_args: dict, runtime_state: dict):
     image_ids = tool_args.get("image_ids")
     question = tool_args.get("question", "")
 
-    if not isinstance(image_ids, list) or len(image_ids) == 0:
-        return {"error": "image_ids must be a non-empty list."}, "analyze_image: missing image_ids"
-    if not isinstance(question, str) or not question.strip():
-        return {"error": "question is required."}, "analyze_image: missing question"
+    # Single source of truth for image_ids validation. The schema validator
+    # already enforces type/minItems/maxItems when it runs; here we cover
+    # the "None reached us" case (validator was bypassed or skipped) and
+    # raise a clear error rather than a generic "missing image_ids".
+    if not isinstance(image_ids, list):
+        raise ValueError(
+            "image_ids must be a non-empty list of image IDs (got "
+            f"{type(image_ids).__name__ if image_ids is not None else 'None'})."
+        )
+    if len(image_ids) == 0:
+        raise ValueError("image_ids must be a non-empty list of image IDs (got empty list).")
+    if isinstance(question, str) and not question.strip():
+        raise ValueError("question is required.")
+    if not isinstance(question, str):
+        raise ValueError(
+            f"question must be a string (got {type(question).__name__})."
+        )
 
     conversation_id, source_message_id = _get_agent_state_mutation_context(runtime_state)
     if conversation_id is None:
@@ -4160,35 +4246,6 @@ def _execute_tool(tool_name: str, tool_args: dict, runtime_state: dict | None = 
     if handler is not None:
         return handler(tool_args if isinstance(tool_args, dict) else {}, runtime_state)
     return {"error": f"Unknown tool: {tool_name}"}, f"Unknown tool: {tool_name}"
-
-
-def _build_active_canvas_prompt_payload(runtime_state: dict) -> dict | None:
-    if not isinstance(runtime_state, dict):
-        return None
-    prompt_state = runtime_state.get("canvas_prompt") if isinstance(runtime_state.get("canvas_prompt"), dict) else {}
-    max_lines = _coerce_int_range(prompt_state.get("max_lines"), 0, 0, 10_000)
-    max_chars = _coerce_int_range(prompt_state.get("max_chars"), 0, 0, 1_000_000)
-    max_tokens = _coerce_int_range(prompt_state.get("max_tokens"), 0, 0, 1_000_000)
-    code_line_max_chars = _coerce_int_range(prompt_state.get("code_line_max_chars"), 0, 0, 10_000)
-    text_line_max_chars = _coerce_int_range(prompt_state.get("text_line_max_chars"), 0, 0, 10_000)
-    if max_lines <= 0 and max_chars <= 0 and max_tokens <= 0:
-        return None
-
-    canvas_state = _get_canvas_runtime_state(runtime_state)
-    documents = get_canvas_runtime_documents(canvas_state)
-    if not documents:
-        return None
-
-    return _build_canvas_prompt_payload(
-        documents,
-        active_document_id=get_canvas_runtime_active_document_id(canvas_state),
-        canvas_viewports=get_canvas_viewport_payloads(canvas_state),
-        max_lines=max_lines or 250,
-        max_chars=max_chars or None,
-        max_tokens=max_tokens or 0,
-        code_line_max_chars=code_line_max_chars or None,
-        text_line_max_chars=text_line_max_chars or None,
-    )
 
 
 def _refresh_latest_canvas_context_injection_message(messages: list[dict], runtime_state: dict) -> bool:
@@ -5131,12 +5188,108 @@ def _build_working_state_instruction(working_state: dict) -> dict | None:
     return {"role": "user", "content": "\n\n".join(parts)}
 
 
+def _record_deleted_tool_call_ids(runtime_state: dict, public_ids: list[str]) -> None:
+    """Capture the in-memory tool_call_ids for blocks purged at the DB level.
+
+    The ``_filter_deleted_tool_results`` hook consumes this set to strip
+    pending tool-result messages from the next model turn. Without it, a purge
+    removes blocks from Tier 2 but leaves the matching tool-result messages in
+    the in-memory transcript, so the model sees results that no longer exist.
+
+    The agent-side transcript stores tool-result messages keyed by the
+    provider-side ``tool_call_id`` (e.g. ``call_abc123``). The Tier 2 blocks
+    row that owns the same call stores the same id in ``provider_call_id``.
+    We capture the provider-side ids from the DB BEFORE the purge transaction
+    runs so the in-memory set can be populated atomically.
+    """
+    if not isinstance(runtime_state, dict):
+        return
+    normalized_ids = [str(pid).strip() for pid in (public_ids or []) if str(pid).strip()]
+    if not normalized_ids:
+        return
+    try:
+        conversation_id = int(
+            (runtime_state.get("agent_context") or {}).get("conversation_id") or 0
+        )
+    except (TypeError, ValueError):
+        return
+    if conversation_id <= 0:
+        return
+
+    captured_ids: set[str] = set()
+    try:
+        from core.db import get_db
+
+        placeholders = ",".join("?" for _ in normalized_ids)
+        params = [int(conversation_id)] + normalized_ids
+        with get_db() as conn:
+            rows = conn.execute(
+                f"SELECT provider_call_id FROM context_blocks "
+                f"WHERE conversation_id = ? AND public_id IN ({placeholders})",
+                params,
+            ).fetchall()
+        for row in rows:
+            if isinstance(row, dict):
+                value = row.get("provider_call_id")
+            else:
+                value = row[0] if len(row) > 0 else None
+            text = str(value or "").strip()
+            if text:
+                captured_ids.add(text)
+    except Exception:
+        # Belt-and-braces: the next model turn will simply see one extra
+        # stale tool result rather than an opaque purge error.
+        return
+
+    if not captured_ids:
+        return
+
+    existing = runtime_state.get("deleted_tool_call_ids")
+    if isinstance(existing, set):
+        existing.update(captured_ids)
+    else:
+        runtime_state["deleted_tool_call_ids"] = set(captured_ids)
+
+
 def _get_tool_step_limit(_tool_name: str, max_steps: int = 5) -> int:
+    """Return the per-step call cap for a single tool.
+
+    The counter is keyed by ``f"{tool_name}:{step}"`` so it resets every step.
+    With the default of 5 the limit is effectively a no-op for normal
+    single-call-per-step usage; it only bites when a model produces duplicate
+    tool calls in the same turn. The ``max_steps`` parameter is the per-tool
+    duplicate-call cap and is kept identical to the prior public name.
+    """
     try:
         limit = int(max_steps)
     except (TypeError, ValueError):
         limit = max_steps
     return max(1, limit)
+
+
+def _attempt_overflow_compaction(conversation_id: int, source: str, resume_instruction: str) -> bool:
+    """Run one overflow-recovery compaction attempt against the shared service.
+
+    Returns True when compact_conversation() actually replaced the Tier 2 ledger
+    (no error in the result). False on any failure (lock contention, schema
+    validation, provider error, etc.). This is the ONLY call site that should
+    gate the ``if compacted`` branch in the overflow retry loops; without it the
+    branch is dead code and MAX_COMPACTION_ATTEMPTS effectively collapses to 1.
+    """
+    if not conversation_id:
+        return False
+    try:
+        from services.context_compaction import compact_conversation
+
+        result = compact_conversation(
+            int(conversation_id),
+            resume_instruction,
+            actor=f"overflow_recovery:{source}",
+        )
+    except Exception as exc:  # Provider / DB / lock failures preserve the ledger.
+        LOGGER.debug("overflow compaction attempt failed: %s", exc)
+        return False
+    return not result.get("error")
 
 
 def _normalize_parallel_tool_limit(value, default_value: int = DEFAULT_MAX_PARALLEL_TOOLS) -> int:
@@ -5547,6 +5700,7 @@ def run_agent_stream(
                 canvas_documents=current_canvas_documents,
                 clarification_max_questions=get_clarification_max_questions(model_settings),
                 search_tool_query_limit=get_search_tool_query_limit(model_settings),
+                image_helper_max_items=coerce_image_helper_max_images(model_settings),
             )
             if turn_tools:
                 request_kwargs["tools"] = turn_tools
@@ -6044,11 +6198,20 @@ def run_agent_stream(
             if _is_context_overflow_error(fatal_api_error) != "none" and not context_compacted_this_step:
                 compaction_attempts = 0
                 overflow_handled = False
+                _overflow_conv_id = int(
+                    (runtime_state.get("agent_context") or {}).get("conversation_id") or 0
+                )
+                _overflow_resume = (
+                    f"Provider reported context overflow during step {step}. "
+                    "Compact the active ledger to recover within the model budget."
+                )
 
                 while compaction_attempts < MAX_COMPACTION_ATTEMPTS:
                     compaction_attempts += 1
                     compacted_messages = build_turn_messages(extra_messages)
-                    compacted = False
+                    compacted = _attempt_overflow_compaction(
+                        _overflow_conv_id, "model_turn_exception", _overflow_resume
+                    )
 
                     if compacted:
                         compacted_tokens = _estimate_messages_tokens(compacted_messages)
@@ -6207,18 +6370,27 @@ def run_agent_stream(
                 if usage_totals["total_tokens"]:
                     yield usage_event()
                 yield build_tool_capture_event()
-                yield {"type": "done"}
+                yield {"type": "done", "status": "ok"}
                 return
 
             if stream_error:
                 if _is_context_overflow_error(stream_error) != "none" and not context_compacted_this_step:
                     compaction_attempts = 0
                     overflow_handled = False
+                    _overflow_conv_id = int(
+                        (runtime_state.get("agent_context") or {}).get("conversation_id") or 0
+                    )
+                    _overflow_resume = (
+                        f"Provider reported context overflow during step {step}. "
+                        "Compact the active ledger to recover within the model budget."
+                    )
 
                     while compaction_attempts < MAX_COMPACTION_ATTEMPTS:
                         compaction_attempts += 1
                         compacted_messages = build_turn_messages(extra_messages)
-                        compacted = False
+                        compacted = _attempt_overflow_compaction(
+                            _overflow_conv_id, "stream_error", _overflow_resume
+                        )
 
                         if compacted:
                             compacted_tokens = _estimate_messages_tokens(compacted_messages)
@@ -6621,7 +6793,15 @@ def run_agent_stream(
                         new_slots.append(slot)
                 slots[:] = new_slots
 
-            for s in parallel_slots:
+            # Replay buffered events in completion order so SSE consumers and
+            # the Tier 2 result-block order agree. The slot list itself is
+            # reordered for Phase 3 below; the per-slot ``events`` attribute
+            # stays attached to the same object, so iterating completion-ordered
+            # slots yields completion-ordered events.
+            completion_ordered_slots = runtime_state.get("_parallel_completion_order") or parallel_slots
+            for s in completion_ordered_slots:
+                if id(s) not in {id(p) for p in parallel_slots}:
+                    continue
                 buffered_events = (
                     s.get("exec_result", {}).get("events") if isinstance(s.get("exec_result"), dict) else []
                 )
@@ -6659,7 +6839,7 @@ def run_agent_stream(
                     ):
                         # Tool is blocked by prior mutation in this batch - mark as filtered
                         guard_message = (
-                            f"Skipped: target document was already modified in this turn. "
+                            "Skipped: target document was already modified in this turn. "
                             "The mutation result above contains the updated snapshot. "
                             "Re-reading immediately is unnecessary."
                         )
@@ -6688,6 +6868,34 @@ def run_agent_stream(
                         )
                         _canvas_mutated_doc_ids.update(tracked_doc_ids)
                         _canvas_mutated_doc_paths.update(tracked_doc_paths)
+
+                        # Deferred barrier: some mutations only expose the
+                        # affected doc id(s) in their response (e.g. server-
+                        # assigned ids in batch_canvas_edits result path).
+                        # Re-filter any reads that the pre-pass missed.
+                        for pending in sequential_slots:
+                            if pending is s or pending.get("_canvas_read_filtered"):
+                                continue
+                            if pending["tool_name"] not in CANVAS_ALL_READ_TOOL_NAMES:
+                                continue
+                            if _is_canvas_read_blocked_by_mutation(
+                                pending["tool_name"],
+                                pending.get("tool_args") or {},
+                                _canvas_current_state,
+                                _canvas_mutated_doc_ids,
+                                _canvas_mutated_doc_paths,
+                            ):
+                                guard_message = (
+                                    "Skipped: target document was already modified in this turn. "
+                                    "The mutation result above contains the updated snapshot. "
+                                    "Re-reading immediately is unnecessary."
+                                )
+                                pending["exec_result"] = {
+                                    "ok": True,
+                                    "result": guard_message,
+                                    "summary": "Tool filtered by backend (mutation barrier)",
+                                }
+                                pending["_canvas_read_filtered"] = True
                 except Exception as exc:
                     s["exec_result"] = {"ok": False, "error": _format_tool_execution_error(exc, tool_name=_tool_name)}
 
@@ -6945,7 +7153,7 @@ def run_agent_stream(
                         if usage_totals["total_tokens"]:
                             yield usage_event()
                         yield build_tool_capture_event()
-                        yield {"type": "done"}
+                        yield {"type": "done", "status": "clarification"}
                         return
                 else:
                     error = exec_result["error"]
@@ -7027,7 +7235,7 @@ def run_agent_stream(
         if usage_totals["total_tokens"]:
             yield usage_event()
         yield build_tool_capture_event()
-        yield {"type": "done"}
+        yield {"type": "done", "status": "fatal_error"}
         return
 
     final_phase_compaction_used = False
@@ -7061,11 +7269,20 @@ def run_agent_stream(
             if stream_error and _is_context_overflow_error(stream_error) != "none" and not final_phase_compaction_used:
                 compaction_attempts = 0
                 overflow_handled = False
+                _overflow_conv_id = int(
+                    (runtime_state.get("agent_context") or {}).get("conversation_id") or 0
+                )
+                _overflow_resume = (
+                    f"Provider reported context overflow during final answer (step {step}). "
+                    "Compact the active ledger to recover within the model budget."
+                )
 
                 while compaction_attempts < MAX_COMPACTION_ATTEMPTS:
                     compaction_attempts += 1
                     compacted_messages = build_turn_messages(final_extra_messages)
-                    compacted = False
+                    compacted = _attempt_overflow_compaction(
+                        _overflow_conv_id, "final_answer:stream_error", _overflow_resume
+                    )
 
                     if compacted:
                         compacted_tokens = _estimate_messages_tokens(compacted_messages)
@@ -7189,11 +7406,20 @@ def run_agent_stream(
             if _is_context_overflow_error(error) != "none" and not final_phase_compaction_used:
                 compaction_attempts = 0
                 overflow_handled = False
+                _overflow_conv_id = int(
+                    (runtime_state.get("agent_context") or {}).get("conversation_id") or 0
+                )
+                _overflow_resume = (
+                    f"Provider reported context overflow during final answer (step {step}). "
+                    "Compact the active ledger to recover within the model budget."
+                )
 
                 while compaction_attempts < MAX_COMPACTION_ATTEMPTS:
                     compaction_attempts += 1
                     compacted_messages = build_turn_messages(final_extra_messages)
-                    compacted = False
+                    compacted = _attempt_overflow_compaction(
+                        _overflow_conv_id, "final_answer:exception", _overflow_resume
+                    )
 
                     if compacted:
                         compacted_tokens = _estimate_messages_tokens(compacted_messages)
@@ -7294,4 +7520,4 @@ def run_agent_stream(
         yield usage_event()
     yield build_tool_capture_event()
     yield {"type": "compaction_applied", "messages": messages}
-    yield {"type": "done"}
+    yield {"type": "done", "status": "ok"}

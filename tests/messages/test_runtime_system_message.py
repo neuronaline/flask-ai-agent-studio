@@ -908,9 +908,9 @@ class TestRuntimeSystemMessage:
         assert "search_news_google" not in TOOL_SPEC_BY_NAME
         assert TOOL_SPEC_BY_NAME["read_scratchpad"]["parameters"]["required"] == []
 
-    def test_runtime_system_message_renders_persona_memory_and_policy(self):
+    def test_runtime_system_message_omits_removed_persona_memory_tools(self):
         message = build_runtime_system_message(
-            active_tool_names=["save_to_persona_memory", "delete_persona_memory_entry"],
+            active_tool_names=["save_to_conversation_memory", "delete_conversation_memory_entry"],
             persona_memory=[
                 {
                     "id": 5,
@@ -922,9 +922,15 @@ class TestRuntimeSystemMessage:
         )
 
         content = message["content"]
-        assert "## Persona Memory" in content
+        # Removed persona-memory tools must not appear anywhere in the
+        # model-visible system prompt — the model can no longer call them.
+        assert "save_to_persona_memory" not in content
+        assert "delete_persona_memory_entry" not in content
+        # The model-facing policy block for persona memory is gone.
+        assert "Use save_to_persona_memory" not in content
+        assert "Use delete_persona_memory_entry" not in content
+        # Existing persona memory entries are still surfaced for context.
         assert "#5 09:15 - Repo style: Prefer concise progress updates." in content
-        assert "save_to_persona_memory" in content
 
 
 class TestContextInjectionFallback:

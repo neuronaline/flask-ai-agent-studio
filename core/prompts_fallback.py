@@ -49,11 +49,6 @@ _FALLBACK_PROMPTS: dict[str, Any] = {
         },
     },
     "memory": {
-        "persona": {
-            "header": "## Persona Memory",
-            "guidance": "Persona memory stores durable patterns about how this persona should behave. Use save_to_persona_memory to persist learned behavioral rules. Use delete_persona_memory_entry to remove outdated entries.",
-            "intro": "Durable persona-level behavioral patterns learned across conversations.",
-        },
         "conversation": {
             "header": "## Conversation Memory",
             "guidance": "Conversation memory stores task-specific facts within the current conversation scope. Use save_to_conversation_memory to persist task context, goals, and decisions. Use delete_conversation_memory_entry to remove stale entries.",

@@ -24,8 +24,9 @@ class TestBuildSystemMessages:
         assert "auth.py" in msg
         assert "Available Tools" in msg
         assert "Output Format" in msg
-        # Recursion prevention: child must not be told it can delegate
-        assert "must complete the work directly" in msg
+        # Recursion prevention: child must only use the tools it was given
+        assert "complete the work directly" in msg
+        assert "You only have access to the tools listed above" in msg
 
     def test_isolated_system_message_with_constraints(self):
         msg = _build_isolated_system_message(
@@ -234,12 +235,16 @@ class TestToolHandlers:
         assert "error" in result
         assert "missing url" in summary.lower()
 
-    def test_delegate_task_missing_goal(self):
-        from agent.agent import _run_delegate_task_real
+    def test_delegate_task_removed(self):
+        """delegate_task was removed; it must not be callable or registered."""
+        from lib.tool_registry import TOOL_SPEC_BY_NAME
 
-        result, summary = _run_delegate_task_real({}, {})
-        assert "error" in result
-        assert "missing goal" in summary.lower()
+        assert "delegate_task" not in TOOL_SPEC_BY_NAME
+        from agent.agent import _TOOL_EXECUTORS
+        assert "delegate_task" not in _TOOL_EXECUTORS
+        import agent.agent as agent_module
+
+        assert not hasattr(agent_module, "_run_delegate_task_real")
 
     def test_web_search_agent_calls_isolated_runner(self):
         from agent.agent import _run_web_search_agent
@@ -274,27 +279,11 @@ class TestToolHandlers:
             assert result["report"] == "Page summary..."
             assert result["url"] == "https://example.com"
 
-    def test_delegate_task_calls_isolated_runner(self):
-        from agent.agent import _run_delegate_task_real
+    def test_delegate_task_calls_isolated_runner_removed(self):
+        """delegate_task is removed; this behavior is no longer applicable."""
+        from lib.tool_registry import TOOL_SPEC_BY_NAME
 
-        with patch("agent.isolated_agent.run_isolated_agent") as mock_run:
-            mock_run.return_value = {
-                "report": "Task completed...",
-                "errors": [],
-                "success": True,
-                "elapsed_ms": 2000,
-            }
-            result, _ = _run_delegate_task_real(
-                {
-                    "goal": "Review auth.py for security issues",
-                    "scope": ["auth.py"],
-                    "constraints": "Don't modify files.",
-                },
-                {},
-            )
-            assert result["report"] == "Task completed..."
-            assert result["scope"] == ["auth.py"]
-            assert result["constraints"] == "Don't modify files."
+        assert "delegate_task" not in TOOL_SPEC_BY_NAME
 
     def test_web_search_agent_with_focus(self):
         from agent.agent import _run_web_search_agent
@@ -311,28 +300,28 @@ class TestToolHandlers:
             )
             assert result["focus"] == "alignment techniques"
 
-    def test_delegate_task_strips_delegate_from_child(self):
-        """Verify that delegate_task is NOT passed to child context."""
-        from agent.agent import _run_delegate_task_real
+    def test_isolated_runner_drops_unknown_tools(self):
+        """The isolated runner silently drops any unknown tool — including delegate_task."""
+        with patch("agent.agent.run_agent_stream") as mock_run:
 
-        with patch("agent.isolated_agent.run_isolated_agent") as mock_run:
-            mock_run.return_value = {
-                "report": "Done.",
-                "errors": [],
-                "success": True,
-                "elapsed_ms": 100,
-            }
-            _run_delegate_task_real(
-                {"goal": "Analyze something", "constraints": "Be safe."},
-                {},
+            def _generator(*args, **kwargs):
+                yield {"type": "answer_delta", "text": "Done."}
+                yield {"type": "done"}
+
+            mock_run.return_value = _generator()
+
+            result = run_isolated_agent(
+                task_messages=[{"role": "user", "content": "Test"}],
+                allowlist_tools=["search_web", "delegate_task", "fetch_url"],
+                max_steps=2,
             )
 
-            # The allowlist passed to run_isolated_agent should NOT include delegate_task
+            assert result["success"] is True
             call_args = mock_run.call_args
-            allowlist = call_args.kwargs.get("allowlist_tools", [])
-            assert "delegate_task" not in allowlist
-            assert "search_web" in allowlist
-            assert "fetch_url" in allowlist
+            enabled_tools = call_args.kwargs.get("enabled_tool_names", [])
+            assert "delegate_task" not in enabled_tools
+            assert "search_web" in enabled_tools
+            assert "fetch_url" in enabled_tools
 
 
 class TestToolRegistrySpecs:
@@ -353,18 +342,17 @@ class TestToolRegistrySpecs:
         assert spec["parameters"]["required"] == ["url"]
 
     def test_delegate_task_spec_exists(self):
+        """delegate_task was removed — verify it is no longer registered."""
         from lib.tool_registry import TOOL_SPEC_BY_NAME
 
-        spec = TOOL_SPEC_BY_NAME.get("delegate_task")
-        assert spec is not None
-        assert "goal" in spec["parameters"].get("required", [])
+        assert "delegate_task" not in TOOL_SPEC_BY_NAME
 
     def test_new_tools_in_executor_registry(self):
         from agent.agent import _TOOL_EXECUTORS
 
         assert "web_search_agent" in _TOOL_EXECUTORS
         assert "summarized_fetch" in _TOOL_EXECUTORS
-        assert "delegate_task" in _TOOL_EXECUTORS
+        assert "delegate_task" not in _TOOL_EXECUTORS
 
     def test_web_search_agent_metadata(self):
         from lib.tool_registry import get_tool_runtime_metadata
@@ -383,11 +371,13 @@ class TestToolRegistrySpecs:
         assert meta["exclusive_turn"] is True
         assert meta["read_only"] is True
 
-    def test_delegate_task_metadata_not_readonly(self):
-        """delegate_task is no longer read_only — it actually executes tasks now."""
+    def test_delegate_task_metadata_not_registered(self):
+        """delegate_task was removed; no runtime metadata entry should exist."""
         from lib.tool_registry import get_tool_runtime_metadata
 
         meta = get_tool_runtime_metadata("delegate_task")
-        assert meta["ui_hidden"] is True
-        assert meta["exclusive_turn"] is True
-        assert meta["read_only"] is False  # Real execution
+        # When the spec is gone, the metadata helper must return the safe
+        # default entry rather than a leftover ui_hidden/exclusive flag.
+        assert meta["ui_hidden"] is False
+        assert meta["exclusive_turn"] is False
+        assert meta["read_only"] is False

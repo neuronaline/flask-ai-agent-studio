@@ -99,7 +99,6 @@ Set Bright Data search language, country, and timeout from **Settings → Tools*
 The LLM is equipped with a vast array of tools. Schemas are strictly validated before execution.
 ### Memory & Personalization
 *   `save_to_conversation_memory` / `delete_conversation_memory_entry`: Manage short-term chat facts.
-*   `save_to_persona_memory` / `delete_persona_memory_entry`: Manage cross-chat persona facts.
 *   `append_scratchpad` / `replace_scratchpad` / `read_scratchpad`: Manage long-term durable user facts.
 *   `ask_clarifying_question`: Halts execution to ask the user a structured question.
 
@@ -115,7 +114,6 @@ The LLM is equipped with a vast array of tools. Schemas are strictly validated b
 *   `search_canvas_document`: Full-text search within canvas documents.
 
 ### Code & File Operations
-*   `delegate_task`: Delegate a sub-task to a sub-agent with isolated context.
 
 ---
 

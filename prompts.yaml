@@ -85,16 +85,6 @@ policies:
 # 4. MEMORY — Persona and conversation memory
 # ---------------------------------------------------------------------------
 memory:
-  persona:
-    header: |
-      ## Persona Memory
-    guidance: |
-      Durable behavioral patterns for this persona. Use save_to_persona_memory
-      to persist learned rules. Use delete_persona_memory_entry to remove
-      outdated entries.
-    intro: |
-      Behavioral patterns learned across conversations for this persona.
-
   conversation:
     header: |
       ## Conversation Memory
@@ -275,11 +265,6 @@ tools:
     purpose: Read a canvas document excerpt.
     guidance: "Omit start_line/end_line for the default excerpt, or provide both for a focused range. The result is a snapshot — re-read before editing if the document may have changed."
 
-  delegate_task:
-    description: "Spawn a sub-agent for a self-contained sub-task. The sub-agent has a clean context and its own tools."
-    purpose: Offload independent work to a sub-agent.
-    guidance: "Delegate when: (1) 3+ files need deep analysis not yet in context, (2) the task is self-contained with clear input/output, (3) iterative debug-edit-test. Skip for single tool calls, quick lookups, or files already in your context. The sub-agent returns a summary — trust it unless it signals uncertainty."
-
   save_to_conversation_memory:
     description: "Save task-specific facts to the current conversation's memory."
     purpose: Persist context within this conversation.
@@ -289,16 +274,6 @@ tools:
     description: "Remove a specific entry from conversation memory."
     purpose: Clean up stale conversation memory entries.
     guidance: "Use when stored facts are superseded or no longer relevant."
-
-  save_to_persona_memory:
-    description: "Save durable behavioral rules to the persona's long-term memory."
-    purpose: Persist learned behavioral patterns across conversations.
-    guidance: "Use sparingly for durable behavioral patterns learned about this persona."
-
-  delete_persona_memory_entry:
-    description: "Remove an entry from persona memory."
-    purpose: Clean up outdated behavioral rules.
-    guidance: "Use when a previously learned pattern no longer applies."
 
   list_conversation_images:
     description: "List all images uploaded in the current conversation."
